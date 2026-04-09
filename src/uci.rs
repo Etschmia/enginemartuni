@@ -1,0 +1,196 @@
+use crate::options::EngineOptions;
+use crate::position::{move_to_uci, Position};
+use crate::search::{search, GoParams};
+use std::io::{self, BufRead};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+
+pub fn uci_loop() {
+    let mut position = Position::new();
+    let mut options = EngineOptions::default();
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut search_handle: Option<thread::JoinHandle<()>> = None;
+
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+
+        match tokens[0] {
+            "uci" => {
+                println!("id name Martuni");
+                println!("id author Tobias Brendler");
+                EngineOptions::print_uci_options();
+                println!("uciok");
+            }
+            "isready" => {
+                // Wait for any running search to finish
+                if let Some(h) = search_handle.take() {
+                    let _ = h.join();
+                }
+                println!("readyok");
+            }
+            "setoption" => {
+                // setoption name <name> value <value>
+                if let Some((name, value)) = parse_setoption(&tokens) {
+                    options.set_option(&name, &value);
+                }
+            }
+            "ucinewgame" => {
+                position.set_startpos();
+            }
+            "position" => {
+                handle_position(&mut position, &tokens);
+            }
+            "go" => {
+                // Wait for previous search to complete
+                if let Some(h) = search_handle.take() {
+                    let _ = h.join();
+                }
+
+                stop.store(false, Ordering::Relaxed);
+                let params = parse_go_params(&tokens);
+                let board = *position.board();
+                let stop_clone = Arc::clone(&stop);
+
+                search_handle = Some(thread::spawn(move || {
+                    if let Some(best) = search(&board, &params, stop_clone) {
+                        println!("bestmove {}", move_to_uci(best));
+                    } else {
+                        println!("bestmove 0000");
+                    }
+                }));
+            }
+            "stop" => {
+                stop.store(true, Ordering::Relaxed);
+                if let Some(h) = search_handle.take() {
+                    let _ = h.join();
+                }
+            }
+            "quit" => {
+                stop.store(true, Ordering::Relaxed);
+                if let Some(h) = search_handle.take() {
+                    let _ = h.join();
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    // Stdin closed (EOF) – wait for any running search, then exit
+    stop.store(true, Ordering::Relaxed);
+    if let Some(h) = search_handle.take() {
+        let _ = h.join();
+    }
+}
+
+fn handle_position(position: &mut Position, tokens: &[&str]) {
+    if tokens.len() < 2 {
+        return;
+    }
+
+    let move_start = match tokens[1] {
+        "startpos" => {
+            position.set_startpos();
+            if tokens.len() > 2 && tokens[2] == "moves" { 3 } else { 0 }
+        }
+        "fen" => {
+            let mut fen_parts = Vec::new();
+            let mut i = 2;
+            while i < tokens.len() && tokens[i] != "moves" {
+                fen_parts.push(tokens[i]);
+                i += 1;
+            }
+            let fen = fen_parts.join(" ");
+            if position.set_fen(&fen).is_err() {
+                return;
+            }
+            if i < tokens.len() && tokens[i] == "moves" { i + 1 } else { 0 }
+        }
+        _ => return,
+    };
+
+    if move_start > 0 && move_start < tokens.len() {
+        let moves: Vec<&str> = tokens[move_start..].to_vec();
+        let _ = position.apply_moves(&moves);
+    }
+}
+
+fn parse_setoption(tokens: &[&str]) -> Option<(String, String)> {
+    // setoption name <name> value <value>
+    let mut name_parts = Vec::new();
+    let mut value_parts = Vec::new();
+    let mut in_value = false;
+    let mut in_name = false;
+
+    for &token in &tokens[1..] {
+        if token == "name" && !in_value {
+            in_name = true;
+            continue;
+        }
+        if token == "value" {
+            in_name = false;
+            in_value = true;
+            continue;
+        }
+        if in_name {
+            name_parts.push(token);
+        } else if in_value {
+            value_parts.push(token);
+        }
+    }
+
+    if name_parts.is_empty() {
+        return None;
+    }
+
+    Some((name_parts.join(" "), value_parts.join(" ")))
+}
+
+fn parse_go_params(tokens: &[&str]) -> GoParams {
+    let mut params = GoParams::default();
+    let mut i = 1;
+    while i < tokens.len() {
+        match tokens[i] {
+            "wtime" if i + 1 < tokens.len() => {
+                params.wtime = tokens[i + 1].parse().ok();
+                i += 2;
+            }
+            "btime" if i + 1 < tokens.len() => {
+                params.btime = tokens[i + 1].parse().ok();
+                i += 2;
+            }
+            "winc" if i + 1 < tokens.len() => {
+                params.winc = tokens[i + 1].parse().ok();
+                i += 2;
+            }
+            "binc" if i + 1 < tokens.len() => {
+                params.binc = tokens[i + 1].parse().ok();
+                i += 2;
+            }
+            "depth" if i + 1 < tokens.len() => {
+                params.depth = tokens[i + 1].parse().ok();
+                i += 2;
+            }
+            "movetime" if i + 1 < tokens.len() => {
+                params.movetime = tokens[i + 1].parse().ok();
+                i += 2;
+            }
+            _ => { i += 1; }
+        }
+    }
+    params
+}

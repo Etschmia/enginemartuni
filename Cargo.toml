@@ -1,0 +1,10 @@
+[package]
+name = "martuni"
+version = "0.1.0"
+edition = "2021"
+authors = ["Tobias Brendler"]
+description = "UCI chess engine"
+
+[dependencies]
+chess = "3.2"
+rand = "0.8"
