@@ -1,14 +1,20 @@
+use crate::config::Config;
 use crate::options::EngineOptions;
+use crate::polyglot::BookSet;
 use crate::position::{move_to_uci, Position};
 use crate::search::{search, GoParams};
+use crate::tt::TranspositionTable;
 use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 
 pub fn uci_loop() {
+    let cfg = Config::load();
+    let book = Arc::new(BookSet::load(&cfg.book_dir, &cfg.book_files));
+    let mut tt = TranspositionTable::new(cfg.hash_size_mb);
     let mut position = Position::new();
-    let mut options = EngineOptions::default();
+    let mut options = EngineOptions::from_config(&cfg);
     let stop = Arc::new(AtomicBool::new(false));
     let mut search_handle: Option<thread::JoinHandle<()>> = None;
 
@@ -32,30 +38,37 @@ pub fn uci_loop() {
             "uci" => {
                 println!("id name Martuni");
                 println!("id author Tobias Brendler");
-                EngineOptions::print_uci_options();
+                options.print_uci_options();
                 println!("uciok");
             }
             "isready" => {
-                // Wait for any running search to finish
                 if let Some(h) = search_handle.take() {
                     let _ = h.join();
                 }
                 println!("readyok");
             }
             "setoption" => {
-                // setoption name <name> value <value>
                 if let Some((name, value)) = parse_setoption(&tokens) {
+                    let old_hash = options.hash;
                     options.set_option(&name, &value);
+                    if options.hash != old_hash {
+                        tt.resize(options.hash as usize);
+                        println!(
+                            "info string hash resized to {} MB ({} entries)",
+                            tt.size_mb(),
+                            tt.capacity()
+                        );
+                    }
                 }
             }
             "ucinewgame" => {
                 position.set_startpos();
+                tt.clear();
             }
             "position" => {
                 handle_position(&mut position, &tokens);
             }
             "go" => {
-                // Wait for previous search to complete
                 if let Some(h) = search_handle.take() {
                     let _ = h.join();
                 }
@@ -64,9 +77,10 @@ pub fn uci_loop() {
                 let params = parse_go_params(&tokens);
                 let board = *position.board();
                 let stop_clone = Arc::clone(&stop);
+                let book_clone = Arc::clone(&book);
 
                 search_handle = Some(thread::spawn(move || {
-                    if let Some(best) = search(&board, &params, stop_clone) {
+                    if let Some(best) = search(&board, &params, stop_clone, book_clone) {
                         println!("bestmove {}", move_to_uci(best));
                     } else {
                         println!("bestmove 0000");
@@ -90,7 +104,6 @@ pub fn uci_loop() {
         }
     }
 
-    // Stdin closed (EOF) – wait for any running search, then exit
     stop.store(true, Ordering::Relaxed);
     if let Some(h) = search_handle.take() {
         let _ = h.join();
@@ -130,7 +143,6 @@ fn handle_position(position: &mut Position, tokens: &[&str]) {
 }
 
 fn parse_setoption(tokens: &[&str]) -> Option<(String, String)> {
-    // setoption name <name> value <value>
     let mut name_parts = Vec::new();
     let mut value_parts = Vec::new();
     let mut in_value = false;

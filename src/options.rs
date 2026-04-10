@@ -1,20 +1,23 @@
+use crate::config::Config;
+
 pub struct EngineOptions {
     pub hash: u64,
     pub move_overhead: u64,
 }
 
-impl Default for EngineOptions {
-    fn default() -> Self {
+impl EngineOptions {
+    pub fn from_config(cfg: &Config) -> Self {
         Self {
-            hash: 16,
+            hash: cfg.hash_size_mb as u64,
             move_overhead: 10,
         }
     }
-}
 
-impl EngineOptions {
-    pub fn print_uci_options() {
-        println!("option name Hash type spin default 16 min 1 max 1024");
+    pub fn print_uci_options(&self) {
+        println!(
+            "option name Hash type spin default {} min 1 max 65536",
+            self.hash
+        );
         println!("option name MoveOverhead type spin default 10 min 0 max 5000");
     }
 
@@ -22,7 +25,7 @@ impl EngineOptions {
         match name.to_lowercase().as_str() {
             "hash" => {
                 if let Ok(v) = value.parse::<u64>() {
-                    self.hash = v.clamp(1, 1024);
+                    self.hash = v.clamp(1, 65536);
                 }
             }
             "moveoverhead" => {

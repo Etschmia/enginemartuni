@@ -1,3 +1,4 @@
+use crate::polyglot::BookSet;
 use chess::{Board, BoardStatus, ChessMove, MoveGen};
 use rand::seq::IteratorRandom;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,19 +28,30 @@ impl Default for GoParams {
     }
 }
 
-pub fn search(board: &Board, params: &GoParams, stop: Arc<AtomicBool>) -> Option<ChessMove> {
+pub fn search(
+    board: &Board,
+    params: &GoParams,
+    stop: Arc<AtomicBool>,
+    book: Arc<BookSet>,
+) -> Option<ChessMove> {
     if board.status() != BoardStatus::Ongoing {
         return None;
+    }
+
+    // Eroeffnungsbuch zuerst — Treffer wird sofort zurueckgegeben.
+    if !book.is_empty() {
+        if let Some(book_move) = book.probe(board) {
+            println!("info string book hit");
+            return Some(book_move);
+        }
     }
 
     let mut rng = rand::thread_rng();
     let legal_moves = MoveGen::new_legal(board);
     let chosen = legal_moves.into_iter().choose(&mut rng)?;
 
-    // Simulate thinking time (unless depth-based or already stopped)
     if params.depth.is_none() && !stop.load(Ordering::Relaxed) {
         let think_ms = calculate_think_time(params);
-        // Sleep in small increments so we can react to stop
         let steps = (think_ms / 50).max(1);
         for _ in 0..steps {
             if stop.load(Ordering::Relaxed) {
@@ -54,11 +66,9 @@ pub fn search(board: &Board, params: &GoParams, stop: Arc<AtomicBool>) -> Option
 
 fn calculate_think_time(params: &GoParams) -> u64 {
     if let Some(movetime) = params.movetime {
-        // Use 80% of allocated time, max 2 seconds
         return (movetime * 80 / 100).min(2000);
     }
 
-    // Time-based: use remaining_time / 40, max 2 seconds
     let remaining = params.wtime.unwrap_or(30000).max(params.btime.unwrap_or(30000));
     (remaining / 40).min(2000).max(100)
 }
