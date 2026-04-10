@@ -1,18 +1,21 @@
 use crate::config::Config;
+use crate::eval_config::EvalParams;
 use crate::options::EngineOptions;
 use crate::polyglot::BookSet;
 use crate::position::{move_to_uci, Position};
-use crate::search::{search, GoParams};
+use crate::search::{search, GoParams, SearchRequest};
 use crate::tt::TranspositionTable;
 use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 pub fn uci_loop() {
     let cfg = Config::load();
     let book = Arc::new(BookSet::load(&cfg.book_dir, &cfg.book_files));
-    let mut tt = TranspositionTable::new(cfg.hash_size_mb);
+    let eval_params = Arc::new(EvalParams::load());
+    let tt = Arc::new(Mutex::new(TranspositionTable::new(cfg.hash_size_mb)));
+
     let mut position = Position::new();
     let mut options = EngineOptions::from_config(&cfg);
     let stop = Arc::new(AtomicBool::new(false));
@@ -52,18 +55,18 @@ pub fn uci_loop() {
                     let old_hash = options.hash;
                     options.set_option(&name, &value);
                     if options.hash != old_hash {
-                        tt.resize(options.hash as usize);
+                        let mut t = tt.lock().unwrap();
+                        t.resize(options.hash as usize);
                         println!(
-                            "info string hash resized to {} MB ({} entries)",
-                            tt.size_mb(),
-                            tt.capacity()
+                            "info string hash resized to {} MB",
+                            t.size_mb()
                         );
                     }
                 }
             }
             "ucinewgame" => {
                 position.set_startpos();
-                tt.clear();
+                tt.lock().unwrap().clear();
             }
             "position" => {
                 handle_position(&mut position, &tokens);
@@ -75,12 +78,21 @@ pub fn uci_loop() {
 
                 stop.store(false, Ordering::Relaxed);
                 let params = parse_go_params(&tokens);
-                let board = *position.board();
-                let stop_clone = Arc::clone(&stop);
-                let book_clone = Arc::clone(&book);
+
+                let req = SearchRequest {
+                    board: *position.board(),
+                    history: position.hash_history().to_vec(),
+                    halfmove_clock: position.halfmove_clock(),
+                    params,
+                    tt: Arc::clone(&tt),
+                    book: Arc::clone(&book),
+                    eval: Arc::clone(&eval_params),
+                    stop: Arc::clone(&stop),
+                    move_overhead: options.move_overhead,
+                };
 
                 search_handle = Some(thread::spawn(move || {
-                    if let Some(best) = search(&board, &params, stop_clone, book_clone) {
+                    if let Some(best) = search(req) {
                         println!("bestmove {}", move_to_uci(best));
                     } else {
                         println!("bestmove 0000");

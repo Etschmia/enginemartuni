@@ -1,4 +1,6 @@
 mod config;
+mod eval;
+mod eval_config;
 mod options;
 mod polyglot;
 mod position;

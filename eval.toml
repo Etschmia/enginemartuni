@@ -1,0 +1,41 @@
+# Martuni — Eval-Parameter (Centipawns)
+#
+# Diese Datei ist die Stellschraube zum Tuning der Engine.
+# Kommentare und freie Formatierung sind erlaubt; die Engine laedt
+# die Werte beim Start (oder nach Neustart) neu.
+
+[material]
+pawn   = 100
+knight = 300
+bishop = 300
+rook   = 500
+queen  = 900
+
+[pawns]
+# Isolani: Bauer ohne eigene Bauern auf benachbarten Linien
+isolated_penalty = -20
+
+# Positionsboni nach Linie (gelten unabhaengig von der Reihe)
+de_file_bonus = 10
+cf_file_bonus = 5
+
+# Phalanx: mehrere eigene Bauern nebeneinander auf derselben Reihe.
+# Bei 4+ zaehlt der 3er-Bonus einmal.
+phalanx_triple = 30
+phalanx_double = 15
+
+# Freibauer: kein gegnerischer Bauer auf eigener Linie oder Nachbarlinien
+# auf den Reihen zwischen dem Bauern und seinem Umwandlungsfeld
+passed_bonus = 300
+
+[pieces]
+# Springer auf Reihe 1 oder 8 steht schlecht
+knight_backrank_penalty = -50
+
+# Laeuferpaar: solange beide Laeufer vorhanden sind, erhaelt jeder Laeufer
+# diesen Bonus (gesamt also +2 * bishop_pair_each)
+bishop_pair_each = 15
+
+# Verbundene Tuerme (gleiche Linie/Reihe, Sichtverbindung, nichts dazwischen):
+# einmaliger Bonus fuer das Paar
+connected_rooks_pair = 150

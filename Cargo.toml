@@ -8,3 +8,4 @@ description = "UCI chess engine"
 [dependencies]
 chess = "3.2"
 rand = "0.8"
+toml = "0.8"
