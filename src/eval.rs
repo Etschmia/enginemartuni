@@ -1,13 +1,72 @@
 use crate::eval_config::EvalParams;
+use crate::pst::{
+    pst_index, BISHOP_PST, KING_PST, KNIGHT_PST, PAWN_PST, QUEEN_PST, ROOK_PST,
+};
 use chess::{
     get_bishop_moves, get_king_moves, get_knight_moves, get_rook_moves, BitBoard, Board, Color,
     File, Piece, Rank, Square,
 };
 
+const MAX_PHASE: i32 = 24;
+
 /// Stellungsbewertung in Centipawns, aus Sicht von Weiss.
 /// Positiv = gut fuer Weiss, negativ = gut fuer Schwarz.
+///
+/// Besteht aus zwei Teilen:
+///  - Nicht-getaperte Terme (Material, Bauernstruktur, Laeuferpaar, King Safety, ...)
+///  - Getaperter PST-Beitrag (mg/eg interpoliert nach Spielphase)
 pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
-    evaluate_side(board, Color::White, p) - evaluate_side(board, Color::Black, p)
+    let non_pst = evaluate_side(board, Color::White, p) - evaluate_side(board, Color::Black, p);
+
+    let (w_mg, w_eg) = pst_score(board, Color::White);
+    let (b_mg, b_eg) = pst_score(board, Color::Black);
+    let mg = w_mg - b_mg;
+    let eg = w_eg - b_eg;
+    let phase = game_phase(board);
+
+    non_pst + taper(mg, eg, phase)
+}
+
+/// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
+/// aktuellen Spielphase (24 = volles Material, 0 = nur Koenige + Bauern).
+#[inline]
+pub fn taper(mg: i32, eg: i32, phase: i32) -> i32 {
+    let phase = phase.clamp(0, MAX_PHASE);
+    (mg * phase + eg * (MAX_PHASE - phase)) / MAX_PHASE
+}
+
+/// Phase-Berechnung nach klassischer Gewichtung: Springer 1, Laeufer 1,
+/// Turm 2, Dame 4. Startpos = 24, reines KvK-Endspiel = 0.
+pub fn game_phase(board: &Board) -> i32 {
+    let knights = board.pieces(Piece::Knight).popcnt() as i32;
+    let bishops = board.pieces(Piece::Bishop).popcnt() as i32;
+    let rooks = board.pieces(Piece::Rook).popcnt() as i32;
+    let queens = board.pieces(Piece::Queen).popcnt() as i32;
+    (knights + bishops + 2 * rooks + 4 * queens).min(MAX_PHASE)
+}
+
+/// Akkumuliert den PST-Beitrag einer Seite in (mg, eg).
+fn pst_score(board: &Board, us: Color) -> (i32, i32) {
+    let our_bb = *board.color_combined(us);
+    let mut mg = 0;
+    let mut eg = 0;
+
+    for (piece, table) in [
+        (Piece::Pawn, &PAWN_PST),
+        (Piece::Knight, &KNIGHT_PST),
+        (Piece::Bishop, &BISHOP_PST),
+        (Piece::Rook, &ROOK_PST),
+        (Piece::Queen, &QUEEN_PST),
+        (Piece::King, &KING_PST),
+    ] {
+        for sq in *board.pieces(piece) & our_bb {
+            let idx = pst_index(sq.to_index(), us);
+            mg += table.mg[idx];
+            eg += table.eg[idx];
+        }
+    }
+
+    (mg, eg)
 }
 
 fn evaluate_side(board: &Board, us: Color, p: &EvalParams) -> i32 {
@@ -363,35 +422,33 @@ mod tests {
         // Weisser Bauer auf a4 ohne Nachbar
         let b = Board::from_str("4k3/8/8/8/P7/8/8/4K3 w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // Erwartung: 100 (Bauer) + 0 (Linie a) - 20 (Isolani) + 300 (Freibauer) = 380
-        assert_eq!(evaluate(&b, &p), 380);
+        // Non-PST: 100 (Bauer) + 0 (Linie a) - 20 (Isolani) + 300 (Freibauer) = 380
+        // PST (phase=0, reiner eg-Wert): weisser Bauer a4 eg=20, weisser Koenig e1 eg=-30,
+        // schwarzer Koenig e8 eg=-30 → diff eg = (20-30) - (-30) = 20
+        // Total: 380 + 20 = 400
+        assert_eq!(evaluate(&b, &p), 400);
     }
 
     #[test]
     fn phalanx_triple_and_de_bonus() {
-        // Weisse Bauern auf d4, e4, f4 — alle Freibauern, e Linie bekommt 10, f und d jeweils
+        // Weisse Bauern auf d4, e4, f4 — alle Freibauern
         let b = Board::from_str("4k3/8/8/8/3PPP2/8/8/4K3 w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // Erwartung: 3 * 100 (Material) = 300
-        //   + d: de_bonus 10
-        //   + e: de_bonus 10
-        //   + f: cf_bonus  5
-        //   + 3 * passed (alle passed) 900
-        //   + phalanx_triple 30
-        //   + alle 3 sind non-isolated
-        // = 300 + 10 + 10 + 5 + 900 + 30 = 1255
-        assert_eq!(evaluate(&b, &p), 1255);
+        // Non-PST: 300 + 25 (file) + 900 (3 passed) + 30 (phalanx triple) = 1255
+        // PST diff (phase=0): Bauern d4/e4/f4 eg = 60, Kings cancel → +60
+        // Total: 1315
+        assert_eq!(evaluate(&b, &p), 1315);
     }
 
     #[test]
     fn bishop_pair_and_backrank_knight() {
-        // Weiss hat Laeuferpaar, ein Springer auf b1
+        // Weiss hat Laeuferpaar und einen Springer auf b1
         let b = Board::from_str("4k3/8/8/8/8/8/8/1NB1KB2 w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // 2 Laeufer = 600 + pair bonus 2*15 = 630
-        // 1 Springer = 300 - 50 (backrank) = 250
-        // Summe: 880
-        assert_eq!(evaluate(&b, &p), 880);
+        // Non-PST: 900 + 30 (pair) - 50 (backrank knight) = 880
+        // PST: die Grundreihen-Figuren werden stark abgewertet → taper bei phase=3
+        // Total: 820
+        assert_eq!(evaluate(&b, &p), 820);
     }
 
     #[test]
@@ -399,10 +456,10 @@ mod tests {
         // Weisse Tuerme auf a1 und h1, Koenig auf e4 (ausserhalb der Reihe)
         let b = Board::from_str("3k4/8/8/8/4K3/8/8/R6R w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // 2 Tuerme = 1000 + connected 150 = 1150
-        // Weisser Koenig nicht auf Grundreihe → 0, schwarzer Koenig d8 Zentrum → -30
-        // evaluate = 1150 - (-30) = 1180
-        assert_eq!(evaluate(&b, &p), 1180);
+        // Non-PST: 1000 + 150 connected + 30 (schwarzer Koenig center) = 1180
+        // PST: weisser Koenig e4 ist im eg sehr wertvoll, taper bei phase=4
+        // Total: 1198
+        assert_eq!(evaluate(&b, &p), 1198);
     }
 
     #[test]
@@ -410,10 +467,43 @@ mod tests {
         // Laeufer auf d1 blockt die Verbindung zwischen a1 und h1
         let b = Board::from_str("3k4/8/8/8/4K3/8/8/R2B3R w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // 2 Tuerme 1000 + 1 Laeufer 300 (kein Pair) = 1300
-        // Weisser Koenig e4 → 0, schwarzer Koenig d8 Zentrum → -30
-        // evaluate = 1300 - (-30) = 1330
-        assert_eq!(evaluate(&b, &p), 1330);
+        // Non-PST: 1300 + 30 (schwarzer Koenig center) = 1330
+        // PST taper bei phase=5
+        // Total: 1335
+        assert_eq!(evaluate(&b, &p), 1335);
+    }
+
+    #[test]
+    fn phase_startpos_is_full() {
+        assert_eq!(game_phase(&Board::default()), 24);
+    }
+
+    #[test]
+    fn phase_kvk_is_zero() {
+        let b = Board::from_str("4k3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(game_phase(&b), 0);
+    }
+
+    #[test]
+    fn phase_queen_endgame() {
+        let b = Board::from_str("4k3/8/8/8/8/8/8/3QK3 w - - 0 1").unwrap();
+        // 1 Dame = 4
+        assert_eq!(game_phase(&b), 4);
+    }
+
+    #[test]
+    fn taper_is_mg_at_full_phase() {
+        assert_eq!(taper(100, -50, 24), 100);
+    }
+
+    #[test]
+    fn taper_is_eg_at_zero_phase() {
+        assert_eq!(taper(100, -50, 0), -50);
+    }
+
+    #[test]
+    fn taper_midpoint_interpolates() {
+        assert_eq!(taper(120, 0, 12), 60);
     }
 
     #[test]

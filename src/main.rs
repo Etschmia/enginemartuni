@@ -4,6 +4,7 @@ mod eval_config;
 mod options;
 mod polyglot;
 mod position;
+mod pst;
 mod search;
 mod tt;
 mod uci;
