@@ -1,3 +1,5 @@
 /target
 .env
 src/polyglot/*.bin
+__pycache__/
+*.pyc
