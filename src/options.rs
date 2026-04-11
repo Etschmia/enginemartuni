@@ -19,6 +19,7 @@ impl EngineOptions {
             self.hash
         );
         println!("option name MoveOverhead type spin default 10 min 0 max 5000");
+        println!("option name Ponder type check default false");
     }
 
     pub fn set_option(&mut self, name: &str, value: &str) {

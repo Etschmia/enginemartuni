@@ -19,6 +19,7 @@ pub fn uci_loop() {
     let mut position = Position::new();
     let mut options = EngineOptions::from_config(&cfg);
     let stop = Arc::new(AtomicBool::new(false));
+    let pondering = Arc::new(AtomicBool::new(false));
     let mut search_handle: Option<thread::JoinHandle<()>> = None;
 
     let stdin = io::stdin();
@@ -78,6 +79,7 @@ pub fn uci_loop() {
 
                 stop.store(false, Ordering::Relaxed);
                 let params = parse_go_params(&tokens);
+                pondering.store(params.ponder, Ordering::Relaxed);
 
                 let req = SearchRequest {
                     board: *position.board(),
@@ -88,25 +90,41 @@ pub fn uci_loop() {
                     book: Arc::clone(&book),
                     eval: Arc::clone(&eval_params),
                     stop: Arc::clone(&stop),
+                    pondering: Arc::clone(&pondering),
                     move_overhead: options.move_overhead,
                 };
 
                 search_handle = Some(thread::spawn(move || {
-                    if let Some(best) = search(req) {
-                        println!("bestmove {}", move_to_uci(best));
+                    if let Some(result) = search(req) {
+                        match result.ponder {
+                            Some(p) => println!(
+                                "bestmove {} ponder {}",
+                                move_to_uci(result.best),
+                                move_to_uci(p)
+                            ),
+                            None => println!("bestmove {}", move_to_uci(result.best)),
+                        }
                     } else {
                         println!("bestmove 0000");
                     }
                 }));
             }
+            "ponderhit" => {
+                // Gegner hat den vorhergesagten Zug gespielt: aus dem Ponder-Modus
+                // in normales Zeitmanagement umschalten. Die Suche erkennt den
+                // Uebergang in should_stop() und setzt die echte Deadline.
+                pondering.store(false, Ordering::Relaxed);
+            }
             "stop" => {
                 stop.store(true, Ordering::Relaxed);
+                pondering.store(false, Ordering::Relaxed);
                 if let Some(h) = search_handle.take() {
                     let _ = h.join();
                 }
             }
             "quit" => {
                 stop.store(true, Ordering::Relaxed);
+                pondering.store(false, Ordering::Relaxed);
                 if let Some(h) = search_handle.take() {
                     let _ = h.join();
                 }
@@ -117,6 +135,7 @@ pub fn uci_loop() {
     }
 
     stop.store(true, Ordering::Relaxed);
+    pondering.store(false, Ordering::Relaxed);
     if let Some(h) = search_handle.take() {
         let _ = h.join();
     }
@@ -212,6 +231,10 @@ fn parse_go_params(tokens: &[&str]) -> GoParams {
             "movetime" if i + 1 < tokens.len() => {
                 params.movetime = tokens[i + 1].parse().ok();
                 i += 2;
+            }
+            "ponder" => {
+                params.ponder = true;
+                i += 1;
             }
             _ => { i += 1; }
         }

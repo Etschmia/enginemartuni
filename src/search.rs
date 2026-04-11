@@ -22,6 +22,7 @@ pub struct GoParams {
     pub binc: Option<u64>,
     pub depth: Option<u32>,
     pub movetime: Option<u64>,
+    pub ponder: bool,
 }
 
 impl Default for GoParams {
@@ -33,8 +34,14 @@ impl Default for GoParams {
             binc: None,
             depth: None,
             movetime: None,
+            ponder: false,
         }
     }
+}
+
+pub struct SearchResult {
+    pub best: ChessMove,
+    pub ponder: Option<ChessMove>,
 }
 
 pub struct SearchRequest {
@@ -46,6 +53,7 @@ pub struct SearchRequest {
     pub book: Arc<BookSet>,
     pub eval: Arc<EvalParams>,
     pub stop: Arc<AtomicBool>,
+    pub pondering: Arc<AtomicBool>,
     pub move_overhead: u64,
 }
 
@@ -53,7 +61,11 @@ struct SearchState {
     tt: Arc<Mutex<TranspositionTable>>,
     eval: Arc<EvalParams>,
     stop: Arc<AtomicBool>,
-    deadline: Instant,
+    pondering: Arc<AtomicBool>,
+    // None = unbegrenzt (Ponder-Modus); wird beim ersten Ponderhit auf
+    // now + think_time gesetzt.
+    deadline: Option<Instant>,
+    think_time: Duration,
     start: Instant,
     nodes: u64,
     // Historie + aktueller Suchpfad; zum Erkennen von Stellungswiederholungen
@@ -67,36 +79,50 @@ impl SearchState {
         if self.stop.load(Ordering::Relaxed) {
             return true;
         }
-        if self.nodes & 2047 == 0 && Instant::now() >= self.deadline {
-            self.stop.store(true, Ordering::Relaxed);
-            return true;
+        // Uebergang Ponder → Normal: jetzt die echte Deadline setzen
+        if self.deadline.is_none() && !self.pondering.load(Ordering::Relaxed) {
+            self.deadline = Some(Instant::now() + self.think_time);
+        }
+        if let Some(dl) = self.deadline {
+            if self.nodes & 2047 == 0 && Instant::now() >= dl {
+                self.stop.store(true, Ordering::Relaxed);
+                return true;
+            }
         }
         false
     }
 }
 
-pub fn search(req: SearchRequest) -> Option<ChessMove> {
+pub fn search(req: SearchRequest) -> Option<SearchResult> {
     if req.board.status() != BoardStatus::Ongoing {
         return None;
     }
 
-    // Eroeffnungsbuch zuerst
+    // Eroeffnungsbuch zuerst — auch im Ponder-Modus erlaubt
     if !req.book.is_empty() {
         if let Some(m) = req.book.probe(&req.board) {
             println!("info string book hit");
-            return Some(m);
+            let ponder = ponder_move_from_tt(&req.board, m, &req.tt);
+            return Some(SearchResult { best: m, ponder });
         }
     }
 
     let start = Instant::now();
     let think_time = calculate_think_time(&req.params, req.move_overhead, req.board.side_to_move());
-    let deadline = start + think_time;
+    // Ponder: Deadline initial offen lassen, sie wird beim Ponderhit gesetzt.
+    let deadline = if req.params.ponder {
+        None
+    } else {
+        Some(start + think_time)
+    };
 
     let mut state = SearchState {
         tt: Arc::clone(&req.tt),
         eval: Arc::clone(&req.eval),
         stop: Arc::clone(&req.stop),
+        pondering: Arc::clone(&req.pondering),
         deadline,
+        think_time,
         start,
         nodes: 0,
         history: req.history,
@@ -150,7 +176,35 @@ pub fn search(req: SearchRequest) -> Option<ChessMove> {
     }
 
     let _ = last_score; // unused in final output for now
-    last_move
+    last_move.map(|best| {
+        let ponder = ponder_move_from_tt(&req.board, best, &req.tt);
+        SearchResult { best, ponder }
+    })
+}
+
+/// Sucht einen Pondermove: Mache den besten Zug, schaue in der TT nach,
+/// welcher Zug fuer die Antwortstellung gespeichert ist. Verifiziere
+/// Legalitaet, falls die TT-Position eine Kollision war.
+fn ponder_move_from_tt(
+    board: &Board,
+    best: ChessMove,
+    tt: &Arc<Mutex<TranspositionTable>>,
+) -> Option<ChessMove> {
+    let next = board.make_move_new(best);
+    if next.status() != BoardStatus::Ongoing {
+        return None;
+    }
+    let key = polyglot_hash(&next);
+    let stored = {
+        let tt = tt.lock().unwrap();
+        tt.probe(key).and_then(|e| e.best_move)
+    };
+    let mv = stored?;
+    if MoveGen::new_legal(&next).any(|m| m == mv) {
+        Some(mv)
+    } else {
+        None
+    }
 }
 
 fn emit_info(depth: i32, score: i32, nodes: u64, elapsed: Duration, best: Option<ChessMove>) {
