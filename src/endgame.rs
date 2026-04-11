@@ -9,6 +9,7 @@
 //!
 //! Phase A: Mop-up fuer KRvK, KQvK, KRRvK, KQQvK.
 //! Phase B: KPK mit Rule of the Square.
+//! Phase C: KBNK mit laeuferfarbigen Mattecken.
 
 use crate::eval_config::EvalParams;
 use chess::{BitBoard, Board, Color, Piece, Rank, Square};
@@ -20,6 +21,9 @@ pub fn endgame_score(board: &Board, p: &EvalParams) -> Option<i32> {
     match signature(board)? {
         Signature::Mopup { strong } => Some(mop_up_score(board, strong, p)),
         Signature::Kpk { strong, pawn_sq } => kpk_score(board, strong, pawn_sq, p),
+        Signature::Kbnk { strong, bishop_sq } => {
+            Some(kbnk_score(board, strong, bishop_sq, p))
+        }
     }
 }
 
@@ -34,6 +38,7 @@ enum Signature {
     /// KRvK, KQvK, KRRvK, KQQvK — alle Mop-up-Endspiele
     Mopup { strong: Color },
     Kpk { strong: Color, pawn_sq: Square },
+    Kbnk { strong: Color, bishop_sq: Square },
 }
 
 fn signature(board: &Board) -> Option<Signature> {
@@ -72,6 +77,26 @@ fn signature(board: &Board) -> Option<Signature> {
         return Some(Signature::Mopup { strong: Color::Black });
     }
 
+    // KBNK: genau ein Laeufer + ein Springer auf der starken Seite, andere Seite nackt
+    if b_minor_or_more == 0 && w_bishop == 1 && w_knight == 1 && w_rook + w_queen == 0 {
+        let bishop_sq = first_square(
+            *board.pieces(Piece::Bishop) & *board.color_combined(Color::White),
+        )?;
+        return Some(Signature::Kbnk {
+            strong: Color::White,
+            bishop_sq,
+        });
+    }
+    if w_minor_or_more == 0 && b_bishop == 1 && b_knight == 1 && b_rook + b_queen == 0 {
+        let bishop_sq = first_square(
+            *board.pieces(Piece::Bishop) & *board.color_combined(Color::Black),
+        )?;
+        return Some(Signature::Kbnk {
+            strong: Color::Black,
+            bishop_sq,
+        });
+    }
+
     None
 }
 
@@ -97,6 +122,32 @@ fn mop_up_score(board: &Board, strong: Color, p: &EvalParams) -> i32 {
 
     let material = strong_material(board, strong, p);
     signed(material + bonus, strong)
+}
+
+/// Phase C: KBNK. Mattsetzen ist nur in einer Ecke der Laeuferfarbe
+/// moeglich — der Mop-up-Gradient zieht den Verteidiger gezielt dorthin.
+fn kbnk_score(board: &Board, strong: Color, bishop_sq: Square, p: &EvalParams) -> i32 {
+    let weak = !strong;
+    let weak_king = board.king_square(weak);
+    let strong_king = board.king_square(strong);
+
+    let corners: &[Square; 2] = if is_light_square(bishop_sq) {
+        &LIGHT_CORNERS
+    } else {
+        &DARK_CORNERS
+    };
+    let corner_d = nearest_corner_distance(weak_king, corners);
+    let king_d = chebyshev(weak_king, strong_king);
+
+    let bonus = p.eg_corner_weight * (7 - corner_d)
+        + p.eg_king_proximity_weight * (14 - 2 * king_d);
+
+    let material = strong_material(board, strong, p);
+    signed(material + bonus, strong)
+}
+
+fn is_light_square(sq: Square) -> bool {
+    (sq.get_file().to_index() + sq.get_rank().to_index()) % 2 == 1
 }
 
 /// Phase B: Rule of the Square. Wenn der Bauer nicht mehr einholbar ist,
@@ -197,6 +248,10 @@ fn nearest_corner_distance(sq: Square, corners: &[Square]) -> i32 {
 const ALL_CORNERS: [Square; 4] =
     [Square::A1, Square::H1, Square::A8, Square::H8];
 
+const LIGHT_CORNERS: [Square; 2] = [Square::A8, Square::H1];
+
+const DARK_CORNERS: [Square; 2] = [Square::A1, Square::H8];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +348,39 @@ mod tests {
         // Schwarzer Koenig direkt vor dem Bauern — eindeutig im Quadrat.
         let b = Board::from_str("8/8/3k4/8/3P4/8/8/4K3 w - - 0 1").unwrap();
         assert!(endgame_score(&b, &p()).is_none());
+    }
+
+    #[test]
+    fn signature_kbnk() {
+        let b = Board::from_str("4k3/8/8/8/8/8/8/2BNK3 w - - 0 1").unwrap();
+        assert!(matches!(
+            signature(&b),
+            Some(Signature::Kbnk { strong: Color::White, .. })
+        ));
+    }
+
+    #[test]
+    fn kbnk_drives_to_bishop_color_corner() {
+        // Weisser Dunkelfeldlaeufer auf c1 → Mattecken sind a1 und h8.
+        // Schwarzer Koenig auf h1 (dunkle Ecke) → guter Mop-up-Score.
+        let dark_corner = Board::from_str("8/8/8/8/4K3/8/2N5/2B4k w - - 0 1").unwrap();
+        // Schwarzer Koenig auf h8 (auch dunkle Ecke).
+        let other_dark = Board::from_str("7k/8/8/8/4K3/8/2N5/2B5 w - - 0 1").unwrap();
+        // Schwarzer Koenig auf a8 (helle Ecke) — schlechter, weil falsche Farbe.
+        let light_corner = Board::from_str("k7/8/8/8/4K3/8/2N5/2B5 w - - 0 1").unwrap();
+
+        let s_h1 = endgame_score(&dark_corner, &p()).unwrap();
+        let s_h8 = endgame_score(&other_dark, &p()).unwrap();
+        let s_a8 = endgame_score(&light_corner, &p()).unwrap();
+        assert!(s_h1 > s_a8, "h1 {s_h1} should beat a8 {s_a8}");
+        assert!(s_h8 > s_a8, "h8 {s_h8} should beat a8 {s_a8}");
+    }
+
+    #[test]
+    fn light_dark_square_classification() {
+        assert!(!is_light_square(Square::A1));
+        assert!(is_light_square(Square::H1));
+        assert!(is_light_square(Square::A8));
+        assert!(!is_light_square(Square::H8));
     }
 }
