@@ -73,6 +73,9 @@ struct SearchState {
     history: Vec<u64>,
     root_best_move: Option<ChessMove>,
     root_best_score: i32,
+    // Wenn die Wurzel nur einen legalen Zug hat, merken wir ihn vor: beim
+    // Uebergang Ponder → Normal koennen wir dann sofort abbrechen.
+    forced_only_move: Option<ChessMove>,
 }
 
 impl SearchState {
@@ -80,8 +83,13 @@ impl SearchState {
         if self.stop.load(Ordering::Relaxed) {
             return true;
         }
-        // Uebergang Ponder → Normal: jetzt die echte Deadline setzen
+        // Uebergang Ponder → Normal: jetzt die echte Deadline setzen.
+        // Bei forciertem Zug sofort abbrechen — der Zug steht fest.
         if self.deadline.is_none() && !self.pondering.load(Ordering::Relaxed) {
+            if self.forced_only_move.is_some() {
+                self.stop.store(true, Ordering::Relaxed);
+                return true;
+            }
             self.deadline = Some(Instant::now() + self.think_time);
         }
         if let Some(dl) = self.deadline {
@@ -108,6 +116,20 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         }
     }
 
+    // Forcierter Zug: nur eine legale Antwort → ohne Suche spielen.
+    // Im Ponder-Modus muessen wir weiterdenken, bis ponderhit/stop kommt,
+    // deshalb nur im normalen Modus kurzschliessen.
+    if !req.params.ponder {
+        let mut legal = MoveGen::new_legal(&req.board);
+        if let Some(only) = legal.next() {
+            if legal.next().is_none() {
+                println!("info string forced move");
+                let ponder = ponder_move_from_tt(&req.board, only, &req.tt);
+                return Some(SearchResult { best: only, ponder });
+            }
+        }
+    }
+
     let start = Instant::now();
     let think_time = calculate_think_time(&req.params, req.move_overhead, req.board.side_to_move());
     // Ponder: Deadline initial offen lassen, sie wird beim Ponderhit gesetzt.
@@ -115,6 +137,17 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         None
     } else {
         Some(start + think_time)
+    };
+
+    // Forcierter Zug im Ponder-Modus vormerken: sobald ponderhit kommt
+    // (pondering=false), koennen wir ohne weitere Suche zurueckkehren.
+    let forced_only_move = {
+        let mut it = MoveGen::new_legal(&req.board);
+        let first = it.next();
+        match (first, it.next()) {
+            (Some(m), None) => Some(m),
+            _ => None,
+        }
     };
 
     let mut state = SearchState {
@@ -129,6 +162,7 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         history: req.history,
         root_best_move: None,
         root_best_score: 0,
+        forced_only_move,
     };
 
     // Iteratives Deepening
