@@ -172,18 +172,37 @@ def classify_motifs(
     return motifs
 
 
+def player_colors(game: chess.pgn.Game, player: str) -> set[chess.Color]:
+    """Return the set of colors the target player controlled in this game.
+
+    Matching is case-insensitive substring on White/Black headers so that
+    "Martuni" matches "Martuni 0.3", "martuni-dev", etc.
+    """
+    needle = player.lower()
+    colors: set[chess.Color] = set()
+    if needle in game.headers.get("White", "").lower():
+        colors.add(chess.WHITE)
+    if needle in game.headers.get("Black", "").lower():
+        colors.add(chess.BLACK)
+    return colors
+
+
 def analyze_game(
     engine: chess.engine.SimpleEngine,
     game: chess.pgn.Game,
     limit: chess.engine.Limit,
     threshold_cp: int,
     game_id: str,
+    target_colors: set[chess.Color],
 ) -> Iterable[Blunder]:
     board = game.board()
     ply = 0
     for move in game.mainline_moves():
         ply += 1
         mover = board.turn
+        if mover not in target_colors:
+            board.push(move)
+            continue
         info_before = engine.analyse(board, limit)
         eval_before = score_to_cp(info_before["score"], mover)
         best_move = info_before.get("pv", [None])[0]
@@ -278,6 +297,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pgn", nargs="+", type=Path, help="PGN file(s) to analyze")
     parser.add_argument(
+        "--player",
+        default="Martuni",
+        help="Only analyze moves played by this player (substring match on "
+        "the White/Black header, case-insensitive). Default: 'Martuni'.",
+    )
+    parser.add_argument(
         "--engine",
         default="stockfish",
         help="Path to Stockfish binary (default: 'stockfish' on PATH)",
@@ -337,12 +362,26 @@ def main() -> int:
         pass
 
     report = Report()
+    skipped = 0
     try:
         for game_id, game in iter_games(args.pgn):
-            for blunder in analyze_game(engine, game, limit, args.threshold, game_id):
+            target_colors = player_colors(game, args.player)
+            if not target_colors:
+                skipped += 1
+                print(
+                    f"skip: {game_id} — '{args.player}' not found in headers",
+                    file=sys.stderr,
+                )
+                continue
+            for blunder in analyze_game(
+                engine, game, limit, args.threshold, game_id, target_colors
+            ):
                 report.blunders.append(blunder)
     finally:
         engine.quit()
+
+    if skipped:
+        print(f"\n({skipped} game(s) skipped — no '{args.player}' header match)")
 
     print_report(report)
     return 0

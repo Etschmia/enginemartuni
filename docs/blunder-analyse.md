@@ -23,14 +23,22 @@ Zehn bis dreißig Verlustpartien reichen für erste belastbare Muster.
 ```
 PGN (Lichess / berlinschach / lokale Tests)
    ↓
-analyze_blunders.py  --threshold 150  --movetime 0.3
+analyze_blunders.py  --player Martuni  --threshold 150  --movetime 0.3
    ↓
-gruppierter Report: Phase × Motiv × Häufigkeit
+gruppierter Report: Phase × Motiv × Häufigkeit (nur Martunis Züge!)
    ↓
 manuelle Interpretation → Änderung in eval.toml / eval.rs / search.rs
    ↓
 neue Partien spielen → wieder analysieren (Regression-Check)
 ```
+
+**Wichtig:** Das Skript analysiert standardmäßig **nur die Züge der Zielseite**
+(Default `--player Martuni`, Substring-Match auf den White-/Black-Header,
+case-insensitive). Wir wollen aus den eigenen Fehlern lernen, nicht aus denen
+des Gegners — Stockfish-Zeit ist teuer, und ein Report voller Gegner-Patzer
+verwässert die Cluster. Partien ohne Martuni-Header werden übersprungen und
+auf stderr gemeldet. Für Self-Play-Partien (Martuni auf beiden Seiten) werden
+automatisch beide Farben analysiert.
 
 Der Bruch zwischen Schritt 3 und 4 ist Absicht: **das Skript schlägt keine
 Code-Änderungen automatisch vor**. Es liefert Evidenz, Tobias entscheidet.
@@ -137,7 +145,7 @@ Wenn der Report ein Muster zeigt, hier der Ansatzpunkt im Code:
 # python-chess ist kein Projekt-Dep — bei Bedarf in einer venv installieren
 pip install python-chess
 
-# einzelne Partie
+# einzelne Partie (Default: nur Martunis Züge)
 python tools/analyze_blunders.py game.pgn --engine stockfish --movetime 0.3
 
 # Batch mit strengerer Schwelle und mehr Rechenzeit
@@ -146,6 +154,9 @@ python tools/analyze_blunders.py games/*.pgn \
 
 # feste Tiefe statt movetime (reproduzierbarer für Regression-Checks)
 python tools/analyze_blunders.py game.pgn --depth 18
+
+# Anderen Spieler analysieren (z. B. für Vergleichszwecke)
+python tools/analyze_blunders.py game.pgn --player Stockfish
 ```
 
 Der Report wird auf stdout geschrieben: erst die Summentabelle
