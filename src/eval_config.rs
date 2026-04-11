@@ -24,7 +24,26 @@ pub struct EvalParams {
     pub knight_backrank_penalty: i32,
     pub bishop_pair_each: i32,
     pub connected_rooks_pair: i32,
+
+    // King safety
+    pub ks_knight_weight: i32,
+    pub ks_bishop_weight: i32,
+    pub ks_rook_weight: i32,
+    pub ks_queen_weight: i32,
+    pub ks_shield_rank1_bonus: i32,
+    pub ks_shield_rank2_bonus: i32,
+    pub ks_shield_missing_penalty: i32,
+    pub ks_exposed_center_penalty: i32,
+    pub safety_table: Vec<i32>,
 }
+
+pub const DEFAULT_SAFETY_TABLE: [i32; 100] = [
+    0, 0, 1, 2, 3, 5, 7, 9, 12, 15, 18, 22, 26, 30, 35, 39, 44, 50, 56, 62, 68, 75, 82, 85, 89, 97,
+    105, 113, 122, 131, 140, 150, 169, 180, 191, 202, 213, 225, 237, 248, 260, 272, 283, 295, 307,
+    319, 330, 342, 354, 366, 377, 389, 401, 412, 424, 436, 448, 459, 471, 483, 494, 500, 500, 500,
+    500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+    500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+];
 
 impl Default for EvalParams {
     fn default() -> Self {
@@ -45,6 +64,16 @@ impl Default for EvalParams {
             knight_backrank_penalty: -50,
             bishop_pair_each: 15,
             connected_rooks_pair: 150,
+
+            ks_knight_weight: 2,
+            ks_bishop_weight: 2,
+            ks_rook_weight: 3,
+            ks_queen_weight: 5,
+            ks_shield_rank1_bonus: 10,
+            ks_shield_rank2_bonus: 5,
+            ks_shield_missing_penalty: -15,
+            ks_exposed_center_penalty: -30,
+            safety_table: DEFAULT_SAFETY_TABLE.to_vec(),
         }
     }
 }
@@ -95,6 +124,31 @@ impl EvalParams {
         p.knight_backrank_penalty = i(&pc, "knight_backrank_penalty", p.knight_backrank_penalty);
         p.bishop_pair_each = i(&pc, "bishop_pair_each", p.bishop_pair_each);
         p.connected_rooks_pair = i(&pc, "connected_rooks_pair", p.connected_rooks_pair);
+
+        let ks = section(v, "king_safety");
+        p.ks_knight_weight = i(&ks, "knight_weight", p.ks_knight_weight);
+        p.ks_bishop_weight = i(&ks, "bishop_weight", p.ks_bishop_weight);
+        p.ks_rook_weight = i(&ks, "rook_weight", p.ks_rook_weight);
+        p.ks_queen_weight = i(&ks, "queen_weight", p.ks_queen_weight);
+        p.ks_shield_rank1_bonus = i(&ks, "shield_rank1_bonus", p.ks_shield_rank1_bonus);
+        p.ks_shield_rank2_bonus = i(&ks, "shield_rank2_bonus", p.ks_shield_rank2_bonus);
+        p.ks_shield_missing_penalty =
+            i(&ks, "shield_missing_penalty", p.ks_shield_missing_penalty);
+        p.ks_exposed_center_penalty =
+            i(&ks, "exposed_center_penalty", p.ks_exposed_center_penalty);
+
+        if let Some(arr) = ks
+            .and_then(|s| s.get("safety_table"))
+            .and_then(|v| v.as_array())
+        {
+            let parsed: Vec<i32> = arr
+                .iter()
+                .filter_map(|v| v.as_integer().map(|x| x as i32))
+                .collect();
+            if !parsed.is_empty() {
+                p.safety_table = parsed;
+            }
+        }
 
         p
     }

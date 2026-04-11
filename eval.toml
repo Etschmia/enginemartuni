@@ -39,3 +39,38 @@ bishop_pair_each = 15
 # Verbundene Tuerme (gleiche Linie/Reihe, Sichtverbindung, nichts dazwischen):
 # einmaliger Bonus fuer das Paar
 connected_rooks_pair = 150
+
+[king_safety]
+# Gewichte je gegnerischer Figur, die die 3x3-King-Zone angreift.
+# Bauern und der gegnerische Koenig zaehlen nicht.
+knight_weight = 2
+bishop_weight = 2
+rook_weight   = 3
+queen_weight  = 5
+
+# Pawn Shield — 3-Linien-Fenster auf der Koenigsseite (a-c bei lang
+# rochiert, f-h bei kurz rochiert).
+# Je Linie: Bauer direkt vor dem Koenig = voller Bonus; bereits vorgerueckt
+# (zwei Reihen vor dem Koenig) = abgeschwaechter Bonus; kein Bauer = Strafe.
+shield_rank1_bonus    =  10
+shield_rank2_bonus    =   5
+shield_missing_penalty = -15
+
+# Koenig auf d/e-Linie ohne Rochade → offenes Zentrum
+exposed_center_penalty = -30
+
+# SafetyTable: non-lineare Zuordnung Angriffsscore → Strafe in cp.
+# Index = min(n_angreifer * summe_der_gewichte, 99).
+# Kurve nach Chess Programming Wiki, kappt bei 500 cp (5 Bauern).
+safety_table = [
+    0,   0,   1,   2,   3,   5,   7,   9,  12,  15,
+   18,  22,  26,  30,  35,  39,  44,  50,  56,  62,
+   68,  75,  82,  85,  89,  97, 105, 113, 122, 131,
+  140, 150, 169, 180, 191, 202, 213, 225, 237, 248,
+  260, 272, 283, 295, 307, 319, 330, 342, 354, 366,
+  377, 389, 401, 412, 424, 436, 448, 459, 471, 483,
+  494, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+  500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+  500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+  500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
+]

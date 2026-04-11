@@ -1,5 +1,8 @@
 use crate::eval_config::EvalParams;
-use chess::{BitBoard, Board, Color, File, Piece, Rank, Square};
+use chess::{
+    get_bishop_moves, get_king_moves, get_knight_moves, get_rook_moves, BitBoard, Board, Color,
+    File, Piece, Rank, Square,
+};
 
 /// Stellungsbewertung in Centipawns, aus Sicht von Weiss.
 /// Positiv = gut fuer Weiss, negativ = gut fuer Schwarz.
@@ -48,6 +51,121 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams) -> i32 {
     // Bauernphalanx (reihenweise)
     score += phalanx_bonus(our_pawns, p);
 
+    // King Safety (positiv = sicher, negativ = in Gefahr)
+    score += king_safety(board, us, p);
+
+    score
+}
+
+/// Gesamt-Beitrag der King-Safety-Logik aus Sicht von `us`.
+/// Positiver Wert = sicher, negativer Wert = in Gefahr.
+pub fn king_safety(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    let king_sq = board.king_square(us);
+    let zone = king_zone(king_sq);
+
+    let shield = pawn_shield_score(board, us, king_sq, p);
+    let danger = king_danger(board, us, zone, p);
+
+    shield - danger
+}
+
+/// 3x3-Koenigszone: der Koenig selbst + alle acht Nachbarfelder.
+/// Nutzt die interne Lookup-Tabelle der chess-Crate.
+fn king_zone(sq: Square) -> BitBoard {
+    get_king_moves(sq) | BitBoard::from_square(sq)
+}
+
+/// Summiert Angriffsgewichte gegnerischer Offiziere auf die King-Zone,
+/// indiziert SafetyTable und liefert die Strafe in cp.
+fn king_danger(board: &Board, us: Color, zone: BitBoard, p: &EvalParams) -> i32 {
+    let enemy = !us;
+    let enemy_bb = *board.color_combined(enemy);
+    let occ = *board.combined();
+
+    let mut n_attackers: i32 = 0;
+    let mut weight_sum: i32 = 0;
+
+    // Springer
+    for sq in *board.pieces(Piece::Knight) & enemy_bb {
+        if (get_knight_moves(sq) & zone) != BitBoard::new(0) {
+            n_attackers += 1;
+            weight_sum += p.ks_knight_weight;
+        }
+    }
+    // Laeufer
+    for sq in *board.pieces(Piece::Bishop) & enemy_bb {
+        if (get_bishop_moves(sq, occ) & zone) != BitBoard::new(0) {
+            n_attackers += 1;
+            weight_sum += p.ks_bishop_weight;
+        }
+    }
+    // Tuerme
+    for sq in *board.pieces(Piece::Rook) & enemy_bb {
+        if (get_rook_moves(sq, occ) & zone) != BitBoard::new(0) {
+            n_attackers += 1;
+            weight_sum += p.ks_rook_weight;
+        }
+    }
+    // Damen (kombiniert Turm + Laeufer)
+    for sq in *board.pieces(Piece::Queen) & enemy_bb {
+        let attacks = get_rook_moves(sq, occ) | get_bishop_moves(sq, occ);
+        if (attacks & zone) != BitBoard::new(0) {
+            n_attackers += 1;
+            weight_sum += p.ks_queen_weight;
+        }
+    }
+
+    if n_attackers == 0 {
+        return 0;
+    }
+
+    let raw = n_attackers * weight_sum;
+    let max_idx = (p.safety_table.len() as i32) - 1;
+    let idx = raw.clamp(0, max_idx) as usize;
+    p.safety_table[idx]
+}
+
+/// Bewertet den Bauernschild drei Linien breit vor dem Koenig.
+/// Zentrum (d/e) auf Grundreihe → exposed_center_penalty.
+/// Koenig nicht auf Grundreihe → 0 (z.B. aktiver Endspielkoenig).
+fn pawn_shield_score(board: &Board, us: Color, king_sq: Square, p: &EvalParams) -> i32 {
+    let king_file = king_sq.get_file().to_index() as i32;
+    let king_rank = king_sq.get_rank().to_index() as i32;
+
+    let home_rank = match us {
+        Color::White => 0,
+        Color::Black => 7,
+    };
+    if king_rank != home_rank {
+        return 0;
+    }
+
+    if king_file == 3 || king_file == 4 {
+        return p.ks_exposed_center_penalty;
+    }
+
+    let (file_lo, file_hi) = if king_file <= 2 { (0, 2) } else { (5, 7) };
+    let (r1, r2) = match us {
+        Color::White => (1, 2),
+        Color::Black => (6, 5),
+    };
+
+    let our_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(us);
+    let mut score = 0;
+
+    for f in file_lo..=file_hi {
+        let sq_r1 =
+            Square::make_square(Rank::from_index(r1), File::from_index(f as usize));
+        let sq_r2 =
+            Square::make_square(Rank::from_index(r2), File::from_index(f as usize));
+        if (our_pawns & BitBoard::from_square(sq_r1)) != BitBoard::new(0) {
+            score += p.ks_shield_rank1_bonus;
+        } else if (our_pawns & BitBoard::from_square(sq_r2)) != BitBoard::new(0) {
+            score += p.ks_shield_rank2_bonus;
+        } else {
+            score += p.ks_shield_missing_penalty;
+        }
+    }
     score
 }
 
@@ -282,7 +400,9 @@ mod tests {
         let b = Board::from_str("3k4/8/8/8/4K3/8/8/R6R w - - 0 1").unwrap();
         let p = EvalParams::default();
         // 2 Tuerme = 1000 + connected 150 = 1150
-        assert_eq!(evaluate(&b, &p), 1150);
+        // Weisser Koenig nicht auf Grundreihe → 0, schwarzer Koenig d8 Zentrum → -30
+        // evaluate = 1150 - (-30) = 1180
+        assert_eq!(evaluate(&b, &p), 1180);
     }
 
     #[test]
@@ -291,6 +411,55 @@ mod tests {
         let b = Board::from_str("3k4/8/8/8/4K3/8/8/R2B3R w - - 0 1").unwrap();
         let p = EvalParams::default();
         // 2 Tuerme 1000 + 1 Laeufer 300 (kein Pair) = 1300
-        assert_eq!(evaluate(&b, &p), 1300);
+        // Weisser Koenig e4 → 0, schwarzer Koenig d8 Zentrum → -30
+        // evaluate = 1300 - (-30) = 1330
+        assert_eq!(evaluate(&b, &p), 1330);
+    }
+
+    #[test]
+    fn ks_castled_intact_shield() {
+        // Weisser Koenig g1, Bauernschild f2/g2/h2 vollstaendig
+        let b = Board::from_str("4k3/8/8/8/8/8/5PPP/5RK1 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        // 3 * 10 = 30 Shield, 0 Angreifer
+        assert_eq!(king_safety(&b, Color::White, &p), 30);
+    }
+
+    #[test]
+    fn ks_no_shield_on_g1() {
+        // Weisser Koenig g1 ohne Bauern im 3-Linien-Fenster
+        let b = Board::from_str("4k3/8/8/8/8/8/8/5RK1 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        // 3 * -15 = -45, 0 Angreifer
+        assert_eq!(king_safety(&b, Color::White, &p), -45);
+    }
+
+    #[test]
+    fn ks_center_king_penalty() {
+        let b = Board::from_str("4k3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        // e1 → Zentrum → -30
+        assert_eq!(king_safety(&b, Color::White, &p), -30);
+    }
+
+    #[test]
+    fn ks_queen_attacks_zone() {
+        // Weisser Koenig g1 ohne Schild, schwarze Dame auf g5 haelt g-Linie
+        let b = Board::from_str("4k3/8/8/6q1/8/8/8/6K1 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        // Shield: -45 (kein Bauer)
+        // Dame → 1 Angreifer, Gewicht 5, raw=5, safety_table[5]=5
+        // = -45 - 5 = -50
+        assert_eq!(king_safety(&b, Color::White, &p), -50);
+    }
+
+    #[test]
+    fn ks_advanced_shield_pawn() {
+        // Weisser Koenig g1, g-Bauer auf g3 (eine Reihe weiter vor),
+        // f2 und h2 intakt
+        let b = Board::from_str("4k3/8/8/8/8/6P1/5P1P/5RK1 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        // f2 intakt = 10, g3 advanced = 5, h2 intakt = 10 → 25
+        assert_eq!(king_safety(&b, Color::White, &p), 25);
     }
 }
