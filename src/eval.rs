@@ -425,14 +425,12 @@ mod tests {
 
     #[test]
     fn isolated_pawn_penalty() {
-        // Weisser Bauer auf a4 ohne Nachbar
+        // KPK: Weisser Bauer auf a4, schwarzer Koenig e8 → Bauer ausserhalb
+        // des Quadrats, Endspielmodul greift mit Pawn-Material + Bonus.
         let b = Board::from_str("4k3/8/8/8/P7/8/8/4K3 w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // Non-PST: 100 (Bauer) + 0 (Linie a) - 20 (Isolani) + 300 (Freibauer) = 380
-        // PST (phase=0, reiner eg-Wert): weisser Bauer a4 eg=20, weisser Koenig e1 eg=-30,
-        // schwarzer Koenig e8 eg=-30 → diff eg = (20-30) - (-30) = 20
-        // Total: 380 + 20 = 400
-        assert_eq!(evaluate(&b, &p), 400);
+        // 100 (pawn) + 500 (passed_unstoppable_bonus) = 600
+        assert_eq!(evaluate(&b, &p), 600);
     }
 
     #[test]

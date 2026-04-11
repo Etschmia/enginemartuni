@@ -8,9 +8,10 @@
 //! Konzept und Phasen siehe `docs/endgame.md`.
 //!
 //! Phase A: Mop-up fuer KRvK, KQvK, KRRvK, KQQvK.
+//! Phase B: KPK mit Rule of the Square.
 
 use crate::eval_config::EvalParams;
-use chess::{Board, Color, Piece, Square};
+use chess::{BitBoard, Board, Color, Piece, Rank, Square};
 
 /// Erkennt eine bekannte Material-Signatur und liefert die Bewertung
 /// in Centipawns aus Sicht von Weiss. `None` bedeutet "keine Spezialregel
@@ -18,6 +19,7 @@ use chess::{Board, Color, Piece, Square};
 pub fn endgame_score(board: &Board, p: &EvalParams) -> Option<i32> {
     match signature(board)? {
         Signature::Mopup { strong } => Some(mop_up_score(board, strong, p)),
+        Signature::Kpk { strong, pawn_sq } => kpk_score(board, strong, pawn_sq, p),
     }
 }
 
@@ -31,15 +33,12 @@ pub fn is_recognized(board: &Board) -> bool {
 enum Signature {
     /// KRvK, KQvK, KRRvK, KQQvK — alle Mop-up-Endspiele
     Mopup { strong: Color },
+    Kpk { strong: Color, pawn_sq: Square },
 }
 
 fn signature(board: &Board) -> Option<Signature> {
     let w_pawns = count(board, Piece::Pawn, Color::White);
     let b_pawns = count(board, Piece::Pawn, Color::Black);
-    if w_pawns + b_pawns != 0 {
-        return None;
-    }
-
     let w_knight = count(board, Piece::Knight, Color::White);
     let b_knight = count(board, Piece::Knight, Color::Black);
     let w_bishop = count(board, Piece::Bishop, Color::White);
@@ -51,6 +50,19 @@ fn signature(board: &Board) -> Option<Signature> {
 
     let w_minor_or_more = w_knight + w_bishop + w_rook + w_queen;
     let b_minor_or_more = b_knight + b_bishop + b_rook + b_queen;
+
+    // KPK: genau ein Bauer, keine sonstigen Figuren
+    if w_pawns + b_pawns == 1 && w_minor_or_more == 0 && b_minor_or_more == 0 {
+        let strong = if w_pawns == 1 { Color::White } else { Color::Black };
+        let pawn_sq = first_square(
+            *board.pieces(Piece::Pawn) & *board.color_combined(strong),
+        )?;
+        return Some(Signature::Kpk { strong, pawn_sq });
+    }
+
+    if w_pawns + b_pawns != 0 {
+        return None;
+    }
 
     // Mop-up: eine Seite ist nackt, die andere hat nur schwere Figuren
     if b_minor_or_more == 0 && is_mopup_force(w_knight, w_bishop, w_rook, w_queen) {
@@ -85,6 +97,68 @@ fn mop_up_score(board: &Board, strong: Color, p: &EvalParams) -> i32 {
 
     let material = strong_material(board, strong, p);
     signed(material + bonus, strong)
+}
+
+/// Phase B: Rule of the Square. Wenn der Bauer nicht mehr einholbar ist,
+/// liefert die Funktion die Spezial-Bewertung. Sonst `None`, damit die
+/// normale Eval die KPK-Stellung uebernimmt.
+fn kpk_score(
+    board: &Board,
+    strong: Color,
+    pawn_sq: Square,
+    p: &EvalParams,
+) -> Option<i32> {
+    if is_pawn_unstoppable(board, strong, pawn_sq) {
+        let cp = p.pawn + p.eg_passed_unstoppable_bonus;
+        return Some(signed(cp, strong));
+    }
+    None
+}
+
+fn is_pawn_unstoppable(board: &Board, strong: Color, pawn_sq: Square) -> bool {
+    let weak = !strong;
+    let weak_king = board.king_square(weak);
+
+    let promo_sq = promotion_square(pawn_sq, strong);
+    let pawn_dist = pawn_distance_to_promotion(pawn_sq, strong);
+    let king_dist = chebyshev(weak_king, promo_sq);
+
+    // Verteidiger am Zug: er kommt rechtzeitig, wenn king_dist <= pawn_dist.
+    // Angreifer am Zug: der Bauer macht den ersten Schritt, dem Verteidiger
+    // fehlt eine Tempo-Einheit → king_dist <= pawn_dist - 1.
+    let in_square = if board.side_to_move() == weak {
+        king_dist <= pawn_dist
+    } else {
+        king_dist <= pawn_dist - 1
+    };
+    !in_square
+}
+
+fn promotion_square(pawn_sq: Square, color: Color) -> Square {
+    let rank = match color {
+        Color::White => Rank::Eighth,
+        Color::Black => Rank::First,
+    };
+    Square::make_square(rank, pawn_sq.get_file())
+}
+
+/// Schritte, die der Bauer noch braucht, inkl. Doppelschritt von Reihe 2/7.
+fn pawn_distance_to_promotion(pawn_sq: Square, color: Color) -> i32 {
+    let r = pawn_sq.get_rank().to_index() as i32;
+    match color {
+        Color::White => {
+            let d = 7 - r;
+            if r == 1 { d - 1 } else { d }
+        }
+        Color::Black => {
+            let d = r;
+            if r == 6 { d - 1 } else { d }
+        }
+    }
+}
+
+fn first_square(bb: BitBoard) -> Option<Square> {
+    bb.into_iter().next()
 }
 
 fn strong_material(board: &Board, strong: Color, p: &EvalParams) -> i32 {
@@ -194,5 +268,30 @@ mod tests {
         let s_near = endgame_score(&near, &p()).unwrap();
         let s_far = endgame_score(&far, &p()).unwrap();
         assert!(s_near > s_far, "near {s_near} should beat far {s_far}");
+    }
+
+    #[test]
+    fn signature_kpk() {
+        let b = Board::from_str("4k3/8/8/8/8/8/4P3/4K3 w - - 0 1").unwrap();
+        assert!(matches!(
+            signature(&b),
+            Some(Signature::Kpk { strong: Color::White, .. })
+        ));
+    }
+
+    #[test]
+    fn kpk_outside_square_is_unstoppable() {
+        // Bauer auf a4, schwarzer Koenig in h8 — voellig ausserhalb.
+        // Weiss am Zug.
+        let b = Board::from_str("7k/8/8/8/P7/8/8/4K3 w - - 0 1").unwrap();
+        let s = endgame_score(&b, &p()).unwrap();
+        assert!(s >= p().eg_passed_unstoppable_bonus, "got {s}");
+    }
+
+    #[test]
+    fn kpk_inside_square_returns_none() {
+        // Schwarzer Koenig direkt vor dem Bauern — eindeutig im Quadrat.
+        let b = Board::from_str("8/8/3k4/8/3P4/8/8/4K3 w - - 0 1").unwrap();
+        assert!(endgame_score(&b, &p()).is_none());
     }
 }
