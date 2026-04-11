@@ -1,3 +1,4 @@
+use crate::endgame;
 use crate::eval_config::EvalParams;
 use crate::pst::{
     pst_index, BISHOP_PST, KING_PST, KNIGHT_PST, PAWN_PST, QUEEN_PST, ROOK_PST,
@@ -16,6 +17,11 @@ const MAX_PHASE: i32 = 24;
 ///  - Nicht-getaperte Terme (Material, Bauernstruktur, Laeuferpaar, King Safety, ...)
 ///  - Getaperter PST-Beitrag (mg/eg interpoliert nach Spielphase)
 pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
+    // Bekannte Endspiele uebernehmen die Bewertung komplett.
+    if let Some(s) = endgame::endgame_score(board, p) {
+        return s;
+    }
+
     let non_pst = evaluate_side(board, Color::White, p) - evaluate_side(board, Color::Black, p);
 
     let (w_mg, w_eg) = pst_score(board, Color::White);
@@ -453,13 +459,13 @@ mod tests {
 
     #[test]
     fn connected_rooks() {
-        // Weisse Tuerme auf a1 und h1, Koenig auf e4 (ausserhalb der Reihe)
+        // KRRvK ist mittlerweile Mop-up — Endspielmodul liefert die Bewertung
+        // (Material + Eckenterm + Koenigsnaehe).
         let b = Board::from_str("3k4/8/8/8/4K3/8/8/R6R w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // Non-PST: 1000 + 150 connected + 30 (schwarzer Koenig center) = 1180
-        // PST: weisser Koenig e4 ist im eg sehr wertvoll, taper bei phase=4
-        // Total: 1198
-        assert_eq!(evaluate(&b, &p), 1198);
+        // 1000 (2 Tuerme) + 20*(7-3) Eckenterm + 10*(14-2*4) Koenigsnaehe
+        // = 1000 + 80 + 60 = 1140
+        assert_eq!(evaluate(&b, &p), 1140);
     }
 
     #[test]

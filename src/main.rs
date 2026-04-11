@@ -1,4 +1,5 @@
 mod config;
+mod endgame;
 mod eval;
 mod eval_config;
 mod options;

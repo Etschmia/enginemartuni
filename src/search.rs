@@ -1,3 +1,4 @@
+use crate::endgame;
 use crate::eval::evaluate;
 use crate::eval_config::EvalParams;
 use crate::polyglot::hash::polyglot_hash;
@@ -458,6 +459,11 @@ fn is_candidate_move(board: &Board, mv: ChessMove, new_board: &Board) -> bool {
     }
     // Schlagzug
     if is_capture(board, mv) {
+        return true;
+    }
+    // Bekanntes Endspiel: aggressiver verlaengern, damit lange Mattsequenzen
+    // noch in die Suchtiefe passen.
+    if endgame::is_recognized(new_board) {
         return true;
     }
     // Freibauerzug: der bewegte Bauer ist in der neuen Stellung Freibauer

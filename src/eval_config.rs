@@ -35,6 +35,11 @@ pub struct EvalParams {
     pub ks_shield_missing_penalty: i32,
     pub ks_exposed_center_penalty: i32,
     pub safety_table: Vec<i32>,
+
+    // Endspiel-Mop-up
+    pub eg_corner_weight: i32,
+    pub eg_king_proximity_weight: i32,
+    pub eg_passed_unstoppable_bonus: i32,
 }
 
 pub const DEFAULT_SAFETY_TABLE: [i32; 100] = [
@@ -74,6 +79,10 @@ impl Default for EvalParams {
             ks_shield_missing_penalty: -15,
             ks_exposed_center_penalty: -30,
             safety_table: DEFAULT_SAFETY_TABLE.to_vec(),
+
+            eg_corner_weight: 20,
+            eg_king_proximity_weight: 10,
+            eg_passed_unstoppable_bonus: 500,
         }
     }
 }
@@ -149,6 +158,16 @@ impl EvalParams {
                 p.safety_table = parsed;
             }
         }
+
+        let eg = section(v, "endgame");
+        p.eg_corner_weight = i(&eg, "corner_weight", p.eg_corner_weight);
+        p.eg_king_proximity_weight =
+            i(&eg, "king_proximity_weight", p.eg_king_proximity_weight);
+        p.eg_passed_unstoppable_bonus = i(
+            &eg,
+            "passed_unstoppable_bonus",
+            p.eg_passed_unstoppable_bonus,
+        );
 
         p
     }

@@ -74,3 +74,18 @@ safety_table = [
   500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
   500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
 ]
+
+[endgame]
+# Hand-codiertes Endspielwissen ohne Tablebases.
+# Greift nur, wenn Material-Signatur erkannt wird (KRvK, KQvK, KRRvK,
+# KQQvK, KPK, KBNK). Sonst laeuft die normale Eval.
+
+# Mop-up: Gradient, der den schwaecheren Koenig in die Ecke zieht
+# und den staerkeren Koenig heranfuehrt.
+# Maximaler Beitrag pro Term: 7 * corner_weight bzw. 14 * king_weight.
+corner_weight         = 20
+king_proximity_weight = 10
+
+# KPK Rule of the Square: wenn der Bauer nicht mehr einholbar ist,
+# wird er sicher zur Dame. Bonus on top des Bauernmaterials.
+passed_unstoppable_bonus = 500
