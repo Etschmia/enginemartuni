@@ -5,7 +5,7 @@ use crate::polyglot::hash::polyglot_hash;
 use crate::polyglot::BookSet;
 use crate::position::move_to_uci;
 use crate::tt::{TranspositionTable, TtFlag};
-use chess::{Board, BoardStatus, ChessMove, Color, MoveGen, Piece};
+use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, MoveGen, Piece, Square};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -441,6 +441,12 @@ fn quiescence(
     captures.sort_by_key(|mv| mvv_lva_key(board, *mv));
 
     for mv in captures {
+        // Bad Capture Pruning: verlierende Schlagzuege ueberspringen.
+        // SEE < 0 bedeutet, die Schlagserie verliert Material.
+        if see(board, mv) < 0 {
+            continue;
+        }
+
         let nb = board.make_move_new(mv);
         let score = -quiescence(&nb, -beta, -alpha, ply + 1, state);
 
@@ -585,6 +591,186 @@ fn piece_rank(p: Piece) -> i32 {
         Piece::Queen => 9,
         Piece::King => 100,
     }
+}
+
+// ---------------------------------------------------------------------------
+// SEE — Static Exchange Evaluation
+// ---------------------------------------------------------------------------
+//
+// Simuliert eine Schlagserie auf einem einzelnen Feld und liefert den
+// Materialgewinn/-verlust aus Sicht der Seite, die den ersten Schlag macht.
+//
+// Wird genutzt für:
+// - Bad Capture Pruning in der Quiescence-Suche
+// - Move Ordering (verlierende Captures hinter Quiet Moves)
+// - Selektive Extensions (nur gewinnende Captures extenden)
+
+/// Materialwert einer Figur für SEE (unabhängig von EvalParams, damit SEE
+/// keine Referenz auf die Eval braucht und schnell bleibt).
+fn see_piece_value(p: Piece) -> i32 {
+    match p {
+        Piece::Pawn => 100,
+        Piece::Knight => 300,
+        Piece::Bishop => 300,
+        Piece::Rook => 500,
+        Piece::Queen => 900,
+        Piece::King => 100_000,
+    }
+}
+
+/// Alle Figuren (beider Seiten), die `target` angreifen, gegeben das
+/// aktuelle `occupied`-Bitboard. Gleiter werden korrekt berechnet, sodass
+/// X-Ray-Angriffe nach Entfernung einer Figur automatisch auftauchen.
+fn all_attackers_to(board: &Board, target: Square, occupied: BitBoard) -> BitBoard {
+    use chess::{get_bishop_moves, get_king_moves, get_knight_moves, get_rook_moves};
+
+    let knights = *board.pieces(Piece::Knight) & occupied;
+    let bishops_queens = (*board.pieces(Piece::Bishop) | *board.pieces(Piece::Queen)) & occupied;
+    let rooks_queens = (*board.pieces(Piece::Rook) | *board.pieces(Piece::Queen)) & occupied;
+    let kings = *board.pieces(Piece::King) & occupied;
+
+    let mut attackers = BitBoard::new(0);
+
+    // Springer
+    attackers |= get_knight_moves(target) & knights;
+    // Läufer + Dame (diagonal)
+    attackers |= get_bishop_moves(target, occupied) & bishops_queens;
+    // Türme + Dame (gerade)
+    attackers |= get_rook_moves(target, occupied) & rooks_queens;
+    // König
+    attackers |= get_king_moves(target) & kings;
+
+    // Bauern: "wer greift target an?" ist äquivalent zu "von target rückwärts
+    // schauen" — ein weißer Bauer auf sq greift target an, wenn target in den
+    // Angriffsfeldern von sq liegt. Das ist dasselbe wie: sq liegt in den
+    // Angriffsfeldern eines *schwarzen* Bauern auf target (gespiegelte Richtung).
+    let white_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(Color::White) & occupied;
+    let black_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(Color::Black) & occupied;
+    attackers |= chess::get_pawn_attacks(target, Color::Black, white_pawns);
+    attackers |= chess::get_pawn_attacks(target, Color::White, black_pawns);
+
+    attackers
+}
+
+/// Billigsten Angreifer einer Seite aus dem `attackers`-Bitboard finden.
+/// Gibt (Square, Piece, Wert) zurück.
+fn least_valuable_attacker(
+    board: &Board,
+    attackers: BitBoard,
+    side: Color,
+    occupied: BitBoard,
+) -> Option<(Square, Piece, i32)> {
+    let side_attackers = attackers & *board.color_combined(side) & occupied;
+    // Reihenfolge: Bauer, Springer, Läufer, Turm, Dame, König
+    for &piece in &[
+        Piece::Pawn,
+        Piece::Knight,
+        Piece::Bishop,
+        Piece::Rook,
+        Piece::Queen,
+        Piece::King,
+    ] {
+        let candidates = side_attackers & *board.pieces(piece);
+        if candidates.popcnt() > 0 {
+            // Nimm irgendeinen (to_square liefert den niedrigsten)
+            let sq = candidates.to_square();
+            return Some((sq, piece, see_piece_value(piece)));
+        }
+    }
+    None
+}
+
+/// Static Exchange Evaluation: liefert den Materialgewinn/-verlust für den
+/// Schlagzug `mv` aus Sicht der Seite am Zug.
+///
+/// Positiver Wert = der Schlagzug gewinnt Material.
+/// Negativer Wert = der Schlagzug verliert Material.
+///
+/// Der Algorithmus baut ein Gain-Array auf (wer gewinnt was in jedem Schritt)
+/// und faltet es am Ende per Minimax zurück: jede Seite wählt das Maximum aus
+/// "aufhören" und "weiterschlagen".
+pub fn see(board: &Board, mv: ChessMove) -> i32 {
+    let target = mv.get_dest();
+    let source = mv.get_source();
+    let mover = board.side_to_move();
+
+    // Figur, die geschlagen wird (en passant: Bauer)
+    let captured_piece = board.piece_on(target).unwrap_or(Piece::Pawn);
+    // Figur, die schlägt
+    let moving_piece = board.piece_on(source).unwrap_or(Piece::Pawn);
+
+    // Promotion: die schlagende Figur wird zur beförderten Figur
+    let moving_value = if let Some(promo) = mv.get_promotion() {
+        see_piece_value(promo)
+    } else {
+        see_piece_value(moving_piece)
+    };
+
+    // Gain-Array: gain[d] = was die Seite im Schritt d gewinnt (vor Rückschlag)
+    let mut gain: [i32; 33] = [0; 33];
+    gain[0] = see_piece_value(captured_piece);
+    if mv.get_promotion().is_some() {
+        // Bei Promotion gewinnen wir zusätzlich die Differenz Promo-Bauer
+        gain[0] += see_piece_value(mv.get_promotion().unwrap()) - see_piece_value(Piece::Pawn);
+    }
+
+    // Occupied-Bitboard: Quellfigur entfernen (sie steht jetzt auf target)
+    let mut occupied = *board.combined() ^ BitBoard::from_square(source);
+
+    // En passant: geschlagener Bauer steht nicht auf target
+    if board.piece_on(source) == Some(Piece::Pawn)
+        && board.piece_on(target).is_none()
+        && source.get_file() != target.get_file()
+    {
+        // En-passant-Capture: der geschlagene Bauer steht auf derselben Spalte
+        // wie target, aber auf der Reihe der Quelle
+        let ep_square = Square::make_square(source.get_rank(), target.get_file());
+        occupied ^= BitBoard::from_square(ep_square);
+    }
+
+    // Alle Angreifer auf target (aktualisiert sich, wenn Figuren entfernt werden)
+    let mut attackers = all_attackers_to(board, target, occupied);
+
+    // Angreifer, den wir gerade bewegt haben, ist nicht mehr auf source
+    attackers &= occupied;
+
+    let mut side = !mover; // Gegenseite ist als Nächstes dran
+    let mut current_value = moving_value; // Wert der Figur, die gerade auf target steht
+    let mut depth = 0;
+
+    loop {
+        depth += 1;
+        // Nächster Schritt: gegenseite gewinnt current_value, verliert aber
+        // den eigenen billigsten Angreifer
+        gain[depth] = current_value - gain[depth - 1];
+
+        // Billigsten Angreifer von `side` finden
+        let Some((att_sq, _att_piece, att_value)) =
+            least_valuable_attacker(board, attackers, side, occupied)
+        else {
+            break; // Kein Angreifer mehr → fertig
+        };
+
+        // Angreifer entfernen → deckt ggf. Gleiter dahinter auf
+        occupied ^= BitBoard::from_square(att_sq);
+        // Angreifer-Set aktualisieren (X-Ray)
+        attackers = all_attackers_to(board, target, occupied) & occupied;
+
+        current_value = att_value;
+        side = !side;
+
+        if depth >= 32 {
+            break;
+        }
+    }
+
+    // Minimax rückwärts: jede Seite wählt max(aufhören, weiterschlagen)
+    while depth > 0 {
+        gain[depth - 1] = -((-gain[depth - 1]).max(gain[depth]));
+        depth -= 1;
+    }
+
+    gain[0]
 }
 
 fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Duration {

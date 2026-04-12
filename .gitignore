@@ -3,3 +3,4 @@
 src/polyglot/*.bin
 __pycache__/
 *.pyc
+pgn/*.pgn
