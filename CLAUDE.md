@@ -46,7 +46,30 @@ _Offen — wird bei Bedarf mit Tobias neu festgelegt._
 Die Engine wird primär gegen `/home/librechat/berlinschach` getestet (UCI-Web-GUI).
 Eintrag in `berlinschach/engines.json` ist vorhanden.
 
-Lichess-Anbindung via `/home/librechat/lichess-bot/` (config.yml) — in Einrichtung.
+## Lichess-Anbindung
+
+Martuni spielt auf Lichess als **BOT Martuni** via `/home/librechat/lichess-bot/` (Upstream: `lichess-bot-devs/lichess-bot`). Die Martuni-spezifische Config und Skripte liegen im Unterordner `lichess-bot/` dieses Repos (Token ist maskiert, das Original liegt unter `/home/librechat/lichess-bot/config.yml`).
+
+### Systemd-Service
+
+Der Bot läuft als **`lichess-bot.service`** — nicht manuell starten, sonst entstehen doppelte Lichess-Sessions!
+
+```
+Unit:             /etc/systemd/system/lichess-bot.service
+User:             librechat
+WorkingDirectory: /home/librechat/lichess-bot
+ExecStart:        venv/bin/python lichess-bot.py
+Restart:          always
+```
+
+- **Hard Restart** (unterbricht laufende Partien): `sudo systemctl restart lichess-bot.service`
+- **Graceful:** `quit_after_all_games_finish: true` in config.yml setzen, warten bis keine Partie läuft, dann restart.
+- **Logs:** `journalctl -u lichess-bot.service -f`
+- Config-Änderungen und Engine-Rebuilds (`cargo build --release`) werden erst nach Restart wirksam.
+
+### Challenge-Cron
+
+`challenge_cron.py` läuft stündlich (Crontab, `45 * * * *`) und fordert automatisch einen Online-Bot heraus (abwechselnd 5+0 Blitz und 15+10 Rapid). Ergebnisse werden in `challenge_cron_tracking.json` erfasst. Log: `lichess_bot_auto_logs/challenge_cron.log`.
 
 ```bash
 cargo build --release
