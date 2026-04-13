@@ -201,25 +201,29 @@ def martuni_lost(game: chess.pgn.Game, player: str, target_colors: set[chess.Col
 
 
 def read_martuni_eval(node: chess.pgn.GameNode) -> int | None:
-    """Read Martuni's own eval from the PGN variation node (lichess-bot format).
+    """Read Martuni's own eval from the PGN (lichess-bot format).
 
-    lichess-bot stores the engine eval in the first variation of the move node,
-    as a %eval comment. Returns centipawns from White's perspective, or None.
+    lichess-bot schreibt den Eval als Geschwisterknoten des Hauptzugs:
+      10. Qf4 { [%clk ...] } ( 10. Qf4 { [%eval -0.91,3] } )
+    Der %eval hängt also an einer anderen Variation desselben Elternknotens,
+    nicht an einem Kind des aktuellen Knotens.
+    Returns centipawns from White's perspective, or None.
     """
-    if not node.variations:
+    if node.parent is None:
         return None
-    var_node = node.variations[0]
-    ev = var_node.eval()
-    if ev is None:
-        return None
-    pov = ev.white()
-    if pov.is_mate():
-        mate = pov.mate()
-        if mate is None:
-            return None
-        return 100000 - abs(mate) * 10 if mate > 0 else -100000 + abs(mate) * 10
-    score = pov.score()
-    return score if score is not None else None
+    for var in node.parent.variations:
+        ev = var.eval()
+        if ev is None:
+            continue
+        pov = ev.white()
+        if pov.is_mate():
+            mate = pov.mate()
+            if mate is None:
+                return None
+            return 100000 - abs(mate) * 10 if mate > 0 else -100000 + abs(mate) * 10
+        score = pov.score()
+        return score if score is not None else None
+    return None
 
 
 def analyze_game(
