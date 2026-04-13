@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""Hourly cron job: find an online Lichess bot, challenge it, track results."""
+"""Cron job: find an online Lichess bot, challenge it, track results.
 
+Modes:
+  rapid  — runs at X:45, alternates between 10+5 and 15+10
+  blitz  — runs at X:30, alternates between 3+0 and 5+0
+"""
+
+import argparse
 import json
 import os
 import random
@@ -16,14 +22,46 @@ import requests
 import yaml
 
 # ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+_parser = argparse.ArgumentParser()
+_parser.add_argument(
+    "--mode",
+    choices=["rapid", "blitz"],
+    default="rapid",
+    help="Time-control mode: 'rapid' (10+5/15+10) or 'blitz' (3+0/5+0)",
+)
+args = _parser.parse_args()
+MODE = args.mode
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yml"
-PID_FILE = SCRIPT_DIR / "challenge_cron.pid"
-STATE_FILE = SCRIPT_DIR / "challenge_cron_state.json"   # "waiting" | "playing" | done
+STATE_FILE = SCRIPT_DIR / f"challenge_cron_state_{MODE}.json"
 TRACKING_FILE = SCRIPT_DIR / "challenge_cron_tracking.json"
-LOG_FILE = SCRIPT_DIR / "lichess_bot_auto_logs" / "challenge_cron.log"
+LOG_FILE = SCRIPT_DIR / "lichess_bot_auto_logs" / f"challenge_cron_{MODE}.log"
+
+# ---------------------------------------------------------------------------
+# Mode-specific constants
+# ---------------------------------------------------------------------------
+if MODE == "rapid":
+    # Runs at X:45 — up to ~55 min until next run
+    CHALLENGE_WAIT = 55 * 60
+    TC_OPTIONS = [
+        (600, 5, "10+5"),
+        (900, 10, "15+10"),
+    ]
+else:  # blitz
+    # Runs at X:30 — up to ~25 min until next run
+    CHALLENGE_WAIT = 25 * 60
+    TC_OPTIONS = [
+        (180, 0, "3+0"),
+        (300, 0, "5+0"),
+    ]
+
+POLL_INTERVAL = 5  # check every 5 seconds
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -37,7 +75,7 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
-log = logging.getLogger("challenge_cron")
+log = logging.getLogger(f"challenge_cron.{MODE}")
 
 # ---------------------------------------------------------------------------
 # Config
@@ -49,10 +87,6 @@ TOKEN = cfg["token"]
 BASE_URL = cfg.get("url", "https://lichess.org/")
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 TIMEOUT = 10  # HTTP timeout in seconds
-
-# How long to wait for a challenge to be accepted (seconds)
-CHALLENGE_WAIT = 45 * 60  # 45 minutes
-POLL_INTERVAL = 5          # check every 5 seconds (blitz games can end fast)
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +199,6 @@ def record(category: str, opponent: str, time_control: str) -> None:
         "time_control": time_control,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    # Avoid duplicates in no_response within the same hour
     tracking.setdefault(category, []).append(entry)
     save_tracking(tracking)
     log.info("Tracked %s: %s (%s)", category, opponent, time_control)
@@ -201,7 +234,7 @@ def pid_is_alive(pid: int) -> bool:
 
 
 def handle_previous_instance() -> bool:
-    """Handle the previous cron instance.
+    """Handle the previous cron instance of the same mode.
 
     Returns True if we should continue, False if we should exit.
     """
@@ -225,7 +258,6 @@ def handle_previous_instance() -> bool:
         log.info("Previous instance (PID %d) is still WAITING — terminating it.", prev_pid)
         try:
             os.kill(prev_pid, signal.SIGTERM)
-            # Give it a moment to clean up
             for _ in range(10):
                 if not pid_is_alive(prev_pid):
                     break
@@ -243,23 +275,28 @@ def handle_previous_instance() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Choose time control: alternate between 5+0 and 15+10
+# Choose time control (mode-aware, alternates within mode's TC_OPTIONS)
 # ---------------------------------------------------------------------------
 def choose_time_control() -> tuple[int, int, str]:
     """Return (clock_limit_seconds, clock_increment_seconds, label).
 
-    Alternates based on what the last successful challenge used.
+    Alternates between TC_OPTIONS[0] and TC_OPTIONS[1] based on the last
+    accepted game that used one of this mode's time controls.
     """
+    tc_labels = {tc[2] for tc in TC_OPTIONS}
     tracking = load_tracking()
     accepted = tracking.get("accepted", [])
-    last_tc = None
-    if accepted:
-        last_tc = accepted[-1].get("time_control", "")
 
-    if last_tc == "5+0":
-        return 900, 10, "15+10"
+    last_tc = None
+    for entry in reversed(accepted):
+        if entry.get("time_control", "") in tc_labels:
+            last_tc = entry["time_control"]
+            break
+
+    if last_tc == TC_OPTIONS[0][2]:
+        return TC_OPTIONS[1]
     else:
-        return 300, 0, "5+0"
+        return TC_OPTIONS[0]
 
 
 # ---------------------------------------------------------------------------
@@ -307,14 +344,13 @@ def choose_opponent(my_username: str, exclude: set[str] | None = None) -> dict |
 # ---------------------------------------------------------------------------
 def main() -> None:
     log.info("=" * 60)
-    log.info("Challenge cron started (PID %d)", os.getpid())
+    log.info("Challenge cron started (mode=%s, PID %d)", MODE, os.getpid())
 
-    # Step 1: handle previous instance
+    # Step 1: handle previous instance of the same mode
     if not handle_previous_instance():
         sys.exit(0)
 
-    # Step 2: check that no games are currently ongoing (lichess-bot handles games,
-    #         we should not send challenges while a game is in progress)
+    # Step 2: check that no games are currently ongoing
     ongoing = get_my_ongoing_games()
     if ongoing:
         log.info("Bot has %d ongoing game(s) — exiting without challenging.", len(ongoing))
@@ -326,6 +362,7 @@ def main() -> None:
     log.info("Bot account: %s", my_username)
 
     clock_limit, clock_inc, tc_label = choose_time_control()
+    log.info("Selected time control: %s", tc_label)
 
     # Try multiple opponents — some may decline immediately or after a short wait
     MAX_ATTEMPTS = 10
@@ -396,7 +433,6 @@ def wait_for_challenge(challenge_id: str, opponent: str, tc_label: str, my_usern
         ongoing = get_my_ongoing_games()
         our_game = None
         for g in ongoing:
-            # opponent username may be prefixed with "BOT " in the API response
             opp = g.get("opponent", {}).get("username", "")
             opp_id = g.get("opponent", {}).get("id", "")
             if opp.lower() == opponent.lower() or opp_id.lower() == opponent.lower() \
@@ -449,7 +485,8 @@ def wait_for_challenge(challenge_id: str, opponent: str, tc_label: str, my_usern
         if elapsed % 300 < POLL_INTERVAL:
             log.info("Still waiting for %s to accept (%d min elapsed)...", opponent, elapsed // 60)
 
-    log.info("Challenge to %s timed out after 45 minutes — cancelling.", opponent)
+    log.info("Challenge to %s timed out after %d minutes — cancelling.",
+             opponent, CHALLENGE_WAIT // 60)
     cancel_challenge(challenge_id)
     record("no_response", opponent, tc_label)
     return "timeout"
@@ -488,7 +525,6 @@ def monitor_game(game_id: str, opponent: str, tc_label: str, my_username: str) -
 # ---------------------------------------------------------------------------
 def sigterm_handler(signum, frame):
     log.info("Received SIGTERM — shutting down gracefully.")
-    # If we had a pending challenge, try to cancel it
     state = read_state()
     if state and state.get("state") == "waiting":
         cid = state.get("challenge_id")

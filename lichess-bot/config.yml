@@ -134,7 +134,7 @@ correspondence:
   ponder: false                    # Ponder in correspondence games the bot is connected to.
 
 challenge:                         # Incoming challenges.
-  concurrency: 1                   # Number of games to play simultaneously.
+  concurrency: 3                   # Number of games to play simultaneously.
   sort_by: "best"                  # Possible values: "best" and "first".
   preference: "none"               # Possible values: "none", "human", "bot".
   accept_bot: true                 # Accepts challenges coming from other bots.
@@ -187,9 +187,9 @@ greeting:
   #   {opponent} to insert opponent's name
   #   {me} to insert bot's name
   # Any other words in curly braces will be removed.
-  hello: "Hallo {opponent}! Ich bin {me}, eine junge Rust-Schachengine. Viel Spass!" # Message to send to opponent chat at the start of a game
+  hello: "Hallo {opponent}! Ich bin {me}, eine junge Rust-Schachengine, alle Algorithmen programmiert von RitterRunkel. Viel Spass!" # Message to send to opponent chat at the start of a game
   goodbye: "Gute Partie!" # Message to send to opponent chat at the end of a game
-  hello_spectators: "Hallo! Ich bin {me}, eine selbstgebaute Rust-Engine." # Message to send to spectator chat at the start of a game
+  hello_spectators: "Hallo! Ich bin {me}, eine von RitterRunkel gebaute Rust-Engine." # Message to send to spectator chat at the start of a game
   goodbye_spectators: "Danke furs Zuschauen!" # Message to send to spectator chat at the end of a game
 
 pgn_directory: "game_records"      # A directory where PGN-format records of the bot's games are kept
