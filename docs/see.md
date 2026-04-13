@@ -240,7 +240,11 @@ SEE spart ~27% der Knoten bei gleicher Tiefe. Beide Versionen vermeiden
 6. **Regression-Check** — Verlustpartien vor/nach SEE-Extensions mit
    `analyze_blunders.py` vergleichen
 7. **Delta Pruning in Quiescence** — ergänzend zu SEE, unabhängig implementierbar
-8. **Martuni-Eval in PGN prüfen** — `martuni_eval_cp` erscheint nie im Blunder-
-   Report; klären ob lichess-bot die Eval als Variationsknoten speichert
-9. **42 unclassified Blunder analysieren** — zweitgrößter Block, Motiv-Erkennung
+8. **42 unclassified Blunder analysieren** — zweitgrößter Block, Motiv-Erkennung
    deckt ihn nicht ab; könnte blinde Flecken im Klassifizierer zeigen
+9. **eval.rs: Überschätzen in gewonnenen Stellungen** — in der Partie vs.
+   v7p3r_bot (2026-04-13) zeigte Martuni konsistent sf_diff von +500–+750cp:
+   Martuni dachte +800–+966cp, Stockfish sah +80–+430cp. Ursache unklar —
+   kandidaten sind aufaddierende King-Safety-Boni, Freibauern-Terme oder das
+   Endspielmodul das zu früh greift. Erst nach weiteren Partien und gezielten
+   Teststellungen angehen, um Regressionen zu vermeiden.
