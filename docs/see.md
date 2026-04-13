@@ -226,12 +226,21 @@ Move Ordering). Deshalb:
 SEE spart ~27% der Knoten bei gleicher Tiefe. Beide Versionen vermeiden
 22...Nh5?? und 18...Bxd2??.
 
+3. **Selektive Extensions mit SEE** — implementiert (2026-04-13): Captures in
+   `is_candidate_move` nur noch extenden wenn `see(mv) >= 0`. Verlierende
+   Schlagzüge bekommen keine +2-Halbzüge mehr — sie werden in der Quiescence
+   ohnehin abgeschnitten. Netto: weniger Extensions, kein Mehraufwand.
+
 ### Offen (nächste Schritte)
 
-3. **Move Ordering mit SEE** — zu teuer ohne Caching, zurückgestellt
-4. **Selektive Extensions mit SEE** — zu teuer ohne Caching, zurückgestellt
+4. **Move Ordering mit SEE** — zu teuer ohne Caching, zurückgestellt
 5. **SEE-Performance optimieren** — `all_attackers_to` wird pro Schlagserie
    mehrfach aufgerufen; stattdessen inkrementell nur Gleiter-Angriffe
    aktualisieren
-6. **Regression-Check** — gleiche PGNs mit neuer Engine-Version analysieren
+6. **Regression-Check** — Verlustpartien vor/nach SEE-Extensions mit
+   `analyze_blunders.py` vergleichen
 7. **Delta Pruning in Quiescence** — ergänzend zu SEE, unabhängig implementierbar
+8. **Martuni-Eval in PGN prüfen** — `martuni_eval_cp` erscheint nie im Blunder-
+   Report; klären ob lichess-bot die Eval als Variationsknoten speichert
+9. **42 unclassified Blunder analysieren** — zweitgrößter Block, Motiv-Erkennung
+   deckt ihn nicht ab; könnte blinde Flecken im Klassifizierer zeigen

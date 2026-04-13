@@ -405,7 +405,6 @@ fn alpha_beta(
 
     best_score
 }
-
 fn quiescence(
     board: &Board,
     mut alpha: i32,
@@ -423,6 +422,35 @@ fn quiescence(
         BoardStatus::Checkmate => return -MATE + ply,
         BoardStatus::Stalemate => return 0,
         BoardStatus::Ongoing => {}
+    }
+
+    let in_check = board.checkers().popcnt() > 0;
+
+    if in_check {
+        // Im Schach: alle legalen Züge durchsuchen, kein Stand-Pat.
+        // Stand-Pat wäre falsch, weil die Seite nicht einfach "passen" kann.
+        let moves: Vec<ChessMove> = MoveGen::new_legal(board).collect();
+
+        let mut best = -INF;
+        for mv in moves {
+            let nb = board.make_move_new(mv);
+            let score = -quiescence(&nb, -beta, -alpha, ply + 1, state);
+
+            if state.stop.load(Ordering::Relaxed) {
+                return 0;
+            }
+
+            if score > best {
+                best = score;
+            }
+            if score > alpha {
+                alpha = score;
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+        return best;
     }
 
     // Stand pat (statischer Score aus Sicht der Seite am Zug)
@@ -491,15 +519,29 @@ fn is_capture(board: &Board, mv: ChessMove) -> bool {
 fn is_irreversible(board: &Board, mv: ChessMove) -> bool {
     is_capture(board, mv) || board.piece_on(mv.get_source()) == Some(Piece::Pawn)
 }
+/*
+fn is_candidate_move
+Problem:
+hier gilt ein Zug als Kandidat für eine Extension, wenn er
+- Schach gibt,
+- schlägt,
+- in ein erkanntes Endspiel überleitet,
+- oder einen Freibauernzug erzeugt.
+weiter oben in  `for mv in &ordered { ...` bekommt so ein Zug pauschal +2 Halbzüge
+Das ist teuer. Können wir hier vielleicht mit unserem SEE oder mit Late Move Reductions (LMR) arbeiten?
+*/
+
 
 fn is_candidate_move(board: &Board, mv: ChessMove, new_board: &Board) -> bool {
     // Schachgebot
     if new_board.checkers().popcnt() > 0 {
         return true;
     }
-    // Schlagzug
+    // Schlagzug: nur wenn SEE >= 0 (gewinnender oder ausgeglichener Tausch).
+    // Verlierende Captures (SEE < 0) brauchen keine Extra-Tiefe — sie werden
+    // in der Quiescence ohnehin abgeschnitten.
     if is_capture(board, mv) {
-        return true;
+        return see(board, mv) >= 0;
     }
     // Bekanntes Endspiel: aggressiver verlaengern, damit lange Mattsequenzen
     // noch in die Suchtiefe passen.

@@ -7,6 +7,7 @@ import argparse
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -39,6 +40,8 @@ class Blunder:
     phase: str
     motifs: list[str]
     best_move_san: str | None
+    # Martuni's own eval at this position (from PGN variation node), None if unavailable
+    martuni_eval_cp: int | None
 
 
 @dataclass
@@ -187,6 +190,38 @@ def player_colors(game: chess.pgn.Game, player: str) -> set[chess.Color]:
     return colors
 
 
+def martuni_lost(game: chess.pgn.Game, player: str, target_colors: set[chess.Color]) -> bool:
+    """Return True if the target player lost this game."""
+    result = game.headers.get("Result", "*")
+    if chess.WHITE in target_colors and result == "0-1":
+        return True
+    if chess.BLACK in target_colors and result == "1-0":
+        return True
+    return False
+
+
+def read_martuni_eval(node: chess.pgn.GameNode) -> int | None:
+    """Read Martuni's own eval from the PGN variation node (lichess-bot format).
+
+    lichess-bot stores the engine eval in the first variation of the move node,
+    as a %eval comment. Returns centipawns from White's perspective, or None.
+    """
+    if not node.variations:
+        return None
+    var_node = node.variations[0]
+    ev = var_node.eval()
+    if ev is None:
+        return None
+    pov = ev.white()
+    if pov.is_mate():
+        mate = pov.mate()
+        if mate is None:
+            return None
+        return 100000 - abs(mate) * 10 if mate > 0 else -100000 + abs(mate) * 10
+    score = pov.score()
+    return score if score is not None else None
+
+
 def analyze_game(
     engine: chess.engine.SimpleEngine,
     game: chess.pgn.Game,
@@ -197,12 +232,21 @@ def analyze_game(
 ) -> Iterable[Blunder]:
     board = game.board()
     ply = 0
+    node = game
     for move in game.mainline_moves():
         ply += 1
         mover = board.turn
+        node = node.next()  # type: ignore[assignment]
+
         if mover not in target_colors:
             board.push(move)
             continue
+
+        # Read Martuni's own eval for this move (stored in PGN variation)
+        martuni_eval_white: int | None = None
+        if node is not None:
+            martuni_eval_white = read_martuni_eval(node)
+
         info_before = engine.analyse(board, limit)
         eval_before = score_to_cp(info_before["score"], mover)
         best_move = info_before.get("pv", [None])[0]
@@ -226,6 +270,11 @@ def analyze_game(
                 info_before,
                 info_after,
             )
+            # Convert Martuni eval to mover's perspective for display
+            martuni_eval_cp: int | None = None
+            if martuni_eval_white is not None:
+                martuni_eval_cp = martuni_eval_white if mover == chess.WHITE else -martuni_eval_white
+
             yield Blunder(
                 game_id=game_id,
                 ply=ply,
@@ -239,6 +288,7 @@ def analyze_game(
                 phase=phase,
                 motifs=motifs,
                 best_move_san=board.san(best_move) if best_move else None,
+                martuni_eval_cp=martuni_eval_cp,
             )
 
         board.push(move)
@@ -256,6 +306,18 @@ def iter_games(pgn_paths: list[Path]) -> Iterable[tuple[str, chess.pgn.Game]]:
                 white = game.headers.get("White", "?")
                 black = game.headers.get("Black", "?")
                 yield f"{path.name}#{idx} {white}-{black}", game
+
+
+def collect_pgns(
+    game_dir: Path,
+    since: datetime | None,
+) -> list[Path]:
+    """Collect all PGN files in game_dir, optionally filtered by mtime."""
+    pgns = sorted(game_dir.glob("*.pgn"))
+    if since is not None:
+        since_ts = since.timestamp()
+        pgns = [p for p in pgns if p.stat().st_mtime >= since_ts]
+    return pgns
 
 
 def print_report(report: Report) -> None:
@@ -287,15 +349,46 @@ def print_report(report: Report) -> None:
     for b in report.blunders:
         best = f" best={b.best_move_san}" if b.best_move_san else ""
         motifs = ",".join(b.motifs) if b.motifs else "unclassified"
+        martuni = ""
+        if b.martuni_eval_cp is not None:
+            diff = b.martuni_eval_cp - b.eval_before_cp
+            sign = "+" if diff >= 0 else ""
+            martuni = f"  martuni={b.martuni_eval_cp:+d}cp(sf_diff={sign}{diff})"
         print(
             f"[{b.game_id}] {b.move_number}{'.' if b.side == 'white' else '...'} "
-            f"{b.move_san}  loss={b.loss_cp}cp  phase={b.phase}  motifs={motifs}{best}"
+            f"{b.move_san}  loss={b.loss_cp}cp  phase={b.phase}  motifs={motifs}{best}{martuni}"
         )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pgn", nargs="+", type=Path, help="PGN file(s) to analyze")
+    parser.add_argument(
+        "pgn",
+        nargs="*",
+        type=Path,
+        help="PGN file(s) to analyze. Omit when using --game-dir.",
+    )
+    parser.add_argument(
+        "--game-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Directory with PGN files to analyze (e.g. ../lichess-bot/game_records/). "
+             "Scans all *.pgn files. Combine with --since to filter by date.",
+    )
+    parser.add_argument(
+        "--since",
+        default=None,
+        metavar="YYYY-MM-DD[THH:MM]",
+        help="Only include PGN files modified at or after this UTC date/time. "
+             "Example: --since 2026-04-12T16:38 (the SEE commit).",
+    )
+    parser.add_argument(
+        "--losses-only",
+        action="store_true",
+        default=False,
+        help="Only analyze games where the target player lost.",
+    )
     parser.add_argument(
         "--player",
         default="Martuni",
@@ -339,7 +432,35 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    for p in args.pgn:
+    # --- Build file list ---
+    pgn_paths: list[Path] = list(args.pgn)
+
+    since: datetime | None = None
+    if args.since:
+        try:
+            fmt = "%Y-%m-%dT%H:%M" if "T" in args.since else "%Y-%m-%d"
+            since = datetime.strptime(args.since, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            print(f"error: --since '{args.since}' is not a valid date (use YYYY-MM-DD or YYYY-MM-DDTHH:MM)", file=sys.stderr)
+            return 2
+
+    if args.game_dir is not None:
+        if not args.game_dir.is_dir():
+            print(f"error: --game-dir '{args.game_dir}' is not a directory", file=sys.stderr)
+            return 2
+        discovered = collect_pgns(args.game_dir, since)
+        print(f"info: found {len(discovered)} PGN(s) in {args.game_dir}" +
+              (f" since {args.since}" if since else ""), file=sys.stderr)
+        pgn_paths.extend(discovered)
+    elif since is not None:
+        # --since without --game-dir: filter the explicitly given files
+        pgn_paths = [p for p in pgn_paths if p.stat().st_mtime >= since.timestamp()]
+
+    if not pgn_paths:
+        print("error: no PGN files to analyze. Use positional args or --game-dir.", file=sys.stderr)
+        return 2
+
+    for p in pgn_paths:
         if not p.exists():
             print(f"error: {p} not found", file=sys.stderr)
             return 2
@@ -363,8 +484,9 @@ def main() -> int:
 
     report = Report()
     skipped = 0
+    skipped_wins = 0
     try:
-        for game_id, game in iter_games(args.pgn):
+        for game_id, game in iter_games(pgn_paths):
             target_colors = player_colors(game, args.player)
             if not target_colors:
                 skipped += 1
@@ -372,6 +494,9 @@ def main() -> int:
                     f"skip: {game_id} — '{args.player}' not found in headers",
                     file=sys.stderr,
                 )
+                continue
+            if args.losses_only and not martuni_lost(game, args.player, target_colors):
+                skipped_wins += 1
                 continue
             for blunder in analyze_game(
                 engine, game, limit, args.threshold, game_id, target_colors
@@ -382,6 +507,8 @@ def main() -> int:
 
     if skipped:
         print(f"\n({skipped} game(s) skipped — no '{args.player}' header match)")
+    if skipped_wins:
+        print(f"({skipped_wins} game(s) skipped — not a loss, --losses-only active)")
 
     print_report(report)
     return 0
