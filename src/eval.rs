@@ -266,7 +266,15 @@ fn pawn_bonus(
     }
 
     if is_passed(sq, us, their_pawns) {
-        b += p.pawn_passed_bonus;
+        // Bonus skaliert mit dem Vormarsch-Rang des Freibauers.
+        // advancement = 0 (Ausgangsreihe) bis 5 (ein Schritt vor Umwandlung).
+        let rank_idx = sq.get_rank().to_index();
+        let advancement = match us {
+            Color::White => rank_idx.saturating_sub(1),
+            Color::Black => 6usize.saturating_sub(rank_idx),
+        }
+        .min(p.pawn_passed_rank_bonuses.len() - 1);
+        b += p.pawn_passed_rank_bonuses[advancement];
     }
 
     b
@@ -438,10 +446,11 @@ mod tests {
         // Weisse Bauern auf d4, e4, f4 — alle Freibauern
         let b = Board::from_str("4k3/8/8/8/3PPP2/8/8/4K3 w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // Non-PST: 300 + 25 (file) + 900 (3 passed) + 30 (phalanx triple) = 1255
+        // Non-PST white: 300 (material) + 25 (file) + 90 (3 × passed rank-2 à 30cp) + 30 (phalanx) - 30 (centre king) = 415
+        // Non-PST black: -30 (centre king) → non_pst total: 415 - (-30) = 445
         // PST diff (phase=0): Bauern d4/e4/f4 eg = 60, Kings cancel → +60
-        // Total: 1315
-        assert_eq!(evaluate(&b, &p), 1315);
+        // Total: 505
+        assert_eq!(evaluate(&b, &p), 505);
     }
 
     #[test]

@@ -204,16 +204,16 @@ Move Ordering). Deshalb:
 - Kein `make_move` — alles wird auf Bitboard-Ebene simuliert
 - Gain-Array auf dem Stack (max. 32 Einträge, in der Praxis < 10)
 
-## Umsetzungsstatus (2026-04-12)
+## Umsetzungsstatus (2026-04-12 / Update 2026-04-13)
 
 ### Erledigt
 
-1. **`see()` implementiert** in `search.rs` (Zeile ~594-760)
+1. **`see()` implementiert** in `search.rs`
    - `see_piece_value()` — Materialwerte für SEE
    - `all_attackers_to()` — alle Angreifer auf ein Feld (inkl. X-Ray)
    - `least_valuable_attacker()` — billigsten Angreifer finden
    - `see()` — Hauptfunktion mit Gain-Array und Minimax-Rückfaltung
-2. **Quiescence: Bad Capture Pruning** — `see(mv) < 0` → skip (Zeile ~444-447)
+2. **Quiescence: Bad Capture Pruning** — `see(mv) < 0` → skip
 
 ### Messergebnis (Stella-B-Position, 5s)
 
@@ -223,28 +223,77 @@ Move Ordering). Deshalb:
 | Mit SEE    | 2     | 2.5M   | 1422ms | Rd1  |
 | Verbesserung | —  | **-27%** | **-22%** | —  |
 
-SEE spart ~27% der Knoten bei gleicher Tiefe. Beide Versionen vermeiden
-22...Nh5?? und 18...Bxd2??.
-
 3. **Selektive Extensions mit SEE** — implementiert (2026-04-13): Captures in
-   `is_candidate_move` nur noch extenden wenn `see(mv) >= 0`. Verlierende
-   Schlagzüge bekommen keine +2-Halbzüge mehr — sie werden in der Quiescence
-   ohnehin abgeschnitten. Netto: weniger Extensions, kein Mehraufwand.
+   `is_candidate_move` nur noch extenden wenn `see(mv) >= 0`.
+
+---
+
+## Kritischer Bug-Fix: SEE-Logik invertiert (2026-04-13)
+
+### Was war falsch?
+
+In `see()` wurde `gain[depth]` **vor** der Prüfung berechnet, ob überhaupt ein
+Angreifer existiert:
+
+```rust
+// BUGGY (alt):
+loop {
+    depth += 1;
+    gain[depth] = current_value - gain[depth - 1];  // ← Phantom-Eintrag
+    let Some(attacker) = least_valuable_attacker(...) else { break };
+    ...
+}
+```
+
+Das erzeugte am Ende der Schlagserie immer einen fiktiven "letzten Zug", der
+die Minimax-Rückfaltung komplett umkehrte:
+
+| Szenario | SEE buggy | SEE korrekt |
+|---|---|---|
+| Bxungedeckter_Bauer | **-200** | **+100** |
+| Bxa7 + Rxa7 | **+100** | **-200** |
+
+**Gewinnende Captures bekamen negative SEE → wurden in Quiescence gepruned.**  
+**Verlierende Captures bekamen positive SEE → blieben ungepruned.**
+
+### Auswirkung
+
+Die Quiescence-Suche sah **keine** eigenen Gewinnzüge (gepruned) und ließ
+**Materialopfer des Gegners** unbewertet (nicht gepruned). Ergebnis: die Engine
+spielte wiederholt sinnlose Figuren-Opfer, weil der Rückschlag des Gegners in
+der Quiescence verschwand.
+
+Konkret Partie `rds8gwiN`, Zug 14. Bxa7:
+- Engine dachte: +142cp (Läufer auf a7, Quiescence sieht Rxa7 nicht)
+- Tatsächlich: -200cp Material + Rückschlag Rxa7
+
+### Fix
+
+```rust
+// KORREKT (neu):
+loop {
+    let Some(attacker) = least_valuable_attacker(...) else { break }; // erst prüfen
+    depth += 1;
+    gain[depth] = current_value - gain[depth - 1];  // dann berechnen
+    ...
+}
+```
+
+### Folgeänderung: Quiescence-Begrenzung
+
+Durch den Fix werden korrekt mehr Captures in der Quiescence erkundet
+(vorher: alle fälschlich gepruned). Ohne Begrenzung würde die Quiescence
+exponentiell wachsen. Hinzugefügt:
+
+- **`MAX_QPLY = 12`** — Tiefenlimit ab dem Stand-Pat zurückgegeben wird
+- **Delta Pruning** — Capture, der selbst mit `see_val + DELTA_MARGIN = 200cp`
+  alpha nicht erreichen kann, wird übersprungen
 
 ### Offen (nächste Schritte)
 
 4. **Move Ordering mit SEE** — zu teuer ohne Caching, zurückgestellt
 5. **SEE-Performance optimieren** — `all_attackers_to` wird pro Schlagserie
-   mehrfach aufgerufen; stattdessen inkrementell nur Gleiter-Angriffe
-   aktualisieren
-6. **Regression-Check** — Verlustpartien vor/nach SEE-Extensions mit
+   mehrfach aufgerufen
+6. **Regression-Check** — Verlustpartien vor/nach SEE-Fix mit
    `analyze_blunders.py` vergleichen
-7. **Delta Pruning in Quiescence** — ergänzend zu SEE, unabhängig implementierbar
-8. **42 unclassified Blunder analysieren** — zweitgrößter Block, Motiv-Erkennung
-   deckt ihn nicht ab; könnte blinde Flecken im Klassifizierer zeigen
-9. **eval.rs: Überschätzen in gewonnenen Stellungen** — in der Partie vs.
-   v7p3r_bot (2026-04-13) zeigte Martuni konsistent sf_diff von +500–+750cp:
-   Martuni dachte +800–+966cp, Stockfish sah +80–+430cp. Ursache unklar —
-   kandidaten sind aufaddierende King-Safety-Boni, Freibauern-Terme oder das
-   Endspielmodul das zu früh greift. Erst nach weiteren Partien und gezielten
-   Teststellungen angehen, um Regressionen zu vermeiden.
+7. **42 unclassified Blunder analysieren**

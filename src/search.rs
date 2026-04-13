@@ -405,6 +405,12 @@ fn alpha_beta(
 
     best_score
 }
+// Maximale Quiescence-Tiefe: begrenzt Explosion bei vielen Captures.
+const MAX_QPLY: i32 = 12;
+// Delta-Pruning-Margin: ein Capture muss mindestens diesen Betrag über alpha
+// liegen können, sonst ist er hoffnungslos (verhindert nutzlose Suche).
+const DELTA_MARGIN: i32 = 200;
+
 fn quiescence(
     board: &Board,
     mut alpha: i32,
@@ -429,6 +435,7 @@ fn quiescence(
     if in_check {
         // Im Schach: alle legalen Züge durchsuchen, kein Stand-Pat.
         // Stand-Pat wäre falsch, weil die Seite nicht einfach "passen" kann.
+        // Tiefenlimit gilt nicht im Schach — sonst würden Matt-Drohungen übersehen.
         let moves: Vec<ChessMove> = MoveGen::new_legal(board).collect();
 
         let mut best = -INF;
@@ -462,6 +469,11 @@ fn quiescence(
         alpha = stand_pat;
     }
 
+    // Tiefenlimit: bei ruhigen Stellungen nicht endlos suchen.
+    if ply >= MAX_QPLY {
+        return stand_pat;
+    }
+
     // Nur Schlagzuege generieren (inkl. en passant)
     let mut captures: Vec<ChessMove> = MoveGen::new_legal(board)
         .filter(|mv| is_capture(board, *mv))
@@ -471,7 +483,15 @@ fn quiescence(
     for mv in captures {
         // Bad Capture Pruning: verlierende Schlagzuege ueberspringen.
         // SEE < 0 bedeutet, die Schlagserie verliert Material.
-        if see(board, mv) < 0 {
+        let see_val = see(board, mv);
+        if see_val < 0 {
+            continue;
+        }
+
+        // Delta Pruning: wenn selbst ein optimistischer Gewinn den alpha-Wert
+        // nicht mehr erreichen kann, diesen Capture überspringen.
+        // Gilt nicht bei Beförderungen (Promotion kann viel mehr wert sein).
+        if mv.get_promotion().is_none() && stand_pat + see_val + DELTA_MARGIN < alpha {
             continue;
         }
 
@@ -781,21 +801,20 @@ pub fn see(board: &Board, mv: ChessMove) -> i32 {
     let mut depth = 0;
 
     loop {
-        depth += 1;
-        // Nächster Schritt: gegenseite gewinnt current_value, verliert aber
-        // den eigenen billigsten Angreifer
-        gain[depth] = current_value - gain[depth - 1];
-
-        // Billigsten Angreifer von `side` finden
+        // Erst prüfen, ob die Seite überhaupt einen Angreifer hat — sonst entsteht
+        // ein Phantom-Eintrag in gain[], der alle Werte invertiert.
         let Some((att_sq, _att_piece, att_value)) =
             least_valuable_attacker(board, attackers, side, occupied)
         else {
             break; // Kein Angreifer mehr → fertig
         };
 
-        // Angreifer entfernen → deckt ggf. Gleiter dahinter auf
+        depth += 1;
+        // Seite gewinnt die Figur auf target, riskiert dabei aber current_value.
+        gain[depth] = current_value - gain[depth - 1];
+
+        // Angreifer entfernen → deckt ggf. Gleiter dahinter auf (X-Ray)
         occupied ^= BitBoard::from_square(att_sq);
-        // Angreifer-Set aktualisieren (X-Ray)
         attackers = all_attackers_to(board, target, occupied) & occupied;
 
         current_value = att_value;

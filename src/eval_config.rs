@@ -18,7 +18,9 @@ pub struct EvalParams {
     pub pawn_cf_file_bonus: i32,
     pub pawn_phalanx_triple: i32,
     pub pawn_phalanx_double: i32,
-    pub pawn_passed_bonus: i32,
+    /// Freibauern-Bonus nach Vormarsch-Rang (Index 0 = Ausgangsreihe, 5 = kurz vor Umwandlung).
+    /// Kleiner Wert im Mittelspiel (leicht blockierbar), grosser Wert im Endspiel.
+    pub pawn_passed_rank_bonuses: Vec<i32>,
 
     // Piece bonuses/penalties
     pub knight_backrank_penalty: i32,
@@ -64,7 +66,9 @@ impl Default for EvalParams {
             pawn_cf_file_bonus: 5,
             pawn_phalanx_triple: 30,
             pawn_phalanx_double: 15,
-            pawn_passed_bonus: 300,
+            // Rank 0 (Ausgangsreihe) bis Rank 5 (eine Reihe vor Umwandlung).
+            // Im Mittelspiel ist ein a2-Freibauer kaum gefährlich; ein a7-Freibauer ist es sehr.
+            pawn_passed_rank_bonuses: vec![5, 15, 30, 55, 100, 170],
 
             knight_backrank_penalty: -50,
             bishop_pair_each: 15,
@@ -127,7 +131,18 @@ impl EvalParams {
         p.pawn_cf_file_bonus = i(&pw, "cf_file_bonus", p.pawn_cf_file_bonus);
         p.pawn_phalanx_triple = i(&pw, "phalanx_triple", p.pawn_phalanx_triple);
         p.pawn_phalanx_double = i(&pw, "phalanx_double", p.pawn_phalanx_double);
-        p.pawn_passed_bonus = i(&pw, "passed_bonus", p.pawn_passed_bonus);
+        if let Some(arr) = pw
+            .and_then(|s| s.get("passed_rank_bonuses"))
+            .and_then(|v| v.as_array())
+        {
+            let parsed: Vec<i32> = arr
+                .iter()
+                .filter_map(|v| v.as_integer().map(|x| x as i32))
+                .collect();
+            if !parsed.is_empty() {
+                p.pawn_passed_rank_bonuses = parsed;
+            }
+        }
 
         let pc = section(v, "pieces");
         p.knight_backrank_penalty = i(&pc, "knight_backrank_penalty", p.knight_backrank_penalty);
