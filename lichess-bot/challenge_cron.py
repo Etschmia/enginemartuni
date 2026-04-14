@@ -350,12 +350,14 @@ def main() -> None:
     if not handle_previous_instance():
         sys.exit(0)
 
-    # Step 2: check that no games are currently ongoing
+    # Step 2: don't pile on — allow up to 1 ongoing game, skip if 2+ are live
     ongoing = get_my_ongoing_games()
-    if ongoing:
+    if len(ongoing) >= 2:
         log.info("Bot has %d ongoing game(s) — exiting without challenging.", len(ongoing))
         write_state("done")
         sys.exit(0)
+    if ongoing:
+        log.info("Bot has 1 ongoing game — proceeding anyway.")
 
     # Step 3: choose opponent and time control
     my_username = get_my_username()
