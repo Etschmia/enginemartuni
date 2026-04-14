@@ -4,8 +4,8 @@ use crate::pst::{
     pst_index, BISHOP_PST, KING_PST, KNIGHT_PST, PAWN_PST, QUEEN_PST, ROOK_PST,
 };
 use chess::{
-    get_bishop_moves, get_king_moves, get_knight_moves, get_rook_moves, BitBoard, Board, Color,
-    File, Piece, Rank, Square,
+    get_adjacent_files, get_bishop_moves, get_file, get_king_moves, get_knight_moves,
+    get_rook_moves, BitBoard, Board, Color, File, Piece, Rank, Square,
 };
 
 const MAX_PHASE: i32 = 24;
@@ -266,7 +266,7 @@ fn pawn_bonus(
         _ => {}
     }
 
-    if is_isolated(our_pawns, file_idx) {
+    if is_isolated(our_pawns, sq.get_file()) {
         b += p.pawn_isolated_penalty;
     }
 
@@ -285,26 +285,8 @@ fn pawn_bonus(
     b
 }
 
-fn is_isolated(our_pawns: BitBoard, file_idx: usize) -> bool {
-    let mut mask = BitBoard::new(0);
-    if file_idx > 0 {
-        mask |= file_mask(file_idx - 1);
-    }
-    if file_idx < 7 {
-        mask |= file_mask(file_idx + 1);
-    }
-    (our_pawns & mask) == BitBoard::new(0)
-}
-
-fn file_mask(file_idx: usize) -> BitBoard {
-    let mut b = BitBoard::new(0);
-    for r in 0..8 {
-        b |= BitBoard::from_square(Square::make_square(
-            Rank::from_index(r),
-            File::from_index(file_idx),
-        ));
-    }
-    b
+fn is_isolated(our_pawns: BitBoard, file: File) -> bool {
+    (our_pawns & get_adjacent_files(file)) == BitBoard::new(0)
 }
 
 fn is_passed(sq: Square, us: Color, their_pawns: BitBoard) -> bool {
@@ -423,7 +405,7 @@ fn rook_file_bonus(
 ) -> i32 {
     let mut score = 0;
     for sq in our_rooks {
-        let mask = file_mask(sq.get_file().to_index());
+        let mask = get_file(sq.get_file());
         let own_on_file = (our_pawns & mask) != BitBoard::new(0);
         let their_on_file = (their_pawns & mask) != BitBoard::new(0);
         if !own_on_file && !their_on_file {
@@ -449,11 +431,11 @@ fn king_activity_endgame(board: &Board, phase: i32, p: &EvalParams) -> i32 {
 }
 
 /// Zentralisierungswert eines Feldes: 7 = Zentrum (d4/d5/e4/e5), 0 = Ecke.
-/// Berechnet den minimalen Manhattan-Abstand zu den vier Zentrumsfeldern.
+/// Manhattan-Abstand zur Zentrums-2x2-Box (d4, d5, e4, e5).
 fn king_centralization_score(sq: Square) -> i32 {
     let file = sq.get_file().to_index() as i32;
     let rank = sq.get_rank().to_index() as i32;
-    // Abstand zum Zentrum: nächstes Feld aus {d4,d5,e4,e5} (file 3-4, rank 3-4)
+    // file 3-4 = d/e-Linie, rank 3-4 = Reihe 4/5.
     let file_dist = (file - 3).abs().min((file - 4).abs());
     let rank_dist = (rank - 3).abs().min((rank - 4).abs());
     7 - file_dist - rank_dist
