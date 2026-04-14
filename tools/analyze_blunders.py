@@ -233,16 +233,35 @@ def analyze_game(
     threshold_cp: int,
     game_id: str,
     target_colors: set[chess.Color],
+    min_move_time: float = 0.0,
 ) -> Iterable[Blunder]:
     board = game.board()
     ply = 0
     node = game
+    # Track last seen clock per color to compute time spent per move.
+    last_clock: dict[chess.Color, float] = {}
+    skipped_fast = 0
+
     for move in game.mainline_moves():
         ply += 1
         mover = board.turn
         node = node.next()  # type: ignore[assignment]
 
+        # Compute time spent on this move from %clk annotations.
+        curr_clock = node.clock() if node is not None else None
+        time_spent: float | None = None
+        if curr_clock is not None and mover in last_clock:
+            time_spent = last_clock[mover] - curr_clock
+        if curr_clock is not None:
+            last_clock[mover] = curr_clock
+
         if mover not in target_colors:
+            board.push(move)
+            continue
+
+        # Skip moves played almost instantly (book moves, pre-moves).
+        if min_move_time > 0.0 and time_spent is not None and time_spent < min_move_time:
+            skipped_fast += 1
             board.push(move)
             continue
 
@@ -296,6 +315,12 @@ def analyze_game(
             )
 
         board.push(move)
+
+    if skipped_fast:
+        print(
+            f"  ({skipped_fast} move(s) skipped in {game_id} — under {min_move_time}s)",
+            file=sys.stderr,
+        )
 
 
 def iter_games(pgn_paths: list[Path]) -> Iterable[tuple[str, chess.pgn.Game]]:
@@ -423,6 +448,15 @@ def main() -> int:
         help="Centipawn loss that qualifies as a blunder (default: 150)",
     )
     parser.add_argument(
+        "--min-movetime",
+        type=float,
+        default=0.0,
+        metavar="SECS",
+        help="Skip moves where the player spent less than SECS seconds (e.g. 0.3). "
+             "Useful to ignore book moves and pre-moves. Requires %clk annotations in the PGN. "
+             "Default: 0.0 (no filtering).",
+    )
+    parser.add_argument(
         "--hash",
         type=int,
         default=128,
@@ -503,7 +537,8 @@ def main() -> int:
                 skipped_wins += 1
                 continue
             for blunder in analyze_game(
-                engine, game, limit, args.threshold, game_id, target_colors
+                engine, game, limit, args.threshold, game_id, target_colors,
+                min_move_time=args.min_movetime,
             ):
                 report.blunders.append(blunder)
     finally:

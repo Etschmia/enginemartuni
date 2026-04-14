@@ -112,8 +112,9 @@ Bewusste Lücken, die ggf. später ergänzt werden können:
 - **Horizon-Effekt**: nur indirekt über "taktisches Motiv in ruhiger
   Stellung" sichtbar. Bessere Diagnose: gleiche Stellung Martuni vs.
   Stockfish mit identischer Tiefe vergleichen.
-- **Zeitmanagement-Fehler**: das Skript kennt die Uhr nicht. Dafür muss man
-  die PGN-`%clk`-Kommentare separat auswerten.
+- **Zeitmanagement-Fehler**: Blitzpartien mit vielen Buchzügen oder Pre-Moves
+  erzeugen Rauschen. Mit `--min-movetime 0.3` werden Züge unter 0,3 Sekunden
+  übersprungen (erfordert `%clk`-Annotationen im PGN).
 
 ## Mapping auf konkrete Stellschrauben
 
@@ -144,20 +145,103 @@ Wenn der Report ein Muster zeigt, hier der Ansatzpunkt im Code:
 ```bash
 # python-chess ist kein Projekt-Dep — bei Bedarf in einer venv installieren
 pip install python-chess
+```
 
-# einzelne Partie (Default: nur Martunis Züge)
-python tools/analyze_blunders.py game.pgn --engine stockfish --movetime 0.3
+### Eingabe: einzelne PGN-Datei(en)
 
-# Batch mit strengerer Schwelle und mehr Rechenzeit
-python tools/analyze_blunders.py games/*.pgn \
-    --threshold 100 --movetime 1.0 --threads 4 --hash 512
+```bash
+# einzelne Partie (Default: nur Martunis Züge, 0.3 s Stockfish-Zeit)
+python tools/analyze_blunders.py game.pgn
+
+# mehrere Dateien
+python tools/analyze_blunders.py game1.pgn game2.pgn game3.pgn
+```
+
+### Eingabe: ganzes Verzeichnis
+
+```bash
+# alle PGN-Dateien im Verzeichnis
+python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/
+
+# nur Dateien, die nach einem bestimmten Zeitpunkt geschrieben wurden
+python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+    --since 2026-04-12
+python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+    --since 2026-04-12T16:38
+```
+
+### Filter
+
+```bash
+# nur Verlustpartien analysieren (spart Stockfish-Zeit)
+python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+    --losses-only
+
+# Buchzüge / Pre-Moves ignorieren (unter 0,3 s gespielt)
+# — sinnvoll bei Blitzpartien mit vielen schnellen Anfangszügen
+python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+    --min-movetime 0.3
+
+# anderen Spieler analysieren (z. B. für Vergleichszwecke)
+python tools/analyze_blunders.py game.pgn --player Stockfish
+```
+
+### Stockfish-Einstellungen
+
+```bash
+# mehr Rechenzeit pro Zug → genauere Bewertung
+python tools/analyze_blunders.py game.pgn --movetime 1.0
 
 # feste Tiefe statt movetime (reproduzierbarer für Regression-Checks)
 python tools/analyze_blunders.py game.pgn --depth 18
 
-# Anderen Spieler analysieren (z. B. für Vergleichszwecke)
-python tools/analyze_blunders.py game.pgn --player Stockfish
+# mehr RAM und Threads (für schnelle Batch-Läufe)
+python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+    --threads 4 --hash 512
+
+# anderen Stockfish-Pfad
+python tools/analyze_blunders.py game.pgn --engine /usr/local/bin/stockfish
 ```
+
+### Blunder-Schwelle
+
+```bash
+# strengere Schwelle (Standard: 150 cp)
+python tools/analyze_blunders.py game.pgn --threshold 100
+
+# lockerer, zeigt auch kleinere Ungenauigkeiten
+python tools/analyze_blunders.py game.pgn --threshold 75
+```
+
+### Vollständiges Beispiel (typischer SEE-Feintuning-Lauf)
+
+```bash
+python tools/analyze_blunders.py \
+    --game-dir ../lichess-bot/game_records/ \
+    --since 2026-04-12T16:38 \
+    --losses-only \
+    --min-movetime 0.3 \
+    --threshold 150 \
+    --movetime 0.5 \
+    --threads 2 --hash 256
+```
+
+### Alle Optionen auf einen Blick
+
+| Option | Standard | Bedeutung |
+|---|---|---|
+| `pgn [...]` | — | Eine oder mehrere PGN-Dateien |
+| `--game-dir DIR` | — | Verzeichnis mit PGN-Dateien (alle `*.pgn`) |
+| `--since YYYY-MM-DD[THH:MM]` | — | Nur Dateien ab diesem UTC-Datum (mtime) |
+| `--losses-only` | aus | Nur Partien analysieren, die Martuni verloren hat |
+| `--player NAME` | `Martuni` | Welche Seite analysiert wird (Substring-Match) |
+| `--min-movetime SECS` | `0.0` | Züge unter SECS Sekunden überspringen (`%clk` erforderlich) |
+| `--threshold CP` | `150` | Centipawn-Verlust ab dem ein Zug als Patzer gilt |
+| `--movetime SECS` | `0.3` | Stockfish-Analysezeit pro Zug |
+| `--depth N` | — | Feste Suchtiefe statt movetime |
+| `--engine PATH` | `stockfish` | Pfad zum Stockfish-Binary |
+| `--threads N` | `1` | Stockfish-Threads |
+| `--hash MB` | `128` | Stockfish-Hashtable-Größe in MB |
 
 Der Report wird auf stdout geschrieben: erst die Summentabelle
 (Phase / Motiv / Phase × Motiv), dann die Einzel-Blunder mit FEN, bestem Zug
