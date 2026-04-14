@@ -26,6 +26,10 @@ pub struct EvalParams {
     pub knight_backrank_penalty: i32,
     pub bishop_pair_each: i32,
     pub connected_rooks_pair: i32,
+    /// Turm auf vollständig offener Linie (keine eigenen und keine gegnerischen Bauern)
+    pub rook_open_file_bonus: i32,
+    /// Turm auf halb-offener Linie (keine eigenen, aber gegnerische Bauern)
+    pub rook_semiopen_file_bonus: i32,
 
     // King safety
     pub ks_knight_weight: i32,
@@ -42,6 +46,11 @@ pub struct EvalParams {
     pub eg_corner_weight: i32,
     pub eg_king_proximity_weight: i32,
     pub eg_passed_unstoppable_bonus: i32,
+    /// Bonus pro Zentralisierungseinheit für den aktiven Endspielkönig.
+    /// Skaliert mit (threshold - phase) / threshold, wirkt nur unterhalb threshold.
+    pub king_activity_bonus: i32,
+    /// Phase-Schwelle (0..24), unterhalb derer König-Aktivität bewertet wird.
+    pub king_activity_phase_threshold: i32,
 }
 
 pub const DEFAULT_SAFETY_TABLE: [i32; 100] = [
@@ -73,6 +82,8 @@ impl Default for EvalParams {
             knight_backrank_penalty: -50,
             bishop_pair_each: 15,
             connected_rooks_pair: 150,
+            rook_open_file_bonus: 30,
+            rook_semiopen_file_bonus: 15,
 
             ks_knight_weight: 2,
             ks_bishop_weight: 2,
@@ -87,6 +98,8 @@ impl Default for EvalParams {
             eg_corner_weight: 20,
             eg_king_proximity_weight: 10,
             eg_passed_unstoppable_bonus: 500,
+            king_activity_bonus: 3,
+            king_activity_phase_threshold: 16,
         }
     }
 }
@@ -148,6 +161,8 @@ impl EvalParams {
         p.knight_backrank_penalty = i(&pc, "knight_backrank_penalty", p.knight_backrank_penalty);
         p.bishop_pair_each = i(&pc, "bishop_pair_each", p.bishop_pair_each);
         p.connected_rooks_pair = i(&pc, "connected_rooks_pair", p.connected_rooks_pair);
+        p.rook_open_file_bonus = i(&pc, "rook_open_file_bonus", p.rook_open_file_bonus);
+        p.rook_semiopen_file_bonus = i(&pc, "rook_semiopen_file_bonus", p.rook_semiopen_file_bonus);
 
         let ks = section(v, "king_safety");
         p.ks_knight_weight = i(&ks, "knight_weight", p.ks_knight_weight);
@@ -182,6 +197,12 @@ impl EvalParams {
             &eg,
             "passed_unstoppable_bonus",
             p.eg_passed_unstoppable_bonus,
+        );
+        p.king_activity_bonus = i(&eg, "king_activity_bonus", p.king_activity_bonus);
+        p.king_activity_phase_threshold = i(
+            &eg,
+            "king_activity_phase_threshold",
+            p.king_activity_phase_threshold,
         );
 
         p

@@ -30,7 +30,9 @@ pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
     let eg = w_eg - b_eg;
     let phase = game_phase(board);
 
-    non_pst + taper(mg, eg, phase)
+    let king_act = king_activity_endgame(board, phase, p);
+
+    non_pst + taper(mg, eg, phase) + king_act
 }
 
 /// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
@@ -112,6 +114,9 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams) -> i32 {
     if rooks_connected(board, our_rooks) {
         score += p.connected_rooks_pair;
     }
+
+    // Tuerme auf offenen / halb-offenen Linien
+    score += rook_file_bonus(our_rooks, our_pawns, their_pawns, p);
 
     // Bauernphalanx (reihenweise)
     score += phalanx_bonus(our_pawns, p);
@@ -407,6 +412,53 @@ fn have_sight(board: &Board, a: Square, b: Square) -> bool {
     true
 }
 
+/// Bonus für Türme auf offenen und halb-offenen Linien.
+/// Offene Linie: keine eigenen UND keine gegnerischen Bauern.
+/// Halb-offene Linie: keine eigenen, aber gegnerische Bauern vorhanden.
+fn rook_file_bonus(
+    our_rooks: BitBoard,
+    our_pawns: BitBoard,
+    their_pawns: BitBoard,
+    p: &EvalParams,
+) -> i32 {
+    let mut score = 0;
+    for sq in our_rooks {
+        let mask = file_mask(sq.get_file().to_index());
+        let own_on_file = (our_pawns & mask) != BitBoard::new(0);
+        let their_on_file = (their_pawns & mask) != BitBoard::new(0);
+        if !own_on_file && !their_on_file {
+            score += p.rook_open_file_bonus;
+        } else if !own_on_file {
+            score += p.rook_semiopen_file_bonus;
+        }
+    }
+    score
+}
+
+/// König-Aktivitäts-Bonus im Endspiel (aus Sicht von Weiß).
+/// Positiv wenn weißer König zentraler steht als schwarzer.
+/// Skaliert linear mit dem "Endspielgrad" (phase sinkt → Bonus steigt).
+fn king_activity_endgame(board: &Board, phase: i32, p: &EvalParams) -> i32 {
+    if phase >= p.king_activity_phase_threshold {
+        return 0;
+    }
+    let w = king_centralization_score(board.king_square(Color::White));
+    let b = king_centralization_score(board.king_square(Color::Black));
+    let eg_weight = p.king_activity_phase_threshold - phase;
+    (w - b) * eg_weight * p.king_activity_bonus / p.king_activity_phase_threshold
+}
+
+/// Zentralisierungswert eines Feldes: 7 = Zentrum (d4/d5/e4/e5), 0 = Ecke.
+/// Berechnet den minimalen Manhattan-Abstand zu den vier Zentrumsfeldern.
+fn king_centralization_score(sq: Square) -> i32 {
+    let file = sq.get_file().to_index() as i32;
+    let rank = sq.get_rank().to_index() as i32;
+    // Abstand zum Zentrum: nächstes Feld aus {d4,d5,e4,e5} (file 3-4, rank 3-4)
+    let file_dist = (file - 3).abs().min((file - 4).abs());
+    let rank_dist = (rank - 3).abs().min((rank - 4).abs());
+    7 - file_dist - rank_dist
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,10 +532,12 @@ mod tests {
         // Laeufer auf d1 blockt die Verbindung zwischen a1 und h1
         let b = Board::from_str("3k4/8/8/8/4K3/8/8/R2B3R w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // Non-PST: 1300 + 30 (schwarzer Koenig center) = 1330
-        // PST taper bei phase=5
-        // Total: 1335
-        assert_eq!(evaluate(&b, &p), 1335);
+        // Non-PST: 1300 + 30 (schwarzer Koenig center) + 60 (2 Tuerme offene Linien) = 1390
+        // PST taper bei phase=5: +5
+        // king_activity_endgame: phase=5 < threshold=16, W-e4 score=7, B-d8 score=4,
+        //   eg_weight=11, bonus = 3*11*3/16 = 6
+        // Total: 1390 + 5 + 6 = 1401
+        assert_eq!(evaluate(&b, &p), 1401);
     }
 
     #[test]

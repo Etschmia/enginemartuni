@@ -40,6 +40,12 @@ bishop_pair_each = 15
 # einmaliger Bonus fuer das Paar
 connected_rooks_pair = 150
 
+# Turm auf offener Linie (keine Bauern beider Seiten auf der Linie)
+rook_open_file_bonus = 30
+
+# Turm auf halb-offener Linie (keine eigenen, aber gegnerische Bauern)
+rook_semiopen_file_bonus = 15
+
 [king_safety]
 # Gewichte je gegnerischer Figur, die die 3x3-King-Zone angreift.
 # Bauern und der gegnerische Koenig zaehlen nicht.
@@ -89,3 +95,9 @@ king_proximity_weight = 10
 # KPK Rule of the Square: wenn der Bauer nicht mehr einholbar ist,
 # wird er sicher zur Dame. Bonus on top des Bauernmaterials.
 passed_unstoppable_bonus = 500
+
+# Aktiver Endspielkoenig: Bonus pro Zentralisierungseinheit (0=Ecke, 7=Zentrum),
+# skaliert mit dem Endspielgrad. Wirkt nur wenn Phase < threshold.
+# Maximalbonus (Zentrum vs. Ecke, Phase=0): 7 * 3 = 21 cp
+king_activity_bonus = 3
+king_activity_phase_threshold = 16

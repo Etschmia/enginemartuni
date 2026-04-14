@@ -204,7 +204,7 @@ Move Ordering). Deshalb:
 - Kein `make_move` — alles wird auf Bitboard-Ebene simuliert
 - Gain-Array auf dem Stack (max. 32 Einträge, in der Praxis < 10)
 
-## Umsetzungsstatus (2026-04-12 / Update 2026-04-13)
+## Umsetzungsstatus (2026-04-12 / Update 2026-04-14)
 
 ### Erledigt
 
@@ -289,11 +289,114 @@ exponentiell wachsen. Hinzugefügt:
 - **Delta Pruning** — Capture, der selbst mit `see_val + DELTA_MARGIN = 200cp`
   alpha nicht erreichen kann, wird übersprungen
 
-### Offen (nächste Schritte)
+---
 
-4. **Move Ordering mit SEE** — zu teuer ohne Caching, zurückgestellt
-5. **SEE-Performance optimieren** — `all_attackers_to` wird pro Schlagserie
-   mehrfach aufgerufen
-6. **Regression-Check** — Verlustpartien vor/nach SEE-Fix mit
-   `analyze_blunders.py` vergleichen
-7. **42 unclassified Blunder analysieren**
+## Regression-Analyse (2026-04-14)
+
+173 Blunder aus ~40 Partien nach dem SEE-Fix analysiert.
+
+### Vergleich alt (103 Bl., 14 Partien) → neu (173 Bl., ~40 Partien)
+
+| Motiv | Alt % | Neu % | Trend |
+|---|---|---|---|
+| unclassified | 39% | 38% | = |
+| allows_mate | 25% | 19% | ✓ SEE wirkt |
+| king_safety | 13% | 13% | = |
+| hangs_bishop | 13% | 9% | ✓ |
+| hangs_knight | 9% | 6% | ✓ |
+| missed_capture | 8% | 11% | ✗ gestiegen |
+| positional_collapse | 6% | 10% | ✗ gestiegen |
+| hangs_rook | 3% | 6% | ✗ gestiegen |
+
+**Fazit:** SEE hat taktische Fehler messbar reduziert. Neue Prioritäten:
+
+1. `missed_capture` ↑ → Delta-Margin war zu aggressiv
+2. `endgame king_safety` (13 von 39 Endspiel-Blundern) → König ohne Aktivitäts-Eval
+3. `positional_collapse` + `unclassified` → Rook-Aktivität fehlt in der Eval
+4. Analyzer-Noise: ~10 Einträge wo `gespielter Zug == SF-Best` (false positives)
+
+### Analyzer-Bug: false positives
+
+Mehrere `allows_mate`-Einträge hatten `best=gespielter Zug`:
+```
+29. g3  loss=99242cp  best=g3  ← kein Blunder, Martuni spielte optimal
+49. c4  loss=98789cp  best=c4  ← gleiche Situation
+52. Kc2 loss=610cp    best=Kc2 ← gleiche Situation
+```
+**Ursache:** Analyzer zählte "Position war nach bestem Zug trotzdem verloren" als Blunder.
+**Fix (`analyze_blunders.py`, 2026-04-14):** Einträge mit `move == best_move` werden
+jetzt übersprungen.
+
+---
+
+## Implementierungsschritte (2026-04-14)
+
+### D) Analyzer-Bug fixen (false positives)
+
+**Datei:** `tools/analyze_blunders.py`
+
+Neue Bedingung in `analyze_game()` direkt nach `if loss >= threshold_cp:`:
+```python
+# Kein echter Blunder: Martuni spielte exakt den SF-empfohlenen Zug.
+if best_move is not None and move == best_move:
+    board.push(move)
+    continue
+```
+
+**Erwartete Wirkung:** ~5–10% weniger gemeldete Blunder, sauberere Daten.
+
+### B) Rook auf offenen / halb-offenen Linien
+
+**Datei:** `src/eval.rs` (neue Funktion `rook_file_bonus`), `src/eval_config.rs`, `eval.toml`
+
+Neue Parameter:
+- `rook_open_file_bonus = 30` — keine Bauern beider Seiten auf der Linie
+- `rook_semiopen_file_bonus = 15` — keine eigenen, aber gegnerische Bauern
+
+Aufruf in `evaluate_side()` für jeden Turm.
+
+**Erwartete Wirkung:** Turm-Aktivierung wird belohnt → weniger `positional_collapse`
+und `unclassified` wo Tuerme passiv stehen.
+
+### A) Endspiel-König-Aktivität
+
+**Datei:** `src/eval.rs` (neue Funktionen `king_activity_endgame`,
+`king_centralization_score`), `src/eval_config.rs`, `eval.toml`
+
+Neue Parameter:
+- `king_activity_bonus = 3` — cp pro Zentralisierungseinheit
+- `king_activity_phase_threshold = 16` — wirkt bei Phase < 16 (≈ 2/3 Material weg)
+
+Formel: `(w_score - b_score) * (threshold - phase) * bonus / threshold`
+Zentralisierungsscore: 7 = Zentrum (d4-e5), 0 = Ecke. Max-Bonus: ~21 cp.
+
+Aufruf in `evaluate()` nach dem Tapered PST.
+
+**Erwartete Wirkung:** König sucht im Endspiel aktiver das Zentrum → weniger
+`endgame king_safety`-Blunder.
+
+### C) Delta-Pruning-Margin 200 → 150
+
+**Datei:** `src/search.rs`, Konstante `DELTA_MARGIN`
+
+**Begründung:** `missed_capture` stieg von 8% auf 11%. `DELTA_MARGIN = 200` prunte
+gute Captures (stand_pat + see_val + 200 < alpha), wenn die Position bereits leicht
+negativ war. Mit 150 werden mehr Gewinnzüge bewertet.
+
+**Trade-off:** Leicht mehr Quiescence-Knoten in hoffnungslosen Stellungen, dafür
+weniger verpasste Gewinnzüge.
+
+---
+
+### Offene Schritte
+
+4. **Move Ordering mit SEE** — zu teuer ohne Caching, weiterhin zurückgestellt
+5. **SEE-Performance optimieren** — `all_attackers_to` mehrfach pro Schlagserie
+6. **Nächste Regression** — Blunder-Analyse nach weiteren ~40 Partien:
+   - `missed_capture` sollte durch DELTA_MARGIN=150 sinken
+   - `endgame king_safety` durch König-Aktivitäts-Bonus sinken
+   - `positional_collapse` / `unclassified` durch Rook-Boni sinken
+7. **Eval-Erweiterungen (nach Daten):**
+   - Outposts / schwache Felder
+   - Turm auf 7. Reihe
+   - Mobilität (Anzahl legaler Züge als Eval-Term)

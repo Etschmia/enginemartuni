@@ -282,6 +282,12 @@ def analyze_game(
         loss = eval_before - eval_after_from_mover
 
         if loss >= threshold_cp:
+            # Kein echter Blunder: Martuni spielte exakt den SF-empfohlenen Zug.
+            # Die Stellung war bereits verloren — das ist ein false positive im Analyzer.
+            if best_move is not None and move == best_move:
+                board.push(move)
+                continue
+
             phase = detect_phase(board)
             motifs = classify_motifs(
                 board,

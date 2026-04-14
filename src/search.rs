@@ -409,7 +409,9 @@ fn alpha_beta(
 const MAX_QPLY: i32 = 12;
 // Delta-Pruning-Margin: ein Capture muss mindestens diesen Betrag über alpha
 // liegen können, sonst ist er hoffnungslos (verhindert nutzlose Suche).
-const DELTA_MARGIN: i32 = 200;
+// Auf 150 reduziert (war 200): missed_capture-Rate war nach SEE-Einführung
+// gestiegen, weil 200cp gute Captures fälschlicherweise prunte.
+const DELTA_MARGIN: i32 = 150;
 
 fn quiescence(
     board: &Board,
