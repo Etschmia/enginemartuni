@@ -420,14 +420,38 @@ fn rook_file_bonus(
 /// König-Aktivitäts-Bonus im Endspiel (aus Sicht von Weiß).
 /// Positiv wenn weißer König zentraler steht als schwarzer.
 /// Skaliert linear mit dem "Endspielgrad" (phase sinkt → Bonus steigt).
+///
+/// Guard (2026-04-15): Der Bonus je Seite wird unterdrückt, solange der
+/// Gegner noch eine Dame oder mehr als einen Turm hat. Vorher zog der
+/// Bonus den König zu forsch ins Zentrum (`Kd4/Kf4/Kf3 allows_mate` in
+/// mehreren Endspielen). KRvK bleibt unberührt.
 fn king_activity_endgame(board: &Board, phase: i32, p: &EvalParams) -> i32 {
     if phase >= p.king_activity_phase_threshold {
         return 0;
     }
-    let w = king_centralization_score(board.king_square(Color::White));
-    let b = king_centralization_score(board.king_square(Color::Black));
+    let w = if heavy_piece_threat(board, Color::Black) {
+        0
+    } else {
+        king_centralization_score(board.king_square(Color::White))
+    };
+    let b = if heavy_piece_threat(board, Color::White) {
+        0
+    } else {
+        king_centralization_score(board.king_square(Color::Black))
+    };
     let eg_weight = p.king_activity_phase_threshold - phase;
     (w - b) * eg_weight * p.king_activity_bonus / p.king_activity_phase_threshold
+}
+
+/// Bedrohung für den gegnerischen König durch Schwerfiguren von `side`:
+/// eine Dame oder mehr als ein Turm macht das Zentrum gefährlich.
+fn heavy_piece_threat(board: &Board, side: Color) -> bool {
+    let queens = (*board.pieces(chess::Piece::Queen) & *board.color_combined(side)).popcnt();
+    if queens > 0 {
+        return true;
+    }
+    let rooks = (*board.pieces(chess::Piece::Rook) & *board.color_combined(side)).popcnt();
+    rooks > 1
 }
 
 /// Zentralisierungswert eines Feldes: 7 = Zentrum (d4/d5/e4/e5), 0 = Ecke.
@@ -517,9 +541,10 @@ mod tests {
         // Non-PST: 1300 + 30 (schwarzer Koenig center) + 60 (2 Tuerme offene Linien) = 1390
         // PST taper bei phase=5: +5
         // king_activity_endgame: phase=5 < threshold=16, W-e4 score=7, B-d8 score=4,
-        //   eg_weight=11, bonus = 3*11*3/16 = 6
-        // Total: 1390 + 5 + 6 = 1401
-        assert_eq!(evaluate(&b, &p), 1401);
+        //   eg_weight=11. Guard (2026-04-15): Weiß hat 2 Türme → Schwarz-Bonus
+        //   unterdrückt (b=0). Weiß ungefährdet (Schwarz hat nichts). bonus = 7*11*3/16 = 14
+        // Total: 1390 + 5 + 14 = 1409
+        assert_eq!(evaluate(&b, &p), 1409);
     }
 
     #[test]

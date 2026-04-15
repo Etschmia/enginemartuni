@@ -388,15 +388,120 @@ weniger verpasste Gewinnzüge.
 
 ---
 
-### Offene Schritte
+---
 
-4. **Move Ordering mit SEE** — zu teuer ohne Caching, weiterhin zurückgestellt
-5. **SEE-Performance optimieren** — `all_attackers_to` mehrfach pro Schlagserie
-6. **Nächste Regression** — Blunder-Analyse nach weiteren ~40 Partien:
-   - `missed_capture` sollte durch DELTA_MARGIN=150 sinken
-   - `endgame king_safety` durch König-Aktivitäts-Bonus sinken
-   - `positional_collapse` / `unclassified` durch Rook-Boni sinken
-7. **Eval-Erweiterungen (nach Daten):**
+## Regression-Analyse (2026-04-15)
+
+225 Blunder aus ~60 Lichess-Partien nach König-Aktivität + Rook-Boni + Delta-Margin 150 analysiert.
+Lichess-Wertung in dieser Phase: Blitz 1530 → 1659, Rapid 1680 → 1756.
+
+### Vergleich 14.04 (173 Bl.) → 15.04 (225 Bl.)
+
+| Motif | 14.04 | 15.04 | Trend |
+|---|---|---|---|
+| unclassified | 38% | 36% | = |
+| **missed_capture** | 11% | **18%** | ✗ weiter gestiegen |
+| allows_mate | 19% | 14% | ✓ |
+| **hangs_bishop** | 9% | **14%** | ✗ gestiegen |
+| king_safety | 13% | 8% | ✓ König-Aktivität wirkt |
+| positional_collapse | 10% | 9% | ≈ |
+| hangs_knight | 6% | 6% | = |
+
+**Gewinne:** `king_safety` und `allows_mate` deutlich gesunken — König-Aktivitäts-Bonus
++ Rook-Boni zeigen Wirkung. **Offene Baustellen:**
+
+1. `missed_capture` ↑ — Delta-Margin allein reicht nicht; MVV/LVA-Sortierung findet
+   taktische Captures nicht zuverlässig. Lösung: SEE-basiertes Move Ordering (Punkt 4).
+2. `hangs_bishop` ↑ — mittelbare Opfer aus Selbstüberschätzung, die nur durch
+   tiefere Suche (→ besseres Ordering) sichtbar werden.
+3. Endgame-König-Überzieher: `Kd4/Kf4/Kf3 allows_mate` in mehreren Endspielen.
+   König-Aktivitäts-Bonus zieht zu forsch nach vorn wenn Schwerfiguren noch da sind.
+
+---
+
+## Implementierungsschritte (2026-04-15)
+
+### 1) Move Ordering mit SEE + Cache
+
+**Datei:** `src/search.rs`
+
+Ziel: SEE pro Capture genau einmal berechnen, Ergebnis durch Ordering +
+Extension-Check + Quiescence teilen; gewinnende Captures landen konsistent vor
+Quiet Moves, verlierende Captures landen dahinter.
+
+**Änderungen:**
+- Neue Struktur `ScoredMove { mv, order_key, see_val: Option<i32> }` ersetzt
+  `Vec<ChessMove>` als Rückgabewert von `order_moves`.
+- Sortier-Hierarchie:
+  | Prio | Bedingung | `order_key` |
+  |---|---|---|
+  | 1 | TT-Move | -100_000 |
+  | 2 | Promotion zu Dame | -50_000 |
+  | 3 | Capture mit SEE ≥ 0 | -40_000 + MVV/LVA |
+  | 4 | Andere Promotion | -500 |
+  | 5 | Quiet Move | 0 |
+  | 6 | Capture mit SEE < 0 | 10_000 − SEE |
+- `is_candidate_move` bekommt `see_val: Option<i32>` als Parameter — kein zweiter
+  `see()`-Aufruf mehr in der Extension-Entscheidung.
+- Quiescence sortiert Captures jetzt nach SEE absteigend statt MVV/LVA → frühere
+  Beta-Cutoffs. SEE wird pro Capture genau einmal berechnet und direkt
+  weiterverwendet.
+
+**Erwartete Wirkung:**
+- `missed_capture` sinkt, weil gewinnende Captures in der Hauptsuche konsistent
+  vor Quiet Moves untersucht werden.
+- Mehr Alpha-Beta-Cutoffs durch verlierende Captures am Ende.
+- Keine Netto-Mehrkosten für SEE: 1× je Capture statt bis zu 2× (Quiescence +
+  Extension-Check).
+
+**Smoke-Test (Kiwipete, 3s):** Tiefe 2, 4.0M Knoten, 1.6M NPS, Bestzug e2a6 — sauber.
+
+### 2) Endgame-König-Guard
+
+**Datei:** `src/eval.rs` (neue Funktion `heavy_piece_threat`)
+
+Ziel: Verhindert, dass der König-Aktivitäts-Bonus den König zu früh ins Zentrum
+zieht, solange der Gegner noch gefährliche Schwerfiguren hat. Motiviert durch
+`Kd4/Kf4/Kf3 allows_mate`-Einträge in mehreren Endspielen der 15.04-Analyse.
+
+**Änderung:** In `king_activity_endgame` wird der Zentralisierungs-Score pro
+Seite unterdrückt (auf 0 gesetzt), wenn der Gegner eine Dame oder mehr als
+einen Turm hat. KRvK und KQvK bleiben unberührt.
+
+```rust
+fn heavy_piece_threat(board, side) -> bool {
+    queens(side) > 0 || rooks(side) > 1
+}
+```
+
+**Test-Update:** `rooks_not_connected_when_blocked` — der schwarze König
+verliert seinen Aktivitätsanteil (Weiß hat 2 Türme), Weiß behält seinen
+(Schwarz hat nichts). Erwartungswert 1401 → 1409.
+
+**Erwartete Wirkung:** Weniger Endspiel-König-Überzieher. Unauffällig in
+ausgeglichenen Endspielen, wo beide Seiten symmetrische Schwerfiguren haben
+und sich der Effekt aufhebt.
+
+---
+
+### Stichtag 15.04.2026 — Messfenster
+
+Damit die Wirkung von **1) SEE-Ordering** und **2) König-Guard** sauber
+verfolgt werden kann, werden keine weiteren Änderungen vorgenommen, bis
+eine neue Blunder-Analyse die nächste Iteration liefert.
+
+### Offene Schritte (nicht angefasst während Messfenster)
+
+5. **Mobility-Term in Eval** — Adressiert die 56 `unclassified`-Mittelspiel-Blunder
+   mit passivem Figurenspiel. Kleiner Bonus pro legalem Zug je Figur.
+6. **Killer Moves / History-Heuristic** — billiger Effizienzgewinn für alle Tiefen.
+7. **SEE-Performance optimieren** — `all_attackers_to` könnte inkrementell
+   aktualisiert werden statt pro Schlag neu berechnet.
+8. **Nächste Regression** — Blunder-Analyse nach ~40 weiteren Partien:
+   - `missed_capture` sollte durch SEE-Ordering sinken
+   - `hangs_bishop` sollte mit sinken (tiefere effektive Suche)
+   - `allows_mate` in Endspielen sollte durch König-Guard sinken
+9. **Eval-Erweiterungen (nach Daten):**
    - Outposts / schwache Felder
    - Turm auf 7. Reihe
-   - Mobilität (Anzahl legaler Züge als Eval-Term)
+   - Bishop-Trap-Detection

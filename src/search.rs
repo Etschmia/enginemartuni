@@ -318,7 +318,7 @@ fn alpha_beta(
         }
     }
 
-    // Zuege generieren + ordnen
+    // Zuege generieren + ordnen (mit SEE-Cache für Captures)
     let moves: Vec<ChessMove> = MoveGen::new_legal(board).collect();
     if moves.is_empty() {
         return 0;
@@ -335,16 +335,17 @@ fn alpha_beta(
     let mut best_move: Option<ChessMove> = None;
     let mut aborted = false;
 
-    for mv in &ordered {
-        let nb = board.make_move_new(*mv);
-        let is_cand = is_candidate_move(board, *mv, &nb);
+    for sm in &ordered {
+        let mv = sm.mv;
+        let nb = board.make_move_new(mv);
+        let is_cand = is_candidate_move(board, mv, &nb, sm.see_val);
         let ext = if is_cand && extensions_used + 2 <= MAX_EXTENSION_PER_LINE {
             2
         } else {
             0
         };
         let new_depth = depth - 1 + ext;
-        let new_halfmove = if is_irreversible(board, *mv) {
+        let new_halfmove = if is_irreversible(board, mv) {
             0
         } else {
             halfmove.saturating_add(1)
@@ -368,9 +369,9 @@ fn alpha_beta(
 
         if score > best_score {
             best_score = score;
-            best_move = Some(*mv);
+            best_move = Some(mv);
             if ply == 0 {
-                state.root_best_move = Some(*mv);
+                state.root_best_move = Some(mv);
                 state.root_best_score = score;
             }
         }
@@ -476,16 +477,19 @@ fn quiescence(
         return stand_pat;
     }
 
-    // Nur Schlagzuege generieren (inkl. en passant)
-    let mut captures: Vec<ChessMove> = MoveGen::new_legal(board)
+    // Nur Schlagzuege generieren (inkl. en passant), SEE einmal pro Zug.
+    // Sortierung nach SEE absteigend: beste Captures zuerst → frühere Cutoffs.
+    let mut captures: Vec<(ChessMove, i32)> = MoveGen::new_legal(board)
         .filter(|mv| is_capture(board, *mv))
+        .map(|mv| {
+            let v = see(board, mv);
+            (mv, v)
+        })
         .collect();
-    captures.sort_by_key(|mv| mvv_lva_key(board, *mv));
+    captures.sort_by_key(|(_, v)| -*v);
 
-    for mv in captures {
+    for (mv, see_val) in captures {
         // Bad Capture Pruning: verlierende Schlagzuege ueberspringen.
-        // SEE < 0 bedeutet, die Schlagserie verliert Material.
-        let see_val = see(board, mv);
         if see_val < 0 {
             continue;
         }
@@ -554,7 +558,12 @@ Das ist teuer. Können wir hier vielleicht mit unserem SEE oder mit Late Move Re
 */
 
 
-fn is_candidate_move(board: &Board, mv: ChessMove, new_board: &Board) -> bool {
+fn is_candidate_move(
+    board: &Board,
+    mv: ChessMove,
+    new_board: &Board,
+    see_val: Option<i32>,
+) -> bool {
     // Schachgebot
     if new_board.checkers().popcnt() > 0 {
         return true;
@@ -562,6 +571,10 @@ fn is_candidate_move(board: &Board, mv: ChessMove, new_board: &Board) -> bool {
     // Schlagzug: nur wenn SEE >= 0 (gewinnender oder ausgeglichener Tausch).
     // Verlierende Captures (SEE < 0) brauchen keine Extra-Tiefe — sie werden
     // in der Quiescence ohnehin abgeschnitten.
+    // SEE-Wert ist gecachet aus order_moves; kein zweiter Aufruf mehr.
+    if let Some(v) = see_val {
+        return v >= 0;
+    }
     if is_capture(board, mv) {
         return see(board, mv) >= 0;
     }
@@ -611,26 +624,57 @@ fn is_passed_simple(sq: chess::Square, us: Color, their_pawns: chess::BitBoard) 
     true
 }
 
+/// Zug mit vorberechneten Sortier-/SEE-Informationen. `see_val` ist nur
+/// bei Captures gesetzt und wird durch die Suche gereicht, damit SEE pro
+/// Capture genau einmal berechnet wird (Ordering + Extension-Check teilen
+/// sich das Ergebnis).
+struct ScoredMove {
+    mv: ChessMove,
+    order_key: i32,
+    see_val: Option<i32>,
+}
+
+/// Sortier-Schlüssel (niedrig = zuerst):
+///   TT-Move:                 -100_000
+///   Promotion zu Dame:        -50_000
+///   Gewinnender Capture:      -40_000 + MVV/LVA
+///   Quiet Move:                     0
+///   Verlierender Capture:     +10_000 - SEE  (stark negative zuletzt)
 fn order_moves(
     board: &Board,
-    mut moves: Vec<ChessMove>,
+    moves: Vec<ChessMove>,
     tt_move: Option<ChessMove>,
-) -> Vec<ChessMove> {
-    moves.sort_by_key(|mv| {
-        if Some(*mv) == tt_move {
-            return -10_000;
-        }
-        // MVV-LVA fuer Schlagzuege
-        if is_capture(board, *mv) {
-            return mvv_lva_key(board, *mv);
-        }
-        // Befoerderungen
-        if mv.get_promotion().is_some() {
-            return -500;
-        }
-        0
-    });
-    moves
+) -> Vec<ScoredMove> {
+    let mut scored: Vec<ScoredMove> = moves
+        .into_iter()
+        .map(|mv| {
+            if Some(mv) == tt_move {
+                return ScoredMove {
+                    mv,
+                    order_key: -100_000,
+                    see_val: if is_capture(board, mv) { Some(see(board, mv)) } else { None },
+                };
+            }
+            if is_capture(board, mv) {
+                let v = see(board, mv);
+                let order_key = if v >= 0 {
+                    -40_000 + mvv_lva_key(board, mv)
+                } else {
+                    10_000 - v
+                };
+                return ScoredMove { mv, order_key, see_val: Some(v) };
+            }
+            if mv.get_promotion() == Some(Piece::Queen) {
+                return ScoredMove { mv, order_key: -50_000, see_val: None };
+            }
+            if mv.get_promotion().is_some() {
+                return ScoredMove { mv, order_key: -500, see_val: None };
+            }
+            ScoredMove { mv, order_key: 0, see_val: None }
+        })
+        .collect();
+    scored.sort_by_key(|sm| sm.order_key);
+    scored
 }
 
 fn mvv_lva_key(board: &Board, mv: ChessMove) -> i32 {
