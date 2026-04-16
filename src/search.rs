@@ -15,6 +15,12 @@ const MATE: i32 = 100_000;
 const MATE_THRESHOLD: i32 = MATE - 1000;
 const MAX_EXTENSION_PER_LINE: i32 = 6;
 const MAX_DEPTH: i32 = 64;
+// Plies gehen durch Extensions über MAX_DEPTH hinaus — großzügig dimensionieren.
+const MAX_PLY: usize = 128;
+// Obergrenze für History-Einträge. Muss deutlich unter dem Abstand zwischen
+// Killer-Slots (-25_000) und Unterpromotion (-20_000) bleiben, damit die
+// Ordering-Reihenfolge Capture > Killer > Unterpromotion > Quiet erhalten bleibt.
+const MAX_HISTORY: i32 = 16_000;
 
 pub struct GoParams {
     pub wtime: Option<u64>,
@@ -76,9 +82,53 @@ struct SearchState {
     // Wenn die Wurzel nur einen legalen Zug hat, merken wir ihn vor: beim
     // Uebergang Ponder → Normal koennen wir dann sofort abbrechen.
     forced_only_move: Option<ChessMove>,
+    // Killer Moves: pro ply zwei Quiet-Züge, die zuletzt einen Beta-Cutoff
+    // erzeugt haben. Werden in der Sortierung direkt hinter gewinnenden
+    // Captures einsortiert.
+    killers: [[Option<ChessMove>; 2]; MAX_PLY],
+    // History-Heuristic: [side][from*64 + to]. Jedes Mal, wenn ein Quiet-Zug
+    // einen Beta-Cutoff produziert, wird `depth*depth` aufaddiert (geclampt
+    // auf MAX_HISTORY). Quiet Moves werden innerhalb ihres Ordering-Bands
+    // nach dem History-Score absteigend sortiert.
+    move_history: Vec<i32>,
+}
+
+fn history_idx(side: Color, from: Square, to: Square) -> usize {
+    let side_idx = match side {
+        Color::White => 0,
+        Color::Black => 1,
+    };
+    side_idx * 64 * 64 + from.to_index() * 64 + to.to_index()
 }
 
 impl SearchState {
+    fn record_killer(&mut self, ply: i32, mv: ChessMove) {
+        let p = ply as usize;
+        if p >= MAX_PLY {
+            return;
+        }
+        if self.killers[p][0] == Some(mv) {
+            return;
+        }
+        self.killers[p][1] = self.killers[p][0];
+        self.killers[p][0] = Some(mv);
+    }
+
+    fn record_history(&mut self, side: Color, mv: ChessMove, depth: i32) {
+        let idx = history_idx(side, mv.get_source(), mv.get_dest());
+        let bonus = (depth * depth).min(MAX_HISTORY);
+        self.move_history[idx] = (self.move_history[idx] + bonus).min(MAX_HISTORY);
+    }
+
+    fn killers_at(&self, ply: i32) -> [Option<ChessMove>; 2] {
+        let p = ply as usize;
+        if p >= MAX_PLY {
+            [None, None]
+        } else {
+            self.killers[p]
+        }
+    }
+
     fn should_stop(&mut self) -> bool {
         if self.stop.load(Ordering::Relaxed) {
             return true;
@@ -163,6 +213,8 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         root_best_move: None,
         root_best_score: 0,
         forced_only_move,
+        killers: [[None; 2]; MAX_PLY],
+        move_history: vec![0; 2 * 64 * 64],
     };
 
     // Iteratives Deepening
@@ -318,12 +370,13 @@ fn alpha_beta(
         }
     }
 
-    // Zuege generieren + ordnen (mit SEE-Cache für Captures)
+    // Zuege generieren + ordnen (mit SEE-Cache für Captures, Killer + History)
     let moves: Vec<ChessMove> = MoveGen::new_legal(board).collect();
     if moves.is_empty() {
         return 0;
     }
-    let ordered = order_moves(board, moves, tt_move);
+    let killers_here = state.killers_at(ply);
+    let ordered = order_moves(board, moves, tt_move, killers_here, &state.move_history);
 
     // Eigenen Hash fuer die Kinder in die Historie legen
     if ply > 0 {
@@ -379,6 +432,13 @@ fn alpha_beta(
             alpha = score;
         }
         if alpha >= beta {
+            // Beta-Cutoff: wenn der kausale Zug ein Quiet-Move ist, als Killer
+            // vormerken und History-Score erhöhen. Captures und Promotionen
+            // haben eigene Sortier-Schienen und brauchen das nicht.
+            if sm.see_val.is_none() && mv.get_promotion().is_none() {
+                state.record_killer(ply, mv);
+                state.record_history(board.side_to_move(), mv, depth);
+            }
             break;
         }
     }
@@ -638,13 +698,19 @@ struct ScoredMove {
 ///   TT-Move:                 -100_000
 ///   Promotion zu Dame:        -50_000
 ///   Gewinnender Capture:      -40_000 + MVV/LVA
-///   Quiet Move:                     0
-///   Verlierender Capture:     +10_000 - SEE  (stark negative zuletzt)
+///   Killer 1:                 -30_000
+///   Killer 2:                 -25_000
+///   Unterpromotion:           -20_000
+///   Quiet Move (History):     -history                (Range [-16_000, 0])
+///   Verlierender Capture:     +10_000 - SEE           (stark negative zuletzt)
 fn order_moves(
     board: &Board,
     moves: Vec<ChessMove>,
     tt_move: Option<ChessMove>,
+    killers: [Option<ChessMove>; 2],
+    move_history: &[i32],
 ) -> Vec<ScoredMove> {
+    let stm = board.side_to_move();
     let mut scored: Vec<ScoredMove> = moves
         .into_iter()
         .map(|mv| {
@@ -667,10 +733,17 @@ fn order_moves(
             if mv.get_promotion() == Some(Piece::Queen) {
                 return ScoredMove { mv, order_key: -50_000, see_val: None };
             }
-            if mv.get_promotion().is_some() {
-                return ScoredMove { mv, order_key: -500, see_val: None };
+            if Some(mv) == killers[0] {
+                return ScoredMove { mv, order_key: -30_000, see_val: None };
             }
-            ScoredMove { mv, order_key: 0, see_val: None }
+            if Some(mv) == killers[1] {
+                return ScoredMove { mv, order_key: -25_000, see_val: None };
+            }
+            if mv.get_promotion().is_some() {
+                return ScoredMove { mv, order_key: -20_000, see_val: None };
+            }
+            let h = move_history[history_idx(stm, mv.get_source(), mv.get_dest())];
+            ScoredMove { mv, order_key: -h, see_val: None }
         })
         .collect();
     scored.sort_by_key(|sm| sm.order_key);

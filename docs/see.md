@@ -484,24 +484,155 @@ und sich der Effekt aufhebt.
 
 ---
 
-### Stichtag 15.04.2026 — Messfenster
+## Regression-Analyse (2026-04-16)
 
-Damit die Wirkung von **1) SEE-Ordering** und **2) König-Guard** sauber
-verfolgt werden kann, werden keine weiteren Änderungen vorgenommen, bis
-eine neue Blunder-Analyse die nächste Iteration liefert.
+113 Blunder aus 53 Partien seit dem 15.04-Commit ausgewertet. Spielstärke-Trend
+war minimal (im Rahmen der üblichen Schwankung), die Motiv-Verschiebungen sind
+aber aussagekräftig.
+
+### Vergleich 15.04 (225 Bl., ~60 Partien) → 16.04 (113 Bl., 53 Partien)
+
+| Motiv | 15.04 | 16.04 | Trend |
+|---|---|---|---|
+| unclassified | 36% | 32% | ≈ |
+| **missed_capture** | **18%** | **17%** | ≈ nur marginal |
+| allows_mate | 14% | **19%** | ✗ gestiegen |
+| **hangs_bishop** | **14%** | **7%** | ✓ halbiert |
+| positional_collapse | 9% | **16%** | ✗ stark gestiegen |
+| king_safety | 8% | 5% | ✓ |
+| hangs_knight | 6% | 4% | ✓ |
+
+### Einschätzung
+
+- **`hangs_bishop` halbiert** — sehr wahrscheinlich der SEE-Ordering-Effekt:
+  gewinnende Captures konsistent vor Quiet Moves → mehr Beta-Cutoffs → tiefere
+  effektive Suche → eigene Hänger werden sichtbar.
+- **`missed_capture` nur marginal gesunken** — das war die ursprüngliche
+  Zielmetrik von SEE-Ordering. Effekt zu klein. Ordering allein reicht nicht;
+  Quiet-Moves brauchen ebenfalls eine bessere Sortierung (Killer/History),
+  damit gegnerische Captures früh widerlegt werden.
+- **`allows_mate` gestiegen** — vor allem Endspiel-Fälle mit zentralen
+  König-Zügen: `Martuni vs WolfuhfuhBot` 40.Kc2/44.Ke3, `Martuni vs simbelmyne`
+  41.Kc2, `Martuni vs bfiedler-bot` 29.f4. Der 15.04-König-Guard greift nur
+  bei Dame oder 2 Türmen — ein einzelner Turm plus Leichtfigur reicht aber
+  auch für Mattnetze gegen den zentralen König.
+- **`positional_collapse` gestiegen** — meist späte Mittelspielfehler ohne
+  klaren taktischen Patzer. Mobility fehlt in der Eval; bleibt vorerst offen.
+
+### Nächste Iteration
+
+Null-Move-Pruning ist zu früh: es hilft primär durch tiefere Suche, aber
+Endspiel-allows_mate ist bereits das größte Problem, und NMP ist berüchtigt
+für Zugzwang-Bugs im Endspiel. Ohne Killer/History fehlt außerdem die für
+NMP typische scharfe Zugsortierung (NMP lebt von guten Widerlegungszügen).
+
+Deshalb:
+
+1. **King-Guard schärfen** — direkt gegen den allows_mate-Peak.
+2. **Killer Moves / History-Heuristic** — gegen den missed_capture-Bodensatz
+   und als Vorarbeit für späteres NMP.
+
+---
+
+## Implementierungsschritte (2026-04-16)
+
+### 1) King-Guard: Turm + Leichtfigur aufnehmen
+
+**Datei:** `src/eval.rs` (`heavy_piece_threat`)
+
+Der Guard aus 15.04 triggerte nur bei **Dame oder 2 Türmen**. Die 16.04-Analyse
+zeigt mehrere `allows_mate`-Fälle mit einzelnem Turm + Leichtfigur (z.B. bei
+WolfuhfuhBot, simbelmyne, bfiedler-bot). Neue Regel:
+
+```rust
+fn heavy_piece_threat(board: &Board, side: Color) -> bool {
+    // Dame
+    if queens(side) > 0 { return true; }
+    // 2+ Türme
+    if rooks(side) >= 2 { return true; }
+    // Turm + Leichtfigur
+    if rooks(side) >= 1 && (bishops(side) + knights(side)) >= 1 { return true; }
+    false
+}
+```
+
+Unberührt bleiben reine **KRvK**, **KBvK**, **KNvK**, **KBBvK** — dort bleibt
+der König-Aktivitäts-Bonus aktiv, damit die spezialisierten Endgame-Routinen
+nicht durch den Guard gelähmt werden. Der Test `rooks_not_connected_when_blocked`
+bleibt unverändert (Weiß hat 2 Türme → Schwarz weiterhin als bedroht markiert).
+
+**Erwartete Wirkung:** Weniger `Kd4/Kc2/Ke3 allows_mate`-Einträge in
+Endspielen mit einem Turm und begleitendem Leichtfigurenspiel.
+
+### 2) Killer Moves + History-Heuristic
+
+**Datei:** `src/search.rs`
+
+SEE-Ordering allein drückt `missed_capture` kaum. Grund: sobald der
+Suchbaum tief genug geht, findet sich eine Widerlegung meist erst nach
+mehreren ruhigen Zügen. Quiet-Moves werden aber noch zufällig sortiert.
+Killer/History lernen aus dem Suchbaum selbst, welche Quiet-Moves
+typischerweise Beta-Cutoffs erzeugen.
+
+**SearchState-Erweiterung:**
+- `killers: [[Option<ChessMove>; 2]; MAX_PLY]` — 2 Slots je ply
+  (MAX_PLY = 128 wegen Extensions über MAX_DEPTH hinaus).
+- `move_history: Vec<i32>` (Länge 2×64×64) — indexiert als
+  `[side][from*64 + to]`, auf `MAX_HISTORY = 16_000` geclampt.
+
+**Update bei Beta-Cutoff** (`alpha_beta`, wenn `alpha >= beta`):
+- Nur wenn der verursachende Zug ein Quiet-Move ist (kein Capture, keine
+  Promotion): als Killer eintragen (Slot 0 ← Slot 1 Shift) und
+  `history[side][from][to] += depth*depth`.
+
+**Sortier-Hierarchie (`order_moves`):**
+
+| Prio | Bedingung | `order_key` |
+|---|---|---|
+| 1 | TT-Move | -100_000 |
+| 2 | Promotion zu Dame | -50_000 |
+| 3 | Capture mit SEE ≥ 0 | -40_000 + MVV/LVA |
+| 4 | Killer 1 | -30_000 |
+| 5 | Killer 2 | -25_000 |
+| 6 | Unterpromotion | -20_000 |
+| 7 | Quiet Move | -history (Range [-16_000, 0]) |
+| 8 | Capture mit SEE < 0 | 10_000 − SEE |
+
+MAX_HISTORY wurde bewusst auf 16_000 geclampt: kleiner als der Abstand
+Killer → Unterpromotion (5_000), damit die Prio-Reihenfolge Capture → Killer →
+Unterpromotion → Quiet nicht kippt.
+
+**Smoke-Test (Kiwipete, 3s):** Tiefe 2, 3.8M Knoten, 1.49M NPS, Bestzug
+`e2a6` — identisch zum 15.04-Ergebnis, ~5% weniger Knoten auf gleicher Tiefe.
+
+**Erwartete Wirkung:**
+- `missed_capture` sollte messbar sinken: gegnerische Widerlegungen nach
+  ruhigen Zügen werden früher gefunden.
+- `unclassified` sollte mit sinken (Oberbegriff für schwache Zugsortierung).
+- Keine direkte Wirkung auf `allows_mate` oder `positional_collapse` — dafür
+  sind Guard-Verschärfung bzw. zukünftige Eval-Erweiterungen zuständig.
+
+---
+
+### Stichtag 16.04.2026 — zweites Messfenster
+
+Martuni spielt jetzt einige Tage unbeaufsichtigt (Dienstag nächste Woche
+liegen mehrere hundert Partien zur Auswertung vor). Keine weiteren
+Änderungen, bis die neue Blunder-Analyse da ist.
 
 ### Offene Schritte (nicht angefasst während Messfenster)
 
-5. **Mobility-Term in Eval** — Adressiert die 56 `unclassified`-Mittelspiel-Blunder
-   mit passivem Figurenspiel. Kleiner Bonus pro legalem Zug je Figur.
-6. **Killer Moves / History-Heuristic** — billiger Effizienzgewinn für alle Tiefen.
+5. **Mobility-Term in Eval** — gegen `unclassified` + `positional_collapse`
+   in passivem Mittelspiel. Kleiner Bonus pro legalem Zug je Figur.
 7. **SEE-Performance optimieren** — `all_attackers_to` könnte inkrementell
    aktualisiert werden statt pro Schlag neu berechnet.
-8. **Nächste Regression** — Blunder-Analyse nach ~40 weiteren Partien:
-   - `missed_capture` sollte durch SEE-Ordering sinken
-   - `hangs_bishop` sollte mit sinken (tiefere effektive Suche)
-   - `allows_mate` in Endspielen sollte durch König-Guard sinken
+8. **Nächste Regression** — nach mehreren hundert Partien:
+   - `missed_capture` sollte durch Killer/History sinken
+   - `allows_mate` in Endspielen sollte durch verschärften Guard sinken
+   - `unclassified` sollte mit sinken
 9. **Eval-Erweiterungen (nach Daten):**
    - Outposts / schwache Felder
    - Turm auf 7. Reihe
    - Bishop-Trap-Detection
+10. **Null-Move-Pruning** — erst wenn Endspiel stabil ist und Ordering
+    (Killer/History) sich als tragfähig erwiesen hat.

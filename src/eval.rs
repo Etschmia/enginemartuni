@@ -421,10 +421,12 @@ fn rook_file_bonus(
 /// Positiv wenn weißer König zentraler steht als schwarzer.
 /// Skaliert linear mit dem "Endspielgrad" (phase sinkt → Bonus steigt).
 ///
-/// Guard (2026-04-15): Der Bonus je Seite wird unterdrückt, solange der
-/// Gegner noch eine Dame oder mehr als einen Turm hat. Vorher zog der
-/// Bonus den König zu forsch ins Zentrum (`Kd4/Kf4/Kf3 allows_mate` in
-/// mehreren Endspielen). KRvK bleibt unberührt.
+/// Guard (2026-04-15, verschärft 2026-04-16): Der Bonus je Seite wird
+/// unterdrückt, solange der Gegner ein realistisches Mattnetz weben kann.
+/// Ursprünglich nur Dame oder 2 Türme — die 16.04-Analyse zeigte aber
+/// endgame `allows_mate`-Fälle mit R+Minor (z.B. Martuni vs WolfuhfuhBot
+/// 40.Kc2, simbelmyne 41.Kc2). Deshalb triggert der Guard jetzt auch bei
+/// Turm + Leichtfigur. KRvK, KBvK, KNvK und KBBvK bleiben unberührt.
 fn king_activity_endgame(board: &Board, phase: i32, p: &EvalParams) -> i32 {
     if phase >= p.king_activity_phase_threshold {
         return 0;
@@ -443,15 +445,26 @@ fn king_activity_endgame(board: &Board, phase: i32, p: &EvalParams) -> i32 {
     (w - b) * eg_weight * p.king_activity_bonus / p.king_activity_phase_threshold
 }
 
-/// Bedrohung für den gegnerischen König durch Schwerfiguren von `side`:
-/// eine Dame oder mehr als ein Turm macht das Zentrum gefährlich.
+/// Bedrohung für den gegnerischen König durch Mattmaterial von `side`:
+/// Dame, zwei Türme oder ein Turm + mindestens eine Leichtfigur.
 fn heavy_piece_threat(board: &Board, side: Color) -> bool {
-    let queens = (*board.pieces(chess::Piece::Queen) & *board.color_combined(side)).popcnt();
+    let side_bb = *board.color_combined(side);
+    let queens = (*board.pieces(Piece::Queen) & side_bb).popcnt();
     if queens > 0 {
         return true;
     }
-    let rooks = (*board.pieces(chess::Piece::Rook) & *board.color_combined(side)).popcnt();
-    rooks > 1
+    let rooks = (*board.pieces(Piece::Rook) & side_bb).popcnt();
+    if rooks >= 2 {
+        return true;
+    }
+    if rooks >= 1 {
+        let minors =
+            ((*board.pieces(Piece::Bishop) | *board.pieces(Piece::Knight)) & side_bb).popcnt();
+        if minors >= 1 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Zentralisierungswert eines Feldes: 7 = Zentrum (d4/d5/e4/e5), 0 = Ecke.
