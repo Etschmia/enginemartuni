@@ -51,6 +51,17 @@ pub struct EvalParams {
     pub king_activity_bonus: i32,
     /// Phase-Schwelle (0..24), unterhalb derer König-Aktivität bewertet wird.
     pub king_activity_phase_threshold: i32,
+
+    // Mobility (cp pro "safe" Zielfeld, getaperter Mittel-/Endspielbeitrag).
+    // "Safe" = nicht eigene Figur und nicht von gegnerischem Bauern angegriffen.
+    pub knight_mg_mobility: i32,
+    pub knight_eg_mobility: i32,
+    pub bishop_mg_mobility: i32,
+    pub bishop_eg_mobility: i32,
+    pub rook_mg_mobility: i32,
+    pub rook_eg_mobility: i32,
+    pub queen_mg_mobility: i32,
+    pub queen_eg_mobility: i32,
 }
 
 pub const DEFAULT_SAFETY_TABLE: [i32; 100] = [
@@ -100,6 +111,15 @@ impl Default for EvalParams {
             eg_passed_unstoppable_bonus: 500,
             king_activity_bonus: 3,
             king_activity_phase_threshold: 16,
+
+            knight_mg_mobility: 3,
+            knight_eg_mobility: 3,
+            bishop_mg_mobility: 3,
+            bishop_eg_mobility: 4,
+            rook_mg_mobility: 2,
+            rook_eg_mobility: 5,
+            queen_mg_mobility: 1,
+            queen_eg_mobility: 2,
         }
     }
 }
@@ -204,6 +224,16 @@ impl EvalParams {
             "king_activity_phase_threshold",
             p.king_activity_phase_threshold,
         );
+
+        let mob = section(v, "mobility");
+        p.knight_mg_mobility = i(&mob, "knight_mg", p.knight_mg_mobility);
+        p.knight_eg_mobility = i(&mob, "knight_eg", p.knight_eg_mobility);
+        p.bishop_mg_mobility = i(&mob, "bishop_mg", p.bishop_mg_mobility);
+        p.bishop_eg_mobility = i(&mob, "bishop_eg", p.bishop_eg_mobility);
+        p.rook_mg_mobility = i(&mob, "rook_mg", p.rook_mg_mobility);
+        p.rook_eg_mobility = i(&mob, "rook_eg", p.rook_eg_mobility);
+        p.queen_mg_mobility = i(&mob, "queen_mg", p.queen_mg_mobility);
+        p.queen_eg_mobility = i(&mob, "queen_eg", p.queen_eg_mobility);
 
         p
     }

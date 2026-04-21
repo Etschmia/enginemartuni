@@ -620,19 +620,110 @@ Martuni spielt jetzt einige Tage unbeaufsichtigt (Dienstag nächste Woche
 liegen mehrere hundert Partien zur Auswertung vor). Keine weiteren
 Änderungen, bis die neue Blunder-Analyse da ist.
 
-### Offene Schritte (nicht angefasst während Messfenster)
+---
 
-5. **Mobility-Term in Eval** — gegen `unclassified` + `positional_collapse`
-   in passivem Mittelspiel. Kleiner Bonus pro legalem Zug je Figur.
+## Regression-Analyse (2026-04-21)
+
+322 Blunder aus **154 Partien** seit dem 16.04-Commit (`27c10ea
+search+eval: Killer/History-Heuristic, König-Guard auf R+Minor verschärft`).
+Rating-Entwicklung im gleichen Zeitraum:
+
+| Zeitformat | 16.04 16:00 | 21.04 09:00 | Delta |
+|---|---|---|---|
+| Blitz    | 1662 | **1733** | **+71** |
+| Rapid    | 1771 | **1842** | **+71** |
+
+### Blunder/Partie
+
+- 16.04: 113 / 53 ≈ **2.13 Bl./Partie**
+- 20.04: 322 / 154 ≈ **2.09 Bl./Partie**
+
+→ Die Rate pro Partie ist praktisch konstant, Rating aber +71 in beiden
+Formaten. Der Gewinn stammt **nicht** aus weniger Blundern pro Partie,
+sondern aus **besserer Qualität der übrigen Züge** — Killer/History +
+SEE-Ordering + R+Minor-Guard heben das Baseline-Spiel sichtbar an, auch
+wenn der Blunder-Floor noch gleich hoch ist.
+
+### Motiv-Vergleich 16.04 → 20.04
+
+| Motiv | 16.04 % | 20.04 % | Trend | Absolut 20.04 |
+|---|---|---|---|---|
+| unclassified | 32% | 38% | ✗ gestiegen | 124 |
+| **allows_mate** | **19%** | **15%** | ✓ Guard wirkt | 48 |
+| **missed_capture** | **17%** | **14%** | ✓ Killer/History wirkt | 45 |
+| **king_safety** | **5%** | **12%** | ✗✗ mehr als verdoppelt | 39 |
+| positional_collapse | 16% | 11% | ✓ | 34 |
+| hangs_knight | 4% | 7% | ✗ | 24 |
+| hangs_bishop | 7% | 6% | ≈ | 19 |
+| hangs_rook | — | 5% | — | 15 |
+| missed_mate | — | 4% | — | 14 |
+| hangs_queen | — | 2% | — | 5 |
+
+### Was gut funktioniert hat
+
+- **R+Minor-Guard:** `allows_mate` sinkt von 19% auf 15% trotz dreifach
+  größerem Sample. Die Endspiel-Mattnetze, die am 16.04 noch häufig waren
+  (`Kd4/Kc2/Ke3`), sind seltener geworden.
+- **Killer/History:** `missed_capture` sinkt von 17% auf 14%, und
+  `positional_collapse` von 16% auf 11% — beides Motive, die von besserer
+  Zugsortierung profitieren (gegnerische Widerlegungen werden früher
+  gefunden, mehr Alpha-Beta-Cutoffs).
+- **Rating +71 in beiden Formaten** in 4 Tagen ist klar signifikant und
+  der stärkste bisher gemessene Sprung nach einem einzelnen Commit-Batch.
+
+### Neue Sorgenkinder
+
+1. **`king_safety` verdoppelt** (5% → 12%), 19 von 39 Fällen im Endspiel.
+   Der R+Minor-Guard fängt gedeckte Schwerfiguren-Mattnetze ab, aber
+   nicht **reine Pawn-Endgames** mit wanderndem König. Beispielcluster
+   (CCI-7 in einer einzigen Partie `BGOX2GcM`): 73. Kf5 / 88. Kf6 / 92. f3 /
+   152. Kd3 / 167. Kb3 — fünf `allows_mate` mit `martuni=+0cp` während
+   SF +400–500cp Vorsprung sieht. Martuni kennt in KP-Endspielen weder
+   Opposition noch Square-of-the-Pawn.
+
+2. **`unclassified` gestiegen** (32% → 38%) — 97 davon im Mittelspiel.
+   Klassisch Mobility-Defizit: passive Türme/Läufer werden belohnt solange
+   sie irgendwo stehen. Kein einzelner Fix, aber eine Mobility-Metrik
+   würde den ganzen Bodensatz anheben.
+
+3. **`hangs_knight` leicht gestiegen** (4% → 7%). Meist sind das aber
+   Randfälle (Springer wird durch Pin / Fork-Drohung durchschaut), nicht
+   das frühere "Springer hängt trivial". Mit tieferer Suche (NMP) würden
+   die meisten sichtbar — kein eigenständiger Eval-Fix nötig.
+
+### Einschätzung vor NMP
+
+Die „Stellschrauben anziehen"-Option vor NMP läuft auf zwei Kandidaten
+hinaus — **Mobility** oder **Pawn-Endgame-Wissen**:
+
+| Kandidat | Zielmotive | Aufwand | Risiko |
+|---|---|---|---|
+| **Mobility-Term** | unclassified (124), positional_collapse (34) = ~49% der Blunder | 1 neuer Eval-Term, Parameter-Tuning | Mittel — Mobility kann in geschlossenen Stellungen King-Aktivität überstimmen |
+| **Pawn-Endgame-Guard** | endgame allows_mate (22) + endgame king_safety (19) = ~13% der Blunder, aber konzentriert | Opposition-Erkennung + Square-Rule | Hoch — spezialisiertes Endgame-Wissen ist fragil |
+| **NMP** | indirekt alle Motive über tiefere Suche | Moderat, aber Zugzwang-Bugs im Endspiel berüchtigt | Hoch im Endspiel |
+
+**Empfehlung:** Zuerst Mobility — der absolute Hebel (49% aller Blunder)
+ist groß, der Effekt wirkt im Mittelspiel wo Martuni die meisten Partien
+entscheidet, und der Term ist konservativ abschätzbar (kleine cp-Werte,
+keine Tiefen-Pruning-Risiken wie bei NMP). Pawn-Endgame-Wissen bleibt
+danach offen, weil es sauber isoliert vom Rest eingebaut werden kann.
+NMP erst, wenn Mobility sich stabilisiert hat.
+
+---
+
+### Offene Schritte
+
+5. **Mobility-Term in Eval** (nächster Schritt) — gegen `unclassified` +
+   `positional_collapse` im Mittelspiel. Kleiner cp-Bonus pro legalem
+   (Nicht-König-, Nicht-Bauer-)Zug, Piece-Typ-spezifisch, Tapered
+   Midgame/Endgame.
+6. **Pawn-Endgame-Guard** — Opposition in K+P-vs-K, Square-of-the-Pawn.
+   Nach Mobility-Stabilisierung.
 7. **SEE-Performance optimieren** — `all_attackers_to` könnte inkrementell
    aktualisiert werden statt pro Schlag neu berechnet.
-8. **Nächste Regression** — nach mehreren hundert Partien:
-   - `missed_capture` sollte durch Killer/History sinken
-   - `allows_mate` in Endspielen sollte durch verschärften Guard sinken
-   - `unclassified` sollte mit sinken
-9. **Eval-Erweiterungen (nach Daten):**
+8. **Eval-Erweiterungen (nach Daten):**
    - Outposts / schwache Felder
    - Turm auf 7. Reihe
    - Bishop-Trap-Detection
-10. **Null-Move-Pruning** — erst wenn Endspiel stabil ist und Ordering
-    (Killer/History) sich als tragfähig erwiesen hat.
+9. **Null-Move-Pruning** — erst wenn Mobility + Pawn-Endgame-Guard
+   gemessen sind und Endspiel nicht mehr die größte Fehlerquelle ist.

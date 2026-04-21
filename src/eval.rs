@@ -32,7 +32,11 @@ pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
 
     let king_act = king_activity_endgame(board, phase, p);
 
-    non_pst + taper(mg, eg, phase) + king_act
+    let (w_mob_mg, w_mob_eg) = mobility_score(board, Color::White, p);
+    let (b_mob_mg, b_mob_eg) = mobility_score(board, Color::Black, p);
+    let mob = taper(w_mob_mg - b_mob_mg, w_mob_eg - b_mob_eg, phase);
+
+    non_pst + taper(mg, eg, phase) + king_act + mob
 }
 
 /// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
@@ -417,6 +421,57 @@ fn rook_file_bonus(
     score
 }
 
+/// Bauernangriffe einer Seite als BitBoard. Weiße Bauern schlagen NE/NW
+/// (shift +9 / +7 mit File-Maske gegen Wrap), schwarze Bauern SE/SW.
+fn pawn_attacks_of(pawns: BitBoard, us: Color) -> BitBoard {
+    const NOT_A_FILE: u64 = 0xFEFE_FEFE_FEFE_FEFE;
+    const NOT_H_FILE: u64 = 0x7F7F_7F7F_7F7F_7F7F;
+    let bb: u64 = pawns.0;
+    let attacks = match us {
+        Color::White => ((bb << 9) & NOT_A_FILE) | ((bb << 7) & NOT_H_FILE),
+        Color::Black => ((bb >> 7) & NOT_A_FILE) | ((bb >> 9) & NOT_H_FILE),
+    };
+    BitBoard::new(attacks)
+}
+
+/// Safe Mobility je Figurentyp (Springer, Läufer, Turm, Dame).
+/// Zielfelder, die (a) eine eigene Figur belegen oder (b) von einem
+/// gegnerischen Bauern angegriffen werden, zählen nicht mit.
+/// Rückgabe: (mg, eg) Beitrag aus Sicht von `us`.
+fn mobility_score(board: &Board, us: Color, p: &EvalParams) -> (i32, i32) {
+    let our_bb = *board.color_combined(us);
+    let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
+    let occ = *board.combined();
+    let safe = !(our_bb | pawn_attacks_of(their_pawns, !us));
+
+    let mut mg = 0;
+    let mut eg = 0;
+
+    for sq in *board.pieces(Piece::Knight) & our_bb {
+        let n = (get_knight_moves(sq) & safe).popcnt() as i32;
+        mg += n * p.knight_mg_mobility;
+        eg += n * p.knight_eg_mobility;
+    }
+    for sq in *board.pieces(Piece::Bishop) & our_bb {
+        let n = (get_bishop_moves(sq, occ) & safe).popcnt() as i32;
+        mg += n * p.bishop_mg_mobility;
+        eg += n * p.bishop_eg_mobility;
+    }
+    for sq in *board.pieces(Piece::Rook) & our_bb {
+        let n = (get_rook_moves(sq, occ) & safe).popcnt() as i32;
+        mg += n * p.rook_mg_mobility;
+        eg += n * p.rook_eg_mobility;
+    }
+    for sq in *board.pieces(Piece::Queen) & our_bb {
+        let attacks = get_rook_moves(sq, occ) | get_bishop_moves(sq, occ);
+        let n = (attacks & safe).popcnt() as i32;
+        mg += n * p.queen_mg_mobility;
+        eg += n * p.queen_eg_mobility;
+    }
+
+    (mg, eg)
+}
+
 /// König-Aktivitäts-Bonus im Endspiel (aus Sicht von Weiß).
 /// Positiv wenn weißer König zentraler steht als schwarzer.
 /// Skaliert linear mit dem "Endspielgrad" (phase sinkt → Bonus steigt).
@@ -531,8 +586,14 @@ mod tests {
         let p = EvalParams::default();
         // Non-PST: 900 + 30 (pair) - 50 (backrank knight) = 880
         // PST: die Grundreihen-Figuren werden stark abgewertet → taper bei phase=3
-        // Total: 820
-        assert_eq!(evaluate(&b, &p), 820);
+        // Mobility (phase=3, keine Bauern → safe = nicht own):
+        //   Nb1: 3 Zuege (a3, c3, d2)         → mg 9, eg 9
+        //   Bc1: 7 Zuege (NE 5 + NW 2)        → mg 21, eg 28
+        //   Bf1: 7 Zuege (NE 2 + NW 5)        → mg 21, eg 28
+        //   Summe Weiss: mg 51, eg 65. Schwarz nur Koenig → 0.
+        //   taper(51, 65, 3) = (51*3 + 65*21)/24 = 1518/24 = 63
+        // Total: 820 + 63 = 883
+        assert_eq!(evaluate(&b, &p), 883);
     }
 
     #[test]
@@ -556,8 +617,14 @@ mod tests {
         // king_activity_endgame: phase=5 < threshold=16, W-e4 score=7, B-d8 score=4,
         //   eg_weight=11. Guard (2026-04-15): Weiß hat 2 Türme → Schwarz-Bonus
         //   unterdrückt (b=0). Weiß ungefährdet (Schwarz hat nichts). bonus = 7*11*3/16 = 14
-        // Total: 1390 + 5 + 14 = 1409
-        assert_eq!(evaluate(&b, &p), 1409);
+        // Mobility (keine Bauern → safe = nicht own):
+        //   Ra1: 10 Attacks (7N + 3E bis d1), -1 own d1 = 9      → mg 18, eg 45
+        //   Bd1: 7 Zuege (NE 4 + NW 3)                           → mg 21, eg 28
+        //   Rh1: 11 Attacks (7N + 4W bis d1), -1 own d1 = 10     → mg 20, eg 50
+        //   Summe Weiss: mg 59, eg 123. Schwarz 0.
+        //   taper(59, 123, 5) = (59*5 + 123*19)/24 = 2632/24 = 109
+        // Total: 1390 + 5 + 14 + 109 = 1518
+        assert_eq!(evaluate(&b, &p), 1518);
     }
 
     #[test]
@@ -638,5 +705,31 @@ mod tests {
         let p = EvalParams::default();
         // f2 intakt = 10, g3 advanced = 5, h2 intakt = 10 → 25
         assert_eq!(king_safety(&b, Color::White, &p), 25);
+    }
+
+    #[test]
+    fn mobility_central_knight_has_eight_safe_squares() {
+        // Springer auf d4, keine Bauern → alle 8 Zielfelder safe
+        let b = Board::from_str("4k3/8/8/8/3N4/8/8/4K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let (mg, eg) = mobility_score(&b, Color::White, &p);
+        // knight_mg=3, knight_eg=3
+        assert_eq!((mg, eg), (24, 24));
+        // Schwarz hat nur den Koenig → 0
+        let (bmg, beg) = mobility_score(&b, Color::Black, &p);
+        assert_eq!((bmg, beg), (0, 0));
+    }
+
+    #[test]
+    fn mobility_enemy_pawn_masks_target_square() {
+        // Springer auf f3; schwarzer Bauer auf d6 deckt e5.
+        // get_knight_moves(f3) = {e1, g1, d2, h2, d4, h4, e5, g5}.
+        //   e1 ist eigener Koenig → raus (own-Maske).
+        //   e5 ist von d6-Bauer angegriffen → raus (safe-Maske).
+        //   Bleibt 6 safe Zuege.
+        let b = Board::from_str("4k3/8/3p4/8/8/5N2/8/4K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let (mg, eg) = mobility_score(&b, Color::White, &p);
+        assert_eq!((mg, eg), (18, 18));
     }
 }

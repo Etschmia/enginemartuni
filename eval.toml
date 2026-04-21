@@ -101,3 +101,24 @@ passed_unstoppable_bonus = 500
 # Maximalbonus (Zentrum vs. Ecke, Phase=0): 7 * 3 = 21 cp
 king_activity_bonus = 3
 king_activity_phase_threshold = 16
+
+[mobility]
+# Safe-Mobility: cp pro legalem Zielfeld, das nicht von eigener Figur
+# besetzt und nicht von einem gegnerischen Bauern angegriffen ist.
+# Werte werden getapert (mg im Mittelspiel, eg im Endspiel).
+#
+# Max-Zuege je Figur:  Knight 8, Bishop 13, Rook 14, Queen 27.
+# Mit den Default-Werten liegt die Mobility-Summe einer Seite in
+# wilden Stellungen bei ca. 100-120 cp (mg) — spuerbar, aber deutlich
+# unter Figurenwerten.
+#
+# Bauern und Koenig werden bewusst NICHT bewertet: Bauern decken PST +
+# Freibauer-Bonus, Koenig deckt king_safety + king_activity_endgame.
+knight_mg = 3
+knight_eg = 3
+bishop_mg = 3
+bishop_eg = 4
+rook_mg   = 2
+rook_eg   = 5
+queen_mg  = 1
+queen_eg  = 2
