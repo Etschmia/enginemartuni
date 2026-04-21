@@ -92,14 +92,43 @@ Heuristisch, bewusst nicht "clever". Ein Zug kann mehrere Motive bekommen:
 |-----------------------|---------------------------------------------------------------------------|-----------------------------------------------------------|
 | `missed_mate`         | Stockfish hatte Matt für uns, wir haben es nicht gespielt                 | `search.rs`: Move Ordering, Mate-Distance-Pruning         |
 | `allows_mate`         | Nach dem Zug hat der Gegner Matt                                          | `search.rs`: Quiescence, `eval.rs`: King-Safety-Gewicht   |
-| `hangs_<piece>`       | Mini-SEE: Figur nach dem Zug niedriger verteidigt als angegriffen         | `search.rs`: Quiescence-Abdeckung, SEE in Move Ordering   |
+| `hangs_<piece>`       | SEE-lite: Figur ist nach dem Zug unterverteidigt; bei gleicher Zahl nur wenn der billigste Angreifer Material gewinnt | `search.rs`: Quiescence-Abdeckung, SEE in Move Ordering   |
 | `missed_capture`      | Best Move war Schlagzug, gespielter Zug nicht                             | Move Ordering (MVV/LVA?), Quiescence-Tiefe                |
-| `king_safety`         | ≥ 4 Angreifer in der 3×3-Zone um den eigenen König                        | `eval.rs`: `KING_SAFETY_*` Gewichte, Pawn-Shield          |
+| `king_safety`         | Nach dem Zug greifen mehr gegnerische Figuren die 3×3-King-Zone an und es sind insgesamt mindestens 4 | `eval.rs`: `KING_SAFETY_*` Gewichte, Pawn-Shield          |
 | `positional_collapse` | Fallback: Verlust ≥ 300 cp, aber kein taktisches Motiv gefunden           | `eval.rs`: fehlendes positionelles Wissen (s. unten)      |
 
 **Wichtig:** der `hangs_*`-Check bricht beim ersten gefundenen Stück ab. Wenn
 du feineres Mapping willst (Turm vs. Springer sind unterschiedliche
 Diagnosen), das `break` rausnehmen.
+
+#### Wartungshinweis: Präzisierung vom 2026-04-21
+
+Die erste Fassung des Skripts war in zwei Punkten zu grob und hat Cluster
+verzerrt:
+
+- `king_safety` zählte effektiv **angegriffene Felder** in der King-Zone, nicht
+  **verschiedene Angreifer**. Das konnte ruhige Stellungen mit vielen
+  überdeckten Feldern fälschlich wie einen Angriff aussehen lassen.
+- `hangs_<piece>` taggte eine Figur schon dann als "hängend", wenn der
+  billigste Angreifer billiger war als das Opfer. Das erzeugte False Positives
+  in Stellungen, in denen genug Verteidiger da waren.
+
+Deshalb wurde die Heuristik nachgeschärft:
+
+- `king_safety` zählt jetzt **distinct attacker** vor und nach dem Zug. Das
+  Motiv feuert nur, wenn der eigene Zug die Zahl der gegnerischen Angreifer auf
+  die King-Zone **erhöht** und danach mindestens **vier** gegnerische Figuren
+  Druck machen. Ziel: echte Verschlechterungen markieren, nicht statisch
+  ohnehin gefährliche Stellungen.
+- `hangs_<piece>` benutzt jetzt eine bewusst einfache SEE-lite-Regel:
+  `#attackers > #defenders` ist sofort verdächtig; bei gleicher Zahl wird nur
+  dann markiert, wenn der billigste Angreifer Material gegen das Opfer gewinnt
+  und der billigste Verteidiger keine gleich günstige Recapture-Struktur
+  anbietet. Das ist immer noch heuristisch, liegt aber deutlich näher an der
+  Dokumentation "unterverteidigt" als die alte Ein-Bedingungs-Regel.
+
+Die Heuristiken bleiben absichtlich billig. Dieses Skript soll Batch-Reports
+für viele Partien erzeugen, kein vollständiges Taktikmodul nachbauen.
 
 ### Was die Heuristik *nicht* sieht
 
@@ -247,6 +276,27 @@ Der Report wird auf stdout geschrieben: erst die Summentabelle
 (Phase / Motiv / Phase × Motiv), dann die Einzel-Blunder mit FEN, bestem Zug
 laut Stockfish und cp-Loss. Für Regression-Tracking sinnvoll: stdout in eine
 Datei umleiten und mit `diff` gegen den Lauf vor der Eval-Änderung vergleichen.
+
+#### Wartungshinweis: Output-Vertrag vom 2026-04-21
+
+Der Report-Output wurde an dieser Stelle bewusst nachgeschärft:
+
+- Die Detailzeilen enthalten jetzt wieder explizit die **FEN vor dem Patzer**.
+  Das macht einzelne Blunder direkt reproduzierbar und erlaubt, einen Report
+  später ohne PGN-Suche auf konkrete Teststellungen zurückzuführen.
+- Zusammenfassende Skip-Meldungen (`kein Header-Match`, `--losses-only`) gehen
+  jetzt auf **stderr** statt auf stdout. Grund: stdout soll diffbar bleiben.
+  Wer zwei Analyzer-Läufe vor und nach einer Eval-Änderung vergleicht, will nur
+  den eigentlichen Report vergleichen und keine Laufmetadaten.
+
+Praktisch heißt das:
+
+```bash
+python tools/analyze_blunders.py ... > report.txt 2> meta.log
+```
+
+`report.txt` ist dann stabiler für Regression-Vergleiche, `meta.log` enthält
+die Laufumgebung und Überspring-Gründe.
 
 ## Für Claude in einer zukünftigen Session
 

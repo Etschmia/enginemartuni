@@ -102,21 +102,50 @@ def score_to_cp(score: chess.engine.PovScore, side: chess.Color) -> int:
     return pov.score(mate_score=100000)
 
 
+def count_king_zone_attackers(board: chess.Board, defender: chess.Color) -> int:
+    """Count distinct enemy pieces attacking the defender king's 3x3 zone."""
+    king_sq = board.king(defender)
+    if king_sq is None:
+        return 0
+
+    zone = chess.SquareSet(chess.BB_KING_ATTACKS[king_sq]) | chess.SquareSet(chess.BB_SQUARES[king_sq])
+    attackers: set[chess.Square] = set()
+    for sq in zone:
+        attackers.update(board.attackers(not defender, sq))
+    return len(attackers)
+
+
 def is_hanging(board: chess.Board, square: chess.Square) -> bool:
-    """Heuristic: piece on `square` is attacked by side-to-move and undefended or under-defended."""
+    """SEE-lite heuristic for pieces that are under-defended after a move."""
     piece = board.piece_at(square)
     if piece is None:
         return False
-    attackers = board.attackers(not piece.color, square)
+    attackers = [
+        PIECE_VALUES[board.piece_at(s).piece_type]
+        for s in board.attackers(not piece.color, square)
+        if board.piece_at(s) is not None
+    ]
     if not attackers:
         return False
-    defenders = board.attackers(piece.color, square)
+    defenders = [
+        PIECE_VALUES[board.piece_at(s).piece_type]
+        for s in board.attackers(piece.color, square)
+        if board.piece_at(s) is not None
+    ]
     if not defenders:
         return True
-    # Very rough SEE-lite: compare lowest attacker vs lowest defender value.
-    min_attacker = min(PIECE_VALUES[board.piece_at(s).piece_type] for s in attackers)
+
+    if len(attackers) > len(defenders):
+        return True
+
+    # If the exchange is numerically balanced, still tag obvious loose pieces
+    # where the cheapest attacker wins material and the cheapest recapture is not cheap.
+    attackers.sort()
+    defenders.sort()
+    min_attacker = attackers[0]
+    min_defender = defenders[0]
     piece_val = PIECE_VALUES[piece.piece_type]
-    return min_attacker < piece_val
+    return len(attackers) == len(defenders) and min_attacker < piece_val and min_attacker < min_defender
 
 
 def classify_motifs(
@@ -160,13 +189,11 @@ def classify_motifs(
         if board_before.is_capture(best_move):
             motifs.append("missed_capture")
 
-    # King safety degradation: opponent attackers near our king increased sharply.
-    king_sq = board_after.king(mover)
-    if king_sq is not None:
-        zone = chess.SquareSet(chess.BB_KING_ATTACKS[king_sq]) | chess.SquareSet(chess.BB_SQUARES[king_sq])
-        attackers = sum(1 for sq in zone if board_after.attackers(not mover, sq))
-        if attackers >= 4:
-            motifs.append("king_safety")
+    # King safety degradation: more distinct enemy pieces attack our king zone after the move.
+    attackers_before = count_king_zone_attackers(board_before, mover)
+    attackers_after = count_king_zone_attackers(board_after, mover)
+    if attackers_after >= 4 and attackers_after > attackers_before:
+        motifs.append("king_safety")
 
     # Material swing without compensation: eval loss very large and no motif fired yet.
     if not motifs and (eval_before - eval_after) >= 300:
@@ -384,6 +411,7 @@ def print_report(report: Report) -> None:
     for b in report.blunders:
         best = f" best={b.best_move_san}" if b.best_move_san else ""
         motifs = ",".join(b.motifs) if b.motifs else "unclassified"
+        fen = f" fen={b.fen_before}"
         martuni = ""
         if b.martuni_eval_cp is not None:
             diff = b.martuni_eval_cp - b.eval_before_cp
@@ -391,7 +419,7 @@ def print_report(report: Report) -> None:
             martuni = f"  martuni={b.martuni_eval_cp:+d}cp(sf_diff={sign}{diff})"
         print(
             f"[{b.game_id}] {b.move_number}{'.' if b.side == 'white' else '...'} "
-            f"{b.move_san}  loss={b.loss_cp}cp  phase={b.phase}  motifs={motifs}{best}{martuni}"
+            f"{b.move_san}  loss={b.loss_cp}cp  phase={b.phase}  motifs={motifs}{best}{fen}{martuni}"
         )
 
 
@@ -551,9 +579,9 @@ def main() -> int:
         engine.quit()
 
     if skipped:
-        print(f"\n({skipped} game(s) skipped — no '{args.player}' header match)")
+        print(f"\n({skipped} game(s) skipped — no '{args.player}' header match)", file=sys.stderr)
     if skipped_wins:
-        print(f"({skipped_wins} game(s) skipped — not a loss, --losses-only active)")
+        print(f"({skipped_wins} game(s) skipped — not a loss, --losses-only active)", file=sys.stderr)
 
     print_report(report)
     return 0
