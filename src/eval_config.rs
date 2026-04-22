@@ -41,6 +41,11 @@ pub struct EvalParams {
     pub ks_shield_missing_penalty: i32,
     pub ks_exposed_center_penalty: i32,
     pub safety_table: Vec<i32>,
+    /// Gewichtungsfaktor für die König-Expositions-Strafe (cp pro
+    /// Expositions-Punkt). Wirkt nur, wenn der König mindestens 2 Reihen
+    /// vom Heimrand entfernt steht UND der Gegner noch nennenswert
+    /// Schwergewicht-Material hat (siehe eval::king_exposure_penalty).
+    pub king_exposure_weight: i32,
 
     // Endspiel-Mop-up
     pub eg_corner_weight: i32,
@@ -105,6 +110,11 @@ impl Default for EvalParams {
             ks_shield_missing_penalty: -15,
             ks_exposed_center_penalty: -30,
             safety_table: DEFAULT_SAFETY_TABLE.to_vec(),
+            // Default 20: rank_dist=2, enemy_npm=1600cp → exposure=1, penalty=20cp.
+            //                rank_dist=4, enemy_npm=1600cp → exposure=4, penalty=80cp.
+            // Grob kalibriert, damit der Malus im klassischen Mittelspiel in der
+            // gleichen Größenordnung wie ein verlorenes Bauern-Tempo ist.
+            king_exposure_weight: 20,
 
             eg_corner_weight: 20,
             eg_king_proximity_weight: 10,
@@ -195,6 +205,8 @@ impl EvalParams {
             i(&ks, "shield_missing_penalty", p.ks_shield_missing_penalty);
         p.ks_exposed_center_penalty =
             i(&ks, "exposed_center_penalty", p.ks_exposed_center_penalty);
+        p.king_exposure_weight =
+            i(&ks, "exposure_weight", p.king_exposure_weight);
 
         if let Some(arr) = ks
             .and_then(|s| s.get("safety_table"))

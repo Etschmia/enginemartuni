@@ -115,6 +115,103 @@ def count_king_zone_attackers(board: chess.Board, defender: chess.Color) -> int:
     return len(attackers)
 
 
+def is_king_walk(
+    board_before: chess.Board,
+    board_after: chess.Board,
+    move: chess.Move,
+    mover: chess.Color,
+) -> bool:
+    """König marschiert im Mittelspiel/frühen Endspiel in die gegnerische Hälfte.
+
+    Motivierend: 16...Kg4 im mochi_bot-Spiel (EY25JUSH). Der König verließ das
+    Schach auf f5, hatte Kg6 (sicher, Rang 2 vom Heimrand) und Kg4 (Rang 4 vom
+    Heimrand) zur Auswahl und lief in die Angreifer hinein.
+
+    Heuristik:
+      - Bewegte Figur muss der König sein
+      - Zielrang ≥3 Reihen vom Heimrand entfernt (rank_dist ≥ 3)
+      - Genug Nicht-Bauern-Material vom Gegner auf dem Brett (≥2000cp), sonst
+        ist es ein legitimer Endspiel-König-Marsch.
+    """
+    piece = board_before.piece_at(move.from_square)
+    if piece is None or piece.piece_type != chess.KING:
+        return False
+
+    # Gegnerisches Schwerfiguren-Material muss noch substantiell sein.
+    # Schwelle 1500cp: deckt "2 Türme + Leichtfigur" (1300cp) knapp nicht ab,
+    # aber "2 Türme + 2 Leichtfiguren" (1600cp) sehr wohl — das ist die
+    # Mochi-EY25JUSH-Situation nach Damentausch. Unter 1500cp ist aktiver
+    # König schon wertvoller als Sicherheit (KR+N-Endspiele etc.).
+    enemy_npm = 0
+    for pt in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+        enemy_npm += len(board_after.pieces(pt, not mover)) * PIECE_VALUES[pt]
+    if enemy_npm < 1500:
+        return False
+
+    to_rank = chess.square_rank(move.to_square)
+    # Heimrand: 0 für Weiß, 7 für Schwarz
+    home = 0 if mover == chess.WHITE else 7
+    rank_dist = abs(to_rank - home)
+    return rank_dist >= 3
+
+
+def is_exposed_king(board_after: chess.Board, mover: chess.Color) -> bool:
+    """Statisch: König steht nach dem Zug in einer offenen 3×3-Zone.
+
+    Ergänzend zu `king_safety` (das einen Sprung der Angreiferzahl verlangt):
+    Diese Variante feuert, sobald mindestens 3 verschiedene gegnerische Figuren
+    die King-Zone angreifen — unabhängig davon, ob vorher schon so viele waren.
+
+    So werden Fälle erfasst, in denen schon mehrere Züge vorher der König offen
+    stand und ein weiterer Zug die Stellung nicht verbessert hat.
+    """
+    return count_king_zone_attackers(board_after, mover) >= 3
+
+
+def is_trade_down(
+    board_before: chess.Board,
+    board_after: chess.Board,
+    move: chess.Move,
+    info_after: chess.engine.InfoDict,
+) -> bool:
+    """Unsere Schlagfolge verliert netto Material.
+
+    Wir schlagen eine Figur X, die beste Antwort des Gegners ist eine Rückschlagung
+    auf demselben Feld mit einer Figur Y, wobei unser Opfer teurer war als X.
+
+    Ergänzt `hangs_*` für Fälle, in denen unsere schlagende Figur nominell eine
+    Deckung hatte — SEE-lite-Heuristik daneben liegen konnte, aber die Exchange-
+    Bilanz trotzdem minus ist.
+    """
+    if not board_before.is_capture(move):
+        return False
+
+    # Wert, den unser Schlag gewinnt
+    captured_on_ours = board_before.piece_at(move.to_square)
+    if captured_on_ours is None:
+        # En-passant: ein Bauer
+        gained = PIECE_VALUES[chess.PAWN]
+    else:
+        gained = PIECE_VALUES[captured_on_ours.piece_type]
+
+    # Beste Gegnerantwort
+    pv = info_after.get("pv", [])
+    if not pv:
+        return False
+    reply = pv[0]
+    if reply.to_square != move.to_square:
+        # Keine Rückschlagung auf unserem Zielfeld → dieser Motif-Prüfer greift nicht
+        return False
+    our_piece_now = board_after.piece_at(reply.to_square)
+    if our_piece_now is None:
+        return False
+    lost = PIECE_VALUES[our_piece_now.piece_type]
+
+    # Handelt es sich wirklich um eine verlierende Schlagfolge?
+    # Netto < 0 heißt: wir haben die Exchange verloren.
+    return (gained - lost) <= -100
+
+
 def is_hanging(board: chess.Board, square: chess.Square) -> bool:
     """SEE-lite heuristic for pieces that are under-defended after a move."""
     piece = board.piece_at(square)
@@ -194,6 +291,28 @@ def classify_motifs(
     attackers_after = count_king_zone_attackers(board_after, mover)
     if attackers_after >= 4 and attackers_after > attackers_before:
         motifs.append("king_safety")
+
+    # König-Marsch ins Mittelspiel-Feuer (2026-04-22 eingeführt).
+    # Fängt das Kg4-Muster aus dem mochi_bot-Spiel: in Stellungen mit vielen
+    # gegnerischen Figuren wandert der König freiwillig (oder halb-erzwungen)
+    # in die gegnerische Hälfte. Eigenständig von king_safety, weil der
+    # Angreiferzahlen-Sprung nicht immer eintritt (wenige aber starke Angreifer).
+    if is_king_walk(board_before, board_after, move, mover):
+        motifs.append("king_walk")
+
+    # Statische König-Exposition (2026-04-22 eingeführt).
+    # Feuert ohne „Sprung"-Bedingung, sobald der König nach dem Zug in einer
+    # offenen Zone steht. Ergänzt king_safety (das nur bei Eskalation anschlägt).
+    if "king_safety" not in motifs and is_exposed_king(board_after, mover):
+        motifs.append("exposed_king")
+
+    # Verlierende Schlag-Folge (2026-04-22 eingeführt).
+    # Greift, wenn unser Capture durch eine teurere Rückschlagung beantwortet
+    # wird. Ergänzt hangs_*, weil die SEE-lite-Heuristik bei gedeckten
+    # Figuren fälschlich „nicht hängend" sagen kann, die Gesamt-Exchange aber
+    # trotzdem minus ist.
+    if is_trade_down(board_before, board_after, move, info_after):
+        motifs.append("trade_down")
 
     # Material swing without compensation: eval loss very large and no motif fired yet.
     if not motifs and (eval_before - eval_after) >= 300:

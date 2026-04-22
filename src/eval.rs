@@ -133,14 +133,93 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams) -> i32 {
 
 /// Gesamt-Beitrag der King-Safety-Logik aus Sicht von `us`.
 /// Positiver Wert = sicher, negativer Wert = in Gefahr.
+///
+/// Setzt sich aus drei Termen zusammen:
+///  - `shield`   (+): Bauernschild drei Linien breit vor dem König
+///  - `danger`   (-): Angriffsgewichte gegnerischer Offiziere auf die 3×3-Zone
+///  - `exposure` (-): Malus für König zu weit vom Heimrand, wenn der Gegner
+///                    noch Schwergewicht-Material hat (siehe king_exposure_penalty)
 pub fn king_safety(board: &Board, us: Color, p: &EvalParams) -> i32 {
     let king_sq = board.king_square(us);
     let zone = king_zone(king_sq);
 
     let shield = pawn_shield_score(board, us, king_sq, p);
     let danger = king_danger(board, us, zone, p);
+    let exposure = king_exposure_penalty(board, us, p);
 
-    shield - danger
+    shield - danger - exposure
+}
+
+/// König-Expositions-Strafe (eingeführt 2026-04-22).
+///
+/// Ergänzt `shield` und `danger` um einen "König ist zu weit vom Heimrand
+/// weg, während der Gegner noch Schwergewicht hat"-Term. Motiviert durch
+/// das mochi_bot-Spiel (EY25JUSH), in dem Martuni mit 16...Kg4 aus dem
+/// Schach in die gegnerischen Figuren hineinlief — Kg6 wäre sicher gewesen.
+/// Die bisherige Heuristik aus `shield` (deaktiviert sich abseits der
+/// Heimreihe) und `danger` (wertet nur die 3×3-Nahzone) erkannte die
+/// Gefahr nicht stark genug: Kg6 und Kg4 bekamen praktisch denselben Score.
+///
+/// Formel:
+/// ```text
+///   rank_dist = |rank(König) - home_rank|    (0..7)
+///   enemy_npm = Σ Figurenwerte des Gegners (Springer+Läufer+Turm+Dame)
+///   Gate: rank_dist >= 2     (König auf Heim- oder vorgerückter Reihe ok)
+///   Gate: enemy_npm >= 1500  (sonst aktiver König im Endspiel erwünscht)
+///   exposure = (rank_dist - 1) * enemy_npm / 1000
+///   penalty  = exposure * king_exposure_weight
+/// ```
+///
+/// Beispiel Mochi 16...Kg4 (schwarz): rank_dist=4, weiß-NPM=1600cp
+///   exposure = 3 * 1600 / 1000 = 4 (Integer-Div)
+///   penalty  = 4 * 20 = 80cp Abzug
+/// Vergleich Kg6: rank_dist=2 → exposure = 1 * 1600 / 1000 = 1 → 20cp Abzug
+/// Differenz 60cp sollte in den Leaf-Nodes reichen, um Kg4 klar schlechter
+/// als Kg6 einzustufen.
+///
+/// Rückgabewert ist positiv (als "abzuziehender Malus" im Aufrufer gedacht).
+fn king_exposure_penalty(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    // Abstand des Königs zu seiner Grundreihe
+    let king_sq = board.king_square(us);
+    let rank = king_sq.get_rank().to_index() as i32;
+    let home_rank = match us {
+        Color::White => 0,
+        Color::Black => 7,
+    };
+    let rank_dist = (rank - home_rank).abs();
+
+    // rank_dist < 2: König steht auf Heim- oder erster vorgerückter Reihe.
+    // Das ist die normale Rochadeposition oder eine minimal vorgerückte
+    // Stellung (z.B. Kf1 nach Bauernverlust) — noch keine Exposition.
+    if rank_dist < 2 {
+        return 0;
+    }
+
+    // Gegnerisches Nicht-Bauern-Material in cp
+    let enemy = !us;
+    let enemy_bb = *board.color_combined(enemy);
+    let mut enemy_npm = 0;
+    enemy_npm += (*board.pieces(Piece::Knight) & enemy_bb).popcnt() as i32 * p.knight;
+    enemy_npm += (*board.pieces(Piece::Bishop) & enemy_bb).popcnt() as i32 * p.bishop;
+    enemy_npm += (*board.pieces(Piece::Rook) & enemy_bb).popcnt() as i32 * p.rook;
+    enemy_npm += (*board.pieces(Piece::Queen) & enemy_bb).popcnt() as i32 * p.queen;
+
+    // Unter dieser Schwelle hat der Gegner nicht mehr genug Feuerkraft,
+    // um einen exponierten König effektiv zu bestrafen. Die Endspiel-
+    // Termini (king_activity_endgame) übernehmen dann die Bewertung des
+    // aktiven Königs — und die wollen wir nicht übersteuern.
+    // 1500cp = 3 Leichtfiguren / 1R+2Minor / 2R (minus 2N). Alles darunter
+    // sind Material-Endspiele, in denen König-Zentralisierung wichtiger ist.
+    if enemy_npm < 1500 {
+        return 0;
+    }
+
+    // (rank_dist - 1): rank_dist=2 → Faktor 1 (leicht), rank_dist=7 → Faktor 6 (extrem).
+    // enemy_npm / 1000 als grobe "Wie viel Schwergewicht hat der Gegner"-Skala.
+    // Integer-Arithmetik: bewusst keine Gleitkomma — im Mittelspiel ergibt
+    // sich ein Bereich von 1..15 Expositions-Punkten.
+    let exposure = (rank_dist - 1) * enemy_npm / 1000;
+    exposure * p.king_exposure_weight
 }
 
 /// 3x3-Koenigszone: der Koenig selbst + alle acht Nachbarfelder.
@@ -695,6 +774,46 @@ mod tests {
         // Dame → 1 Angreifer, Gewicht 5, raw=5, safety_table[5]=5
         // = -45 - 5 = -50
         assert_eq!(king_safety(&b, Color::White, &p), -50);
+    }
+
+    #[test]
+    fn ks_exposure_midgame_central_king() {
+        // Schwarzer König zentral auf e5 (rank 4, home=7 → rank_dist=3).
+        // Weiß hat 2R + 2N = 1600cp NPM, also über der 1500cp-Schwelle.
+        // Kein Schild (König nicht auf Heimrand), keine Angreifer in der 3×3-Zone.
+        // exposure = (3-1) * 1600 / 1000 = 3 (Integer-Div)
+        // penalty  = 3 * 20 = 60cp
+        // Keine Schild-Bonus/Malus-Beiträge → king_safety = 0 - 0 - 60 = -60
+        let b = Board::from_str("8/8/8/4k3/8/8/8/RN2K1NR w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        assert_eq!(king_safety(&b, Color::Black, &p), -60);
+    }
+
+    #[test]
+    fn ks_exposure_suppressed_when_low_enemy_material() {
+        // Gleiche König-Stellung (e5), aber Weiß hat nur noch einen Turm:
+        // NPM = 500cp, unter der 1500cp-Schwelle → kein Expositions-Term.
+        // shield=0 (nicht auf Heimrand), danger=0 (keine Angreifer in Zone),
+        // exposure=0 → king_safety = 0.
+        let b = Board::from_str("8/8/8/4k3/8/8/8/R3K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        assert_eq!(king_safety(&b, Color::Black, &p), 0);
+    }
+
+    #[test]
+    fn ks_exposure_home_rank_king_not_penalized() {
+        // Rochierter schwarzer König auf g8 (rank 7 = Heimrand → rank_dist=0).
+        // Weiß hat 2R + N + B = 1600cp NPM (über der 1500-Schwelle) — alle
+        // Figuren weit weg auf der Grundreihe, keine greift g8-Zone an.
+        // Der Expositions-Term darf hier trotz hohem Gegner-Material NICHT
+        // feuern, weil rank_dist < 2. Genau das prüfen wir.
+        // shield: 3 Linien f/g/h leer → 3 × -15 = -45
+        // danger: keine Figur in der 3×3-Zone → 0
+        // exposure: rank_dist=0 → 0
+        // king_safety = -45 - 0 - 0 = -45
+        let b = Board::from_str("6k1/8/8/8/8/8/8/RRNBK3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        assert_eq!(king_safety(&b, Color::Black, &p), -45);
     }
 
     #[test]
