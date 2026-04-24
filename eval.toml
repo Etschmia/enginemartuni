@@ -46,6 +46,22 @@ rook_open_file_bonus = 30
 # Turm auf halb-offener Linie (keine eigenen, aber gegnerische Bauern)
 rook_semiopen_file_bonus = 15
 
+# Tarrasch-Regel: Turm gehört hinter den Freibauer. Wirkt pro
+# Turm-Freibauer-Paar auf derselben Linie (eigener oder gegnerischer Bauer).
+# Hinter eigenem Freibauer = Turm schiebt.
+rook_behind_own_passed_bonus = 15
+# Hinter gegnerischem Freibauer = Blockade von hinten (etwas stärker, weil
+# der Gegner den Bauer nicht mehr bewegen kann, ohne den Turm zu tauschen).
+rook_behind_enemy_passed_bonus = 20
+# Turm VOR eigenem Freibauer → blockt den eigenen Vormarsch (kleiner Malus).
+rook_blocks_own_passed_penalty = -10
+
+# Turm auf 7. Reihe aus eigener Sicht (Reihe 7 Weiß, Reihe 2 Schwarz).
+rook_seventh_bonus = 15
+# Extra-Bonus, wenn der gegnerische König auf der 8. (Grund-)Reihe steht —
+# der Turm schneidet eine Fluchtlinie ab ("pig on the seventh").
+rook_seventh_vs_king_eighth_bonus = 15
+
 [king_safety]
 # Gewichte je gegnerischer Figur, die die 3x3-King-Zone angreift.
 # Bauern und der gegnerische Koenig zaehlen nicht.
@@ -101,6 +117,14 @@ passed_unstoppable_bonus = 500
 # Maximalbonus (Zentrum vs. Ecke, Phase=0): 7 * 3 = 21 cp
 king_activity_bonus = 3
 king_activity_phase_threshold = 16
+
+# König-Freibauer-Synergie (Endspielterm). Wirkt wie king_activity nur unter
+# der Phase-Schwelle und skaliert mit (threshold - phase) / threshold.
+# Pro eigenem Freibauer: Bonus = (7 - chebyshev(König, Bauer)) * near_own_bonus.
+# Pro gegnerischem Freibauer (König als Blocker): analog mit near_enemy_bonus.
+# Max pro Bauer und Seite: 7 * bonus * (phase_weight=1) = 14 bzw. 21 cp.
+king_near_own_passed_bonus = 2
+king_near_enemy_passed_bonus = 3
 
 [mobility]
 # Safe-Mobility: cp pro legalem Zielfeld, das nicht von eigener Figur

@@ -31,12 +31,13 @@ pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
     let phase = game_phase(board);
 
     let king_act = king_activity_endgame(board, phase, p);
+    let king_pass_syn = king_passed_pawn_synergy(board, phase, p);
 
     let (w_mob_mg, w_mob_eg) = mobility_score(board, Color::White, p);
     let (b_mob_mg, b_mob_eg) = mobility_score(board, Color::Black, p);
     let mob = taper(w_mob_mg - b_mob_mg, w_mob_eg - b_mob_eg, phase);
 
-    non_pst + taper(mg, eg, phase) + king_act + mob
+    non_pst + taper(mg, eg, phase) + king_act + king_pass_syn + mob
 }
 
 /// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
@@ -121,6 +122,12 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams) -> i32 {
 
     // Tuerme auf offenen / halb-offenen Linien
     score += rook_file_bonus(our_rooks, our_pawns, their_pawns, p);
+
+    // Tarrasch-Regel: Turm-Freibauer-Koordination auf gleicher Linie
+    score += rook_passed_pawn_bonus(us, our_rooks, our_pawns, their_pawns, p);
+
+    // Turm auf 7. Reihe (besonders stark, wenn gegnerischer König auf 8.)
+    score += rook_seventh_rank_bonus(board, us, our_rooks, p);
 
     // Bauernphalanx (reihenweise)
     score += phalanx_bonus(our_pawns, p);
@@ -500,6 +507,147 @@ fn rook_file_bonus(
     score
 }
 
+/// Tarrasch-Regel: Turm gehört hinter den Freibauer.
+///
+/// Für jedes Turm-Freibauer-Paar auf derselben Linie:
+///  - eigener Turm hinter eigenem Freibauer → +bonus (schiebt den Bauer)
+///  - eigener Turm VOR eigenem Freibauer → -penalty (blockt sich selbst)
+///  - eigener Turm hinter gegnerischem Freibauer → +bonus (Blockade von hinten)
+///
+/// "Hinter" ist aus Sicht des Bauern zu lesen: Weißer Bauer läuft nach Norden,
+/// also ist der rückwärtige Sektor (kleinere Reihe) "hinter" ihm. Schwarzer
+/// Bauer entsprechend spiegelverkehrt.
+fn rook_passed_pawn_bonus(
+    us: Color,
+    our_rooks: BitBoard,
+    our_pawns: BitBoard,
+    their_pawns: BitBoard,
+    p: &EvalParams,
+) -> i32 {
+    let mut score = 0;
+    for rook_sq in our_rooks {
+        let file_mask = get_file(rook_sq.get_file());
+        let rook_rank = rook_sq.get_rank().to_index() as i32;
+
+        // Eigene Freibauern auf derselben Linie (maximal einer — ein zweiter
+        // wäre kein Freibauer, weil der erste auf derselben Linie stünde).
+        for pawn_sq in our_pawns & file_mask {
+            if !is_passed(pawn_sq, us, their_pawns) {
+                continue;
+            }
+            let pawn_rank = pawn_sq.get_rank().to_index() as i32;
+            if rook_is_behind_pawn(rook_rank, pawn_rank, us) {
+                score += p.rook_behind_own_passed_bonus;
+            } else if rook_rank != pawn_rank {
+                // Turm vor eigenem Freibauer → Malus (blockt Vormarsch).
+                score += p.rook_blocks_own_passed_penalty;
+            }
+        }
+
+        // Gegnerische Freibauern auf derselben Linie: Turm hinter ihnen
+        // (aus Bauer-Sicht) ist der klassische "Blockade-von-hinten"-Bonus.
+        for pawn_sq in their_pawns & file_mask {
+            if !is_passed(pawn_sq, !us, our_pawns) {
+                continue;
+            }
+            let pawn_rank = pawn_sq.get_rank().to_index() as i32;
+            if rook_is_behind_pawn(rook_rank, pawn_rank, !us) {
+                score += p.rook_behind_enemy_passed_bonus;
+            }
+        }
+    }
+    score
+}
+
+/// Prüft, ob ein Turm hinter einem Bauern (dessen Farbe `pawn_color`) steht.
+/// Weißer Bauer läuft Richtung Rang 7 → hinter ihm = Rang < pawn_rank.
+/// Schwarzer Bauer läuft Richtung Rang 0 → hinter ihm = Rang > pawn_rank.
+fn rook_is_behind_pawn(rook_rank: i32, pawn_rank: i32, pawn_color: Color) -> bool {
+    match pawn_color {
+        Color::White => rook_rank < pawn_rank,
+        Color::Black => rook_rank > pawn_rank,
+    }
+}
+
+/// Turm auf 7. Reihe aus eigener Sicht. Extra-Bonus, wenn der gegnerische
+/// König auf der 8. (Grund-)Reihe eingesperrt steht — dann schneidet der
+/// Turm eine Fluchtlinie ab ("pig on the seventh").
+fn rook_seventh_rank_bonus(
+    board: &Board,
+    us: Color,
+    our_rooks: BitBoard,
+    p: &EvalParams,
+) -> i32 {
+    let (seventh_rank, eighth_rank) = match us {
+        Color::White => (6, 7),
+        Color::Black => (1, 0),
+    };
+    let enemy_king_rank = board.king_square(!us).get_rank().to_index() as i32;
+
+    let mut score = 0;
+    for rook_sq in our_rooks {
+        if rook_sq.get_rank().to_index() as i32 == seventh_rank {
+            score += p.rook_seventh_bonus;
+            if enemy_king_rank == eighth_rank {
+                score += p.rook_seventh_vs_king_eighth_bonus;
+            }
+        }
+    }
+    score
+}
+
+/// König-Freibauer-Synergie (Endspielterm).
+///
+/// Für jeden eigenen Freibauer: je näher der eigene König (Chebyshev), desto
+/// mehr Bonus — der König soll den Bauer begleiten. Für jeden gegnerischen
+/// Freibauer: Bonus, wenn der eigene König als Blockadefigur in der Nähe steht.
+///
+/// Das ganze wirkt nur im Endspiel (Phase < `king_activity_phase_threshold`)
+/// und skaliert linear mit `(threshold - phase) / threshold`, analog zu
+/// `king_activity_endgame`. So verhindern wir, dass der König schon im
+/// Mittelspiel vor seinen Bauern herläuft und die Rochadesicherheit aufgibt.
+fn king_passed_pawn_synergy(board: &Board, phase: i32, p: &EvalParams) -> i32 {
+    if phase >= p.king_activity_phase_threshold {
+        return 0;
+    }
+    let w = side_king_passed_synergy(board, Color::White, p);
+    let b = side_king_passed_synergy(board, Color::Black, p);
+    let eg_weight = p.king_activity_phase_threshold - phase;
+    (w - b) * eg_weight / p.king_activity_phase_threshold
+}
+
+fn side_king_passed_synergy(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    let king_sq = board.king_square(us);
+    let our_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(us);
+    let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
+
+    let mut score = 0;
+    for pawn_sq in our_pawns {
+        if !is_passed(pawn_sq, us, their_pawns) {
+            continue;
+        }
+        let d = eval_chebyshev(king_sq, pawn_sq);
+        score += (7 - d) * p.king_near_own_passed_bonus;
+    }
+    for pawn_sq in their_pawns {
+        // Aus gegnerischer Sicht: der Gegner ist für seinen Bauer "us".
+        if !is_passed(pawn_sq, !us, our_pawns) {
+            continue;
+        }
+        let d = eval_chebyshev(king_sq, pawn_sq);
+        score += (7 - d) * p.king_near_enemy_passed_bonus;
+    }
+    score
+}
+
+/// Chebyshev-Distanz (King-Distance): max der File- und Rank-Differenz.
+/// Lokale Kopie, weil `endgame::chebyshev` privat ist.
+fn eval_chebyshev(a: Square, b: Square) -> i32 {
+    let df = (a.get_file().to_index() as i32 - b.get_file().to_index() as i32).abs();
+    let dr = (a.get_rank().to_index() as i32 - b.get_rank().to_index() as i32).abs();
+    df.max(dr)
+}
+
 /// Bauernangriffe einer Seite als BitBoard. Weiße Bauern schlagen NE/NW
 /// (shift +9 / +7 mit File-Maske gegen Wrap), schwarze Bauern SE/SW.
 fn pawn_attacks_of(pawns: BitBoard, us: Color) -> BitBoard {
@@ -654,8 +802,13 @@ mod tests {
         // Non-PST white: 300 (material) + 25 (file) + 90 (3 × passed rank-2 à 30cp) + 30 (phalanx) - 30 (centre king) = 415
         // Non-PST black: -30 (centre king) → non_pst total: 415 - (-30) = 445
         // PST diff (phase=0): Bauern d4/e4/f4 eg = 60, Kings cancel → +60
-        // Total: 505
-        assert_eq!(evaluate(&b, &p), 505);
+        // King-Freibauer-Synergie (phase=0 → voller Effekt):
+        //   Weiß (Ke1): 3 × chebyshev(e1,{d4,e4,f4})=3, bonus 2 → 3×(7−3)×2 = 24
+        //   Schwarz (Ke8) als Blocker gegen Weiß-Freibauern: chebyshev={4,4,4}, bonus 3 → 3×(7−4)×3 = 27
+        //   Diff: 24 − 27 = −3. Macht Sinn: Schwarzer König ist bereits auf der Rückseite
+        //   der Bauernkette, der weiße nicht — als Blocker näher dran als der weiße als Begleiter.
+        // Total: 505 − 3 = 502
+        assert_eq!(evaluate(&b, &p), 502);
     }
 
     #[test]
@@ -850,5 +1003,192 @@ mod tests {
         let p = EvalParams::default();
         let (mg, eg) = mobility_score(&b, Color::White, &p);
         assert_eq!((mg, eg), (18, 18));
+    }
+
+    // ---- Regel A: Tarrasch (Turm + Freibauer) ----
+
+    #[test]
+    fn rook_behind_own_passed_pawn_is_bonus() {
+        // Weißer Freibauer a6, weißer Turm a1 hinter ihm (kleinere Reihe =
+        // hinter dem weißen Bauer). Schwarz nur König h8.
+        let behind = Board::from_str("7k/8/P7/8/8/8/8/R3K3 w - - 0 1").unwrap();
+        // Gleiche Stellung, aber Turm auf a7 (vor dem Bauer).
+        let ahead = Board::from_str("7k/R7/P7/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let bonus = rook_passed_pawn_bonus(
+            Color::White,
+            *behind.pieces(Piece::Rook) & *behind.color_combined(Color::White),
+            *behind.pieces(Piece::Pawn) & *behind.color_combined(Color::White),
+            *behind.pieces(Piece::Pawn) & *behind.color_combined(Color::Black),
+            &p,
+        );
+        let penalty = rook_passed_pawn_bonus(
+            Color::White,
+            *ahead.pieces(Piece::Rook) & *ahead.color_combined(Color::White),
+            *ahead.pieces(Piece::Pawn) & *ahead.color_combined(Color::White),
+            *ahead.pieces(Piece::Pawn) & *ahead.color_combined(Color::Black),
+            &p,
+        );
+        assert_eq!(bonus, p.rook_behind_own_passed_bonus);
+        assert_eq!(penalty, p.rook_blocks_own_passed_penalty);
+    }
+
+    #[test]
+    fn rook_behind_enemy_passed_pawn_is_bonus() {
+        // Schwarzer Freibauer a3, weißer Turm a1 hinter ihm aus Sicht des
+        // schwarzen Bauers (der nach Süden läuft → Norden ist hinten).
+        // Weißer Turm auf a1 ist kleinere Reihe als a3 — das ist aus
+        // Schwarz-Bauer-Sicht "vor" ihm. NICHT der gewünschte Fall.
+        // Für den Bonus muss der weiße Turm AUF größerer Reihe stehen als
+        // der schwarze Bauer. Also a6 hinter a3 (aus Schwarz-Sicht).
+        let b = Board::from_str("7k/8/R7/8/8/p7/8/4K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let score = rook_passed_pawn_bonus(
+            Color::White,
+            *b.pieces(Piece::Rook) & *b.color_combined(Color::White),
+            *b.pieces(Piece::Pawn) & *b.color_combined(Color::White),
+            *b.pieces(Piece::Pawn) & *b.color_combined(Color::Black),
+            &p,
+        );
+        assert_eq!(score, p.rook_behind_enemy_passed_bonus);
+    }
+
+    #[test]
+    fn rook_unrelated_to_passed_pawn_is_zero() {
+        // Turm auf h1, Bauer auf a6. Nicht dieselbe Linie → kein Effekt.
+        // Schwarzer König auf g8 (nicht h8), damit der h1-Turm nicht Schach gibt.
+        let b = Board::from_str("6k1/8/P7/8/8/8/8/4K2R w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let score = rook_passed_pawn_bonus(
+            Color::White,
+            *b.pieces(Piece::Rook) & *b.color_combined(Color::White),
+            *b.pieces(Piece::Pawn) & *b.color_combined(Color::White),
+            *b.pieces(Piece::Pawn) & *b.color_combined(Color::Black),
+            &p,
+        );
+        assert_eq!(score, 0);
+    }
+
+    // ---- Regel B: Turm auf 7. Reihe ----
+
+    #[test]
+    fn rook_on_seventh_rank_bonus() {
+        // Weißer Turm auf b7, schwarzer König h8 (nicht auf Grundreihe für
+        // diesen Test, um nur den Basis-Bonus zu prüfen). Umweg: König g6.
+        // FEN: Turm b7, schwarzer König g6, weißer König e1.
+        let b = Board::from_str("8/1R6/6k1/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let score = rook_seventh_rank_bonus(
+            &b,
+            Color::White,
+            *b.pieces(Piece::Rook) & *b.color_combined(Color::White),
+            &p,
+        );
+        assert_eq!(score, p.rook_seventh_bonus);
+    }
+
+    #[test]
+    fn rook_on_seventh_with_king_on_eighth_extra_bonus() {
+        // Weißer Turm b7, schwarzer König auf 8. Reihe (h8) → klassisches
+        // abschneidendes Szenario, voller Bonus.
+        let b = Board::from_str("7k/1R6/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let score = rook_seventh_rank_bonus(
+            &b,
+            Color::White,
+            *b.pieces(Piece::Rook) & *b.color_combined(Color::White),
+            &p,
+        );
+        assert_eq!(
+            score,
+            p.rook_seventh_bonus + p.rook_seventh_vs_king_eighth_bonus
+        );
+    }
+
+    #[test]
+    fn rook_not_on_seventh_no_bonus() {
+        // Turm auf e1, kein 7.-Reihe-Bonus, auch wenn König auf 8. steht.
+        let b = Board::from_str("7k/8/8/8/8/8/8/4KR2 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let score = rook_seventh_rank_bonus(
+            &b,
+            Color::White,
+            *b.pieces(Piece::Rook) & *b.color_combined(Color::White),
+            &p,
+        );
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn rook_seventh_rank_mirrors_for_black() {
+        // Schwarzer Turm auf der 2. Reihe (= "7. Reihe aus Schwarz-Sicht"),
+        // weißer König auf e1 (Grundreihe für Schwarz).
+        let b = Board::from_str("4k3/8/8/8/8/8/1r6/4K3 b - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let score = rook_seventh_rank_bonus(
+            &b,
+            Color::Black,
+            *b.pieces(Piece::Rook) & *b.color_combined(Color::Black),
+            &p,
+        );
+        assert_eq!(
+            score,
+            p.rook_seventh_bonus + p.rook_seventh_vs_king_eighth_bonus
+        );
+    }
+
+    // ---- Regel C: König-Freibauer-Synergie ----
+
+    #[test]
+    fn king_near_own_passed_pawn_gives_bonus_in_endgame() {
+        // Weißer Freibauer a5, weißer König a4 direkt dahinter. Schwarz nur
+        // König h8. Phase=0 (reines Bauernendspiel), eg_weight=16 → voller
+        // Effekt.
+        let b = Board::from_str("7k/8/8/P7/K7/8/8/8 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        // chebyshev(a4,a5)=1 → Weiß-Anteil = (7−1)*2 = 12
+        // Schwarz-König h8 als Blocker: chebyshev(h8,a5)=max(7,3)=7 → 0
+        // eg_weight/threshold = 16/16 = 1 → Diff = 12
+        let score = king_passed_pawn_synergy(&b, game_phase(&b), &p);
+        assert_eq!(score, 12);
+    }
+
+    #[test]
+    fn king_near_enemy_passed_pawn_gives_bonus() {
+        // Schwarzer Freibauer a5, weißer König a4 direkt davor als Blocker.
+        // Weiß hat keinen eigenen Bauern. Erwartet: weißer König als
+        // Blocker-Bonus (*3).
+        let b = Board::from_str("7k/8/8/p7/K7/8/8/8 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        // Weiß-Block: chebyshev(a4,a5)=1 → (7−1)*3 = 18
+        // Schwarz-Block: sein eigener Bauer a5 ist Freibauer (weiße Bauern=0),
+        //   König h8, chebyshev(h8,a5)=7 → 0 für eigenen Bauer.
+        //   Gegner (weiße) Freibauern: keine → 0.
+        // Diff = 18 − 0 = 18, phase=0 → volle Skalierung
+        let score = king_passed_pawn_synergy(&b, game_phase(&b), &p);
+        assert_eq!(score, 18);
+    }
+
+    #[test]
+    fn king_pawn_synergy_disabled_in_middlegame() {
+        // Gleicher Aufbau wie "king_near_own_passed_pawn…", aber mit 4 Damen
+        // auf dem Brett (2 je Seite) → Phase = 16, genau auf der Schwelle.
+        // Die Damen sind so platziert, dass sie die gegnerischen Könige nicht
+        // angreifen (sonst wäre die Stellung ungültig).
+        let b = Board::from_str("5k2/4q3/3q4/P7/K7/3Q4/4Q3/8 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        assert!(game_phase(&b) >= p.king_activity_phase_threshold);
+        let score = king_passed_pawn_synergy(&b, game_phase(&b), &p);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn king_pawn_synergy_no_passed_pawns_is_zero() {
+        // Weiß und Schwarz haben jeweils einen Bauer, aber beide auf
+        // derselben Linie → keiner ist Freibauer.
+        let b = Board::from_str("7k/4p3/8/8/8/8/4P3/4K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let score = king_passed_pawn_synergy(&b, game_phase(&b), &p);
+        assert_eq!(score, 0);
     }
 }

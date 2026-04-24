@@ -30,6 +30,18 @@ pub struct EvalParams {
     pub rook_open_file_bonus: i32,
     /// Turm auf halb-offener Linie (keine eigenen, aber gegnerische Bauern)
     pub rook_semiopen_file_bonus: i32,
+    /// Tarrasch-Regel: eigener Turm hinter eigenem Freibauer auf derselben Linie.
+    /// Klassisches Turmendspiel-Prinzip (Turm schiebt von hinten).
+    pub rook_behind_own_passed_bonus: i32,
+    /// Gegenstück: eigener Turm hinter gegnerischem Freibauer (Blockade von hinten).
+    pub rook_behind_enemy_passed_bonus: i32,
+    /// Anti-Bonus: eigener Turm VOR eigenem Freibauer (blockt den eigenen Vormarsch).
+    pub rook_blocks_own_passed_penalty: i32,
+    /// Turm auf 7. Reihe aus eigener Sicht (Rank 7 weiß, Rank 2 schwarz).
+    pub rook_seventh_bonus: i32,
+    /// Zusatzbonus, wenn der gegnerische König auf der 8. Reihe (Grundreihe)
+    /// steht — dann ist der Turm auf der 7. Reihe eine abschneidende Linie.
+    pub rook_seventh_vs_king_eighth_bonus: i32,
 
     // King safety
     pub ks_knight_weight: i32,
@@ -56,6 +68,15 @@ pub struct EvalParams {
     pub king_activity_bonus: i32,
     /// Phase-Schwelle (0..24), unterhalb derer König-Aktivität bewertet wird.
     pub king_activity_phase_threshold: i32,
+    /// König-Freibauer-Synergie: Bonus cp pro Einheit Chebyshev-Nähe (0..7)
+    /// des eigenen Königs zu jedem eigenen Freibauer. Im Endspiel soll der
+    /// König den eigenen Freibauer begleiten. Nur unterhalb
+    /// `king_activity_phase_threshold` wirksam, skaliert wie king_activity.
+    pub king_near_own_passed_bonus: i32,
+    /// Spiegelbild: König nah an gegnerischem Freibauer (Blockade-Kandidat).
+    /// Etwas stärker gewichtet, weil "Bauer aufhalten" dringlicher ist als
+    /// "eigenen Bauer begleiten".
+    pub king_near_enemy_passed_bonus: i32,
 
     // Mobility (cp pro "safe" Zielfeld, getaperter Mittel-/Endspielbeitrag).
     // "Safe" = nicht eigene Figur und nicht von gegnerischem Bauern angegriffen.
@@ -100,6 +121,16 @@ impl Default for EvalParams {
             connected_rooks_pair: 150,
             rook_open_file_bonus: 30,
             rook_semiopen_file_bonus: 15,
+            // Tarrasch-Wertebereich: +15 hinten klassisch, +20 hinter gegnerischem
+            // (Blockade lähmt Gegner komplett), -10 vor dem eigenen (weniger
+            // schlimm, der Bauer bleibt Freibauer).
+            rook_behind_own_passed_bonus: 15,
+            rook_behind_enemy_passed_bonus: 20,
+            rook_blocks_own_passed_penalty: -10,
+            // 7. Reihe: +15 Standard, +15 extra wenn König auf Grundreihe
+            // eingesperrt (zusammen +30 ≈ einem 7th-Rank-Invasion-Bonus).
+            rook_seventh_bonus: 15,
+            rook_seventh_vs_king_eighth_bonus: 15,
 
             ks_knight_weight: 2,
             ks_bishop_weight: 2,
@@ -121,6 +152,11 @@ impl Default for EvalParams {
             eg_passed_unstoppable_bonus: 500,
             king_activity_bonus: 3,
             king_activity_phase_threshold: 16,
+            // 0..7 Nähe-Einheiten pro Bauer, vor Phase-Skalierung. Bei Nähe 0
+            // (König auf dem Freibauer-Feld) und einem einzelnen eigenen
+            // Freibauer: 7 * 2 = 14 cp Raw → im vollen Endspiel (phase=0) 14cp.
+            king_near_own_passed_bonus: 2,
+            king_near_enemy_passed_bonus: 3,
 
             knight_mg_mobility: 3,
             knight_eg_mobility: 3,
@@ -193,6 +229,27 @@ impl EvalParams {
         p.connected_rooks_pair = i(&pc, "connected_rooks_pair", p.connected_rooks_pair);
         p.rook_open_file_bonus = i(&pc, "rook_open_file_bonus", p.rook_open_file_bonus);
         p.rook_semiopen_file_bonus = i(&pc, "rook_semiopen_file_bonus", p.rook_semiopen_file_bonus);
+        p.rook_behind_own_passed_bonus = i(
+            &pc,
+            "rook_behind_own_passed_bonus",
+            p.rook_behind_own_passed_bonus,
+        );
+        p.rook_behind_enemy_passed_bonus = i(
+            &pc,
+            "rook_behind_enemy_passed_bonus",
+            p.rook_behind_enemy_passed_bonus,
+        );
+        p.rook_blocks_own_passed_penalty = i(
+            &pc,
+            "rook_blocks_own_passed_penalty",
+            p.rook_blocks_own_passed_penalty,
+        );
+        p.rook_seventh_bonus = i(&pc, "rook_seventh_bonus", p.rook_seventh_bonus);
+        p.rook_seventh_vs_king_eighth_bonus = i(
+            &pc,
+            "rook_seventh_vs_king_eighth_bonus",
+            p.rook_seventh_vs_king_eighth_bonus,
+        );
 
         let ks = section(v, "king_safety");
         p.ks_knight_weight = i(&ks, "knight_weight", p.ks_knight_weight);
@@ -235,6 +292,16 @@ impl EvalParams {
             &eg,
             "king_activity_phase_threshold",
             p.king_activity_phase_threshold,
+        );
+        p.king_near_own_passed_bonus = i(
+            &eg,
+            "king_near_own_passed_bonus",
+            p.king_near_own_passed_bonus,
+        );
+        p.king_near_enemy_passed_bonus = i(
+            &eg,
+            "king_near_enemy_passed_bonus",
+            p.king_near_enemy_passed_bonus,
         );
 
         let mob = section(v, "mobility");
