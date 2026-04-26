@@ -34,7 +34,7 @@ Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
 - **UCI:** vollständig, inkl. `go ponder` / `ponderhit` mit echter Ponder-Suche (offene Deadline, TT-basierter Pondermove)
 - **Suche:** Alpha-Beta mit iterativem Deepening, Quiescence Search, Transposition Table
 - **Evaluation:** Material + Piece-Square-Tables (Tapered Midgame/Endgame), King Safety (3×3-Zone, Angreifer-Gewichte, SafetyTable, Pawn Shield), Endspiel-Heuristiken
-- **Eröffnung:** Polyglot-Books (`gm2001.bin`, `komodo.bin`, `rodent.bin`) mit Prioritätsreihenfolge, auch im Ponder-Modus aktiv
+- **Eröffnung:** Polyglot-Books (`.bin`) mit konfigurierbarer Prioritätsreihenfolge via `BOOK_FILES`, auch im Ponder-Modus aktiv
 - **Konfiguration:** `.env` mit kaskadierter Suche; UCI-Optionen `Hash`, `MoveOverhead`, `Ponder` funktional wirksam
 
 ## Roadmap

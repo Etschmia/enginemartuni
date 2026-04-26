@@ -6,6 +6,7 @@ __pycache__/
 pgn/*.pgn
 lichess-bot/
 notiz.md
+.claude/
 
 # lokale Arbeits- und Analyse-Dateien
 .codex
