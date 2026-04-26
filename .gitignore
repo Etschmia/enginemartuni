@@ -4,3 +4,18 @@ src/polyglot/*.bin
 __pycache__/
 *.pyc
 pgn/*.pgn
+lichess-bot/
+notiz.md
+
+# lokale Arbeits- und Analyse-Dateien
+.codex
+.qwen/
+anal.sh
+analyse_*.txt
+chat-*
+chat_*
+docs/blog-*.md
+docs/human-training-concept.md
+docs/lichess-community-blog.md
+docs/post-tobias-*.md
+tools/analyze_blunders_original_*.py
