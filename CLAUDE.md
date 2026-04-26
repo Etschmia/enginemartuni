@@ -39,14 +39,13 @@ Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
 
 ## Roadmap
 
-- **King-Exposure-Malus nachtarieren** — nachdem die am 24.04.2026 beschlossenen
-  Endspiel-Regeln in der Praxis (~100 Lichess-Partien) erprobt sind. Hintergrund:
-  Die Analyse vom 24.04. zeigt `allows_mate` pro Partie fast verdoppelt (0,12 →
-  0,21) und mehrere Fälle von Eval-Pessimismus (`martuni=-XXXcp, sf_diff=+XXX`)
-  in gewonnenen Stellungen — beides könnte Nebeneffekt des neuen
-  `king_exposure_penalty` sein. Erst messen, ob sich das durch die
-  Endspiel-Arbeit aufhebt; falls nicht, Schwellwerte/Gewicht in `eval.rs` und
-  `eval.toml` nachziehen.
+- **Auswertung nach >100 Partien** — die am 26.04.2026 ausgerollten Änderungen
+  (King-Exposure entschärft + phase-getapert, Check-Extension +2 → +1 Standard,
+  MAX_EXTENSION_PER_LINE 6 → 4, neuer Endgame-Malus für eingemauerten Turm)
+  in der Praxis prüfen. Auswertungspunkte: Endgame-Blunder/Partie (Ausgangswert
+  0.49), `exposed_king`/Partie (0.16), `positional_collapse`/Partie (0.35),
+  Eval-Pessimismus-Fälle. Wenn die Zahlen runtergehen, ist der Knoten gelöst.
+- **Null-Move Pruning** — danach. Plan steht in der Memory.
 
 ## Testumgebung
 

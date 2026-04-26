@@ -37,7 +37,14 @@ pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
     let (b_mob_mg, b_mob_eg) = mobility_score(board, Color::Black, p);
     let mob = taper(w_mob_mg - b_mob_mg, w_mob_eg - b_mob_eg, phase);
 
-    non_pst + taper(mg, eg, phase) + king_act + king_pass_syn + mob
+    // Turm hinter eigenem Bauern eingemauert — nur im Endspiel Malus.
+    // Im Mittelspiel ist der Bauer Teil des Pawn-Shields oder der Eröffnungs-
+    // struktur und der Turm normal entwickelt; im Endspiel will er aktiv sein.
+    let w_trap_eg = rook_trapped_endgame_malus(board, Color::White, p);
+    let b_trap_eg = rook_trapped_endgame_malus(board, Color::Black, p);
+    let trap = taper(0, w_trap_eg - b_trap_eg, phase);
+
+    non_pst + taper(mg, eg, phase) + king_act + king_pass_syn + mob + trap
 }
 
 /// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
@@ -157,7 +164,7 @@ pub fn king_safety(board: &Board, us: Color, p: &EvalParams) -> i32 {
     shield - danger - exposure
 }
 
-/// König-Expositions-Strafe (eingeführt 2026-04-22).
+/// König-Expositions-Strafe (eingeführt 2026-04-22, entschärft 2026-04-26).
 ///
 /// Ergänzt `shield` und `danger` um einen "König ist zu weit vom Heimrand
 /// weg, während der Gegner noch Schwergewicht hat"-Term. Motiviert durch
@@ -167,22 +174,34 @@ pub fn king_safety(board: &Board, us: Color, p: &EvalParams) -> i32 {
 /// Heimreihe) und `danger` (wertet nur die 3×3-Nahzone) erkannte die
 /// Gefahr nicht stark genug: Kg6 und Kg4 bekamen praktisch denselben Score.
 ///
+/// Tuning vom 26.04.2026 nach 167 Lichess-Partien: weight 20 → 12,
+/// rank_dist-Schwelle 2 → 3, plus Phase-Tapering. Auswertung hatte gezeigt,
+/// dass der Term im Endspiel-Übergang den König "festfror" — Endgame-
+/// Blunder pro Partie waren von 0.33 auf 0.49 gestiegen, mehrere Stellungen
+/// mit 500–1000cp Eval-Pessimismus gegenüber Stockfish.
+///
 /// Formel:
 /// ```text
 ///   rank_dist = |rank(König) - home_rank|    (0..7)
 ///   enemy_npm = Σ Figurenwerte des Gegners (Springer+Läufer+Turm+Dame)
-///   Gate: rank_dist >= 2     (König auf Heim- oder vorgerückter Reihe ok)
+///   phase_factor = min(phase, threshold) / threshold
+///   Gate: rank_dist >= 3     (König auf Heim- oder ersten zwei vorgerückten Reihen ok)
 ///   Gate: enemy_npm >= 1500  (sonst aktiver König im Endspiel erwünscht)
-///   exposure = (rank_dist - 1) * enemy_npm / 1000
-///   penalty  = exposure * king_exposure_weight
+///   exposure = (rank_dist - 2) * enemy_npm / 1000
+///   penalty  = exposure * king_exposure_weight * phase_factor
 /// ```
 ///
-/// Beispiel Mochi 16...Kg4 (schwarz): rank_dist=4, weiß-NPM=1600cp
-///   exposure = 3 * 1600 / 1000 = 4 (Integer-Div)
-///   penalty  = 4 * 20 = 80cp Abzug
-/// Vergleich Kg6: rank_dist=2 → exposure = 1 * 1600 / 1000 = 1 → 20cp Abzug
-/// Differenz 60cp sollte in den Leaf-Nodes reichen, um Kg4 klar schlechter
-/// als Kg6 einzustufen.
+/// Beispiel Mochi 16...Kg4 (schwarz, phase ≈ 18, also voll):
+///   rank_dist=4, weiß-NPM=1600cp
+///   exposure = 2 * 1600 / 1000 = 3 (Integer-Div)
+///   penalty  = 3 * 12 * 1 = 36cp Abzug
+/// Vergleich Kg6: rank_dist=2 → unter Schwelle → 0cp.
+/// Differenz Kg4↔Kg6 = 36cp (vorher 60cp, aber dort hatte auch Kg6 schon
+/// 20cp Malus — jetzt ist die Trennung klarer: Kg6 wird nicht mehr bestraft).
+///
+/// Phase-Tapering: bei phase=8 (R+R+N+N-Endspiel) zählt nur halb (×0.5),
+/// bei phase=0 (KP-Endspiel) gar nicht. So überlässt der Term die
+/// Endspielphase wieder `king_activity_endgame`.
 ///
 /// Rückgabewert ist positiv (als "abzuziehender Malus" im Aufrufer gedacht).
 fn king_exposure_penalty(board: &Board, us: Color, p: &EvalParams) -> i32 {
@@ -195,10 +214,11 @@ fn king_exposure_penalty(board: &Board, us: Color, p: &EvalParams) -> i32 {
     };
     let rank_dist = (rank - home_rank).abs();
 
-    // rank_dist < 2: König steht auf Heim- oder erster vorgerückter Reihe.
-    // Das ist die normale Rochadeposition oder eine minimal vorgerückte
-    // Stellung (z.B. Kf1 nach Bauernverlust) — noch keine Exposition.
-    if rank_dist < 2 {
+    // rank_dist < 3: König auf Heim- oder ersten beiden vorgerückten Reihen.
+    // Das deckt die typische Rochadeposition + Bauernverlust + leichtes
+    // Vorrücken in Bauernendspielen ab. Erst ab rank_dist=3 (Reihe 4/5) ist
+    // er klar im "Niemandsland".
+    if rank_dist < 3 {
         return 0;
     }
 
@@ -215,18 +235,21 @@ fn king_exposure_penalty(board: &Board, us: Color, p: &EvalParams) -> i32 {
     // um einen exponierten König effektiv zu bestrafen. Die Endspiel-
     // Termini (king_activity_endgame) übernehmen dann die Bewertung des
     // aktiven Königs — und die wollen wir nicht übersteuern.
-    // 1500cp = 3 Leichtfiguren / 1R+2Minor / 2R (minus 2N). Alles darunter
-    // sind Material-Endspiele, in denen König-Zentralisierung wichtiger ist.
     if enemy_npm < 1500 {
         return 0;
     }
 
-    // (rank_dist - 1): rank_dist=2 → Faktor 1 (leicht), rank_dist=7 → Faktor 6 (extrem).
-    // enemy_npm / 1000 als grobe "Wie viel Schwergewicht hat der Gegner"-Skala.
-    // Integer-Arithmetik: bewusst keine Gleitkomma — im Mittelspiel ergibt
-    // sich ein Bereich von 1..15 Expositions-Punkten.
-    let exposure = (rank_dist - 1) * enemy_npm / 1000;
-    exposure * p.king_exposure_weight
+    // Phase-Faktor: 1.0 ab Mittelspiel-Schwelle, linear gegen 0 im Endspiel.
+    // Komplementär zu `king_activity_endgame`, das genau dann Vollgas gibt,
+    // wenn der Exposure-Term hier verschwindet.
+    let phase = game_phase(board);
+    let threshold = p.king_activity_phase_threshold;
+    let phase_clamped = phase.min(threshold);
+
+    // (rank_dist - 2): rank_dist=3 → Faktor 1, rank_dist=7 → Faktor 5.
+    // enemy_npm / 1000 als grobe Schwergewichts-Skala.
+    let exposure = (rank_dist - 2) * enemy_npm / 1000;
+    exposure * p.king_exposure_weight * phase_clamped / threshold
 }
 
 /// 3x3-Koenigszone: der Koenig selbst + alle acht Nachbarfelder.
@@ -596,6 +619,46 @@ fn rook_seventh_rank_bonus(
     score
 }
 
+/// Endspiel-Malus: Turm direkt hinter eigenem Bauern eingemauert.
+/// Sehr konservativ definiert (kleinste Wirkung, Tobias' Wunsch):
+///  - Turm auf Heimreihe oder zweiter Reihe (rank 0/1 weiß, 7/6 schwarz)
+///  - Eigener Bauer auf der Linie direkt vor dem Turm (eine Reihe weiter)
+///
+/// Die Funktion gibt einen rohen Endspielwert zurück (nicht getapert);
+/// das Tapern erledigt der Aufrufer in `evaluate()`. Im vollen Mittelspiel
+/// trägt der Term damit nichts bei — der Bauer dient dort der King-Safety
+/// oder der Eröffnungsstruktur. Im Endspiel zieht sie den Turm aktiv heraus.
+fn rook_trapped_endgame_malus(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    let our_bb = *board.color_combined(us);
+    let our_rooks = *board.pieces(Piece::Rook) & our_bb;
+    let our_pawns = *board.pieces(Piece::Pawn) & our_bb;
+
+    let (home_rank, second_rank, dir) = match us {
+        Color::White => (0i32, 1i32, 1i32),
+        Color::Black => (7i32, 6i32, -1i32),
+    };
+
+    let mut malus = 0;
+    for rook_sq in our_rooks {
+        let rank = rook_sq.get_rank().to_index() as i32;
+        if rank != home_rank && rank != second_rank {
+            continue;
+        }
+        let blocker_rank = rank + dir;
+        if !(0..=7).contains(&blocker_rank) {
+            continue;
+        }
+        let blocker_sq = Square::make_square(
+            Rank::from_index(blocker_rank as usize),
+            rook_sq.get_file(),
+        );
+        if (our_pawns & BitBoard::from_square(blocker_sq)) != BitBoard::new(0) {
+            malus += p.rook_trapped_endgame_penalty;
+        }
+    }
+    malus
+}
+
 /// König-Freibauer-Synergie (Endspielterm).
 ///
 /// Für jeden eigenen Freibauer: je näher der eigene König (Chebyshev), desto
@@ -931,15 +994,18 @@ mod tests {
 
     #[test]
     fn ks_exposure_midgame_central_king() {
-        // Schwarzer König zentral auf e5 (rank 4, home=7 → rank_dist=3).
-        // Weiß hat 2R + 2N = 1600cp NPM, also über der 1500cp-Schwelle.
-        // Kein Schild (König nicht auf Heimrand), keine Angreifer in der 3×3-Zone.
-        // exposure = (3-1) * 1600 / 1000 = 3 (Integer-Div)
-        // penalty  = 3 * 20 = 60cp
-        // Keine Schild-Bonus/Malus-Beiträge → king_safety = 0 - 0 - 60 = -60
+        // Schwarzer König zentral e5 (rank 4, home=7 → rank_dist=3).
+        // Weiß hat 2R + 2N = 1600cp NPM (über 1500-Schwelle).
+        // Phase: 2*2 (R) + 2*1 (N) = 6 — schon Endspiel-Übergang.
+        // exposure = (3-2) * 1600 / 1000 = 1 (Integer-Div)
+        // penalty  = 1 * 12 * 6 / 16 = 4 cp
+        // Schild=0 (König nicht auf Heim), Angreifer=0 (keine erreicht
+        // d4-f4/d5-f5/d6-f6) → king_safety = 0 - 0 - 4 = -4.
+        // Der kleine Wert ist gewollt: in dieser Phase soll der Term
+        // schon stark gedämpft sein.
         let b = Board::from_str("8/8/8/4k3/8/8/8/RN2K1NR w - - 0 1").unwrap();
         let p = EvalParams::default();
-        assert_eq!(king_safety(&b, Color::Black, &p), -60);
+        assert_eq!(king_safety(&b, Color::Black, &p), -4);
     }
 
     #[test]
@@ -959,7 +1025,7 @@ mod tests {
         // Weiß hat 2R + N + B = 1600cp NPM (über der 1500-Schwelle) — alle
         // Figuren weit weg auf der Grundreihe, keine greift g8-Zone an.
         // Der Expositions-Term darf hier trotz hohem Gegner-Material NICHT
-        // feuern, weil rank_dist < 2. Genau das prüfen wir.
+        // feuern, weil rank_dist < 3. Genau das prüfen wir.
         // shield: 3 Linien f/g/h leer → 3 × -15 = -45
         // danger: keine Figur in der 3×3-Zone → 0
         // exposure: rank_dist=0 → 0
@@ -967,6 +1033,21 @@ mod tests {
         let b = Board::from_str("6k1/8/8/8/8/8/8/RRNBK3 w - - 0 1").unwrap();
         let p = EvalParams::default();
         assert_eq!(king_safety(&b, Color::Black, &p), -45);
+    }
+
+    #[test]
+    fn ks_exposure_rank_dist_2_not_penalized_anymore() {
+        // Schwarzer König auf e6 (rank 5, home=7 → rank_dist=2).
+        // Mit der 26.04-Anpassung soll rank_dist=2 noch nicht greifen
+        // (Schwelle ist jetzt rank_dist >= 3) — vorher hätte hier ein
+        // Malus von ~20cp gestanden.
+        // Setup: 2R + 2N + 1B = 1900cp (≥1500), aber so, dass keine
+        // Figur die Zone {d5..f7} angreift.
+        // (Bc1 hat Diagonale c1–h6, die kein Zonenfeld trifft; Nb1/Ng1
+        // attackieren a3/c3/d2/e2/f3/h3 — auch keins in der Zone.)
+        let b = Board::from_str("8/8/4k3/8/8/8/8/RNB1K1NR w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        assert_eq!(king_safety(&b, Color::Black, &p), 0);
     }
 
     #[test]
@@ -1190,5 +1271,48 @@ mod tests {
         let p = EvalParams::default();
         let score = king_passed_pawn_synergy(&b, game_phase(&b), &p);
         assert_eq!(score, 0);
+    }
+
+    // ---- Regel C: Turm hinter eigenem Bauer eingemauert (Endspiel) ----
+
+    #[test]
+    fn rook_trapped_behind_pawn_returns_penalty() {
+        // Weißer Turm a1, weißer Bauer a2 — klassische "eingemauert"-Stellung.
+        // Roher Endspielwert (vor Tapern) = -10 cp pro Vorkommen.
+        let b = Board::from_str("4k3/8/8/8/8/8/P7/R3K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let m = rook_trapped_endgame_malus(&b, Color::White, &p);
+        assert_eq!(m, p.rook_trapped_endgame_penalty);
+    }
+
+    #[test]
+    fn rook_trapped_no_pawn_in_front_no_penalty() {
+        // Turm a1, kein eigener Bauer auf a2 → kein Malus.
+        let b = Board::from_str("4k3/8/8/8/8/8/8/R3K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let m = rook_trapped_endgame_malus(&b, Color::White, &p);
+        assert_eq!(m, 0);
+    }
+
+    #[test]
+    fn rook_trapped_only_in_endgame_phase() {
+        // Volle Materialschlacht (phase=24): durch Tapern soll der Term
+        // im evaluate-Pfad 0 beitragen, selbst wenn die rohe Heuristik feuert.
+        // Wir prüfen das direkt am Tapering: roh wäre -10, getapert mit
+        // phase=24 ergibt taper(0, -10, 24) = (0*24 + -10*0)/24 = 0.
+        assert_eq!(taper(0, -10, 24), 0);
+        // Im reinen Endspiel (phase=0) wird der ganze rohe Wert wirksam.
+        assert_eq!(taper(0, -10, 0), -10);
+        // Bei phase=12 (Mittendrin): linear interpoliert.
+        assert_eq!(taper(0, -10, 12), -5);
+    }
+
+    #[test]
+    fn rook_trapped_black_mirror() {
+        // Schwarzer Turm h8, schwarzer Bauer h7 — gespiegelte Konfiguration.
+        let b = Board::from_str("4k2r/7p/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let m = rook_trapped_endgame_malus(&b, Color::Black, &p);
+        assert_eq!(m, p.rook_trapped_endgame_penalty);
     }
 }

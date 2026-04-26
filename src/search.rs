@@ -13,7 +13,13 @@ use std::time::{Duration, Instant};
 const INF: i32 = 1_000_000;
 const MATE: i32 = 100_000;
 const MATE_THRESHOLD: i32 = MATE - 1000;
-const MAX_EXTENSION_PER_LINE: i32 = 6;
+// Maximale Summe aller Extensions in einer Suchlinie. 26.04.2026: 6 → 4
+// reduziert. Hintergrund: Check-Extensions wurden gleichzeitig von +2 auf
+// das Standard-+1 verringert (siehe is_candidate_move). Das alte Cap 6
+// erlaubte 3 voll-getriebene Tiefen-Extensions; mit dem neuen, gemischten
+// Schema (Check +1, andere Kandidaten +2) entspricht 4 etwa der gleichen
+// "Reichweite" — bis zu 2 Schach- + 1 anderer Kandidat oder 2 andere.
+const MAX_EXTENSION_PER_LINE: i32 = 4;
 const MAX_DEPTH: i32 = 64;
 // Plies gehen durch Extensions über MAX_DEPTH hinaus — großzügig dimensionieren.
 const MAX_PLY: usize = 128;
@@ -391,9 +397,19 @@ fn alpha_beta(
     for sm in &ordered {
         let mv = sm.mv;
         let nb = board.make_move_new(mv);
-        let is_cand = is_candidate_move(board, mv, &nb, sm.see_val);
-        let ext = if is_cand && extensions_used + 2 <= MAX_EXTENSION_PER_LINE {
+        // Reines Schach: Standard-+1-Extension (Chess Programming Wiki,
+        // Crafty/Stockfish-Konvention). Andere Kandidatenzüge (gewinnender
+        // Capture, erkanntes Endspiel, Freibauer) bleiben bei +2, weil sie
+        // taktisch erzwingender sind und seltener auftreten.
+        // Vor dem 26.04.2026 war reines Schach ebenfalls +2 — das hatte sich
+        // in den Auswertungen als zu teuer im Verhältnis zum Gewinn erwiesen
+        // (Cap reißt zu früh, Tiefe in Mattlinien geht verloren).
+        let in_check = nb.checkers().popcnt() > 0;
+        let other_cand = !in_check && is_candidate_move(board, mv, &nb, sm.see_val);
+        let ext = if other_cand && extensions_used + 2 <= MAX_EXTENSION_PER_LINE {
             2
+        } else if in_check && extensions_used + 1 <= MAX_EXTENSION_PER_LINE {
+            1
         } else {
             0
         };
@@ -607,14 +623,13 @@ fn is_irreversible(board: &Board, mv: ChessMove) -> bool {
 }
 /*
 fn is_candidate_move
-Problem:
-hier gilt ein Zug als Kandidat für eine Extension, wenn er
-- Schach gibt,
-- schlägt,
-- in ein erkanntes Endspiel überleitet,
-- oder einen Freibauernzug erzeugt.
-weiter oben in  `for mv in &ordered { ...` bekommt so ein Zug pauschal +2 Halbzüge
-Das ist teuer. Können wir hier vielleicht mit unserem SEE oder mit Late Move Reductions (LMR) arbeiten?
+Wird seit 26.04.2026 nur noch für *nicht-Schach*-Kandidaten aufgerufen
+(gewinnender Capture, erkanntes Endspiel, Freibauer). Schachgebote werden
+am Callsite separat mit +1-Extension behandelt — Standard-Variante.
+Diese Helfer geben +2-Extension für taktisch erzwingende Nicht-Schach-Züge.
+
+Offene Idee (LMR): späte Quiet-Moves könnten reduziert statt extended werden,
+um der wachsenden Suchbreite Herr zu werden. Wartet auf eigene Sitzung.
 */
 
 
@@ -624,7 +639,9 @@ fn is_candidate_move(
     new_board: &Board,
     see_val: Option<i32>,
 ) -> bool {
-    // Schachgebot
+    // Defensiv: falls jemand diesen Helfer doch mal mit einem Schachzug
+    // füttert, soll er nicht "kein Kandidat" sagen — gleiche Semantik wie
+    // vorher behalten. Im Hauptpfad wird das aber durch in_check abgefangen.
     if new_board.checkers().popcnt() > 0 {
         return true;
     }

@@ -62,6 +62,12 @@ rook_seventh_bonus = 15
 # der Turm schneidet eine Fluchtlinie ab ("pig on the seventh").
 rook_seventh_vs_king_eighth_bonus = 15
 
+# Endspiel-Malus für einen Turm, der direkt hinter einem eigenen Bauern
+# (Heimreihe oder zweite Reihe + eigener Bauer eine Reihe weiter vorn auf
+# gleicher Linie) eingemauert sitzt. Phase-getapert: voller Effekt im reinen
+# Endspiel, 0 im vollen Mittelspiel.
+rook_trapped_endgame_penalty = -10
+
 [king_safety]
 # Gewichte je gegnerischer Figur, die die 3x3-King-Zone angreift.
 # Bauern und der gegnerische Koenig zaehlen nicht.
@@ -69,6 +75,11 @@ knight_weight = 2
 bishop_weight = 2
 rook_weight   = 3
 queen_weight  = 5
+
+# König-Expositions-Strafe (cp pro Expositions-Punkt). Greift bei
+# rank_dist >= 3 vom Heimrand UND enemy_npm >= 1500cp UND wird zusätzlich
+# phase-getapert (0 im reinen Endspiel, voll bei phase >= 16).
+exposure_weight = 12
 
 # Pawn Shield — 3-Linien-Fenster auf der Koenigsseite (a-c bei lang
 # rochiert, f-h bei kurz rochiert).

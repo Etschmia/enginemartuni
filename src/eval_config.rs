@@ -54,10 +54,19 @@ pub struct EvalParams {
     pub ks_exposed_center_penalty: i32,
     pub safety_table: Vec<i32>,
     /// Gewichtungsfaktor für die König-Expositions-Strafe (cp pro
-    /// Expositions-Punkt). Wirkt nur, wenn der König mindestens 2 Reihen
+    /// Expositions-Punkt). Wirkt nur, wenn der König mindestens 3 Reihen
     /// vom Heimrand entfernt steht UND der Gegner noch nennenswert
     /// Schwergewicht-Material hat (siehe eval::king_exposure_penalty).
+    /// Wird zusätzlich phase-getapert: voller Effekt im Mittelspiel,
+    /// linear gegen 0 ab `king_activity_phase_threshold`.
     pub king_exposure_weight: i32,
+
+    /// Endspiel-Malus für einen Turm, der direkt von einem eigenen Bauern
+    /// blockiert wird (Heimreihe oder zweite Reihe, Bauer eine Reihe vor
+    /// dem Turm auf gleicher Linie). Wirkt nur, soweit phase-getapert ins
+    /// Endspiel reicht — im vollen Mittelspiel ist 0 (Bauer schützt dort
+    /// noch den König oder ist Teil der Eröffnungsstruktur). Negativer Wert.
+    pub rook_trapped_endgame_penalty: i32,
 
     // Endspiel-Mop-up
     pub eg_corner_weight: i32,
@@ -141,11 +150,24 @@ impl Default for EvalParams {
             ks_shield_missing_penalty: -15,
             ks_exposed_center_penalty: -30,
             safety_table: DEFAULT_SAFETY_TABLE.to_vec(),
-            // Default 20: rank_dist=2, enemy_npm=1600cp → exposure=1, penalty=20cp.
-            //                rank_dist=4, enemy_npm=1600cp → exposure=4, penalty=80cp.
-            // Grob kalibriert, damit der Malus im klassischen Mittelspiel in der
-            // gleichen Größenordnung wie ein verlorenes Bauern-Tempo ist.
-            king_exposure_weight: 20,
+            // Default 12 (von 20 reduziert am 26.04.2026 nach 167-Partien-Auswertung):
+            // king_exposure war zu pessimistisch im Endspiel-Übergang, Endgame-
+            // Blunder pro Partie waren von 0.33 auf 0.49 gestiegen, Eval-Pessimismus
+            // mehrfach 500-1000cp gegenüber Stockfish. Drei Stellschrauben gleichzeitig:
+            //   - weight 20 → 12 (Halbierung des Roh-Malus)
+            //   - rank_dist >= 3 (statt 2; siehe king_exposure_penalty)
+            //   - Phase-Tapering Richtung 0 unterhalb king_activity_phase_threshold
+            // Mochi-Beispiel (Kg4, rank_dist=4, enemy_npm=1600cp, phase≈18):
+            //   exposure = 3 * 1600 / 1000 = 4 → penalty = 4 * 12 = 48cp
+            //   gegen Kg6 (rank_dist=2, jetzt unter Schwelle) → 0cp.
+            // Differenz Kg4↔Kg6 stieg sogar von 60cp auf 48cp — ähnlich, aber
+            // sauberer abgegrenzt: Kg6 wird gar nicht mehr bestraft.
+            king_exposure_weight: 12,
+            // -10 cp im vollen Endspiel (phase=0). Im Mittelspiel (phase≥16) 0.
+            // Klein gewählt: Tarrasch-rule ist primär ein Übergangs-Hinweis,
+            // kein hartes Material-Argument. Ziel: in technischen Endspielen
+            // zieht die Engine ihren Turm aktiv aus der Heimreihe.
+            rook_trapped_endgame_penalty: -10,
 
             eg_corner_weight: 20,
             eg_king_proximity_weight: 10,
@@ -249,6 +271,11 @@ impl EvalParams {
             &pc,
             "rook_seventh_vs_king_eighth_bonus",
             p.rook_seventh_vs_king_eighth_bonus,
+        );
+        p.rook_trapped_endgame_penalty = i(
+            &pc,
+            "rook_trapped_endgame_penalty",
+            p.rook_trapped_endgame_penalty,
         );
 
         let ks = section(v, "king_safety");
