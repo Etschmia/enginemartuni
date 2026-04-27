@@ -47,23 +47,19 @@ Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
   Eval-Pessimismus-Fälle. Wenn die Zahlen runtergehen, ist der Knoten gelöst.
 - **Null-Move Pruning** — danach. Plan steht in der Memory.
 
-## Testumgebung
-
-Die Engine wird primär gegen `/home/librechat/berlinschach` getestet (UCI-Web-GUI).
-Eintrag in `berlinschach/engines.json` ist vorhanden.
-
 ## Lichess-Anbindung
 
-Martuni spielt auf Lichess als **BOT Martuni** via `/home/librechat/lichess-bot/` (Upstream: `lichess-bot-devs/lichess-bot`). Die Martuni-spezifische Config und Skripte liegen im Unterordner `lichess-bot/` dieses Repos (Token ist maskiert, das Original liegt unter `/home/librechat/lichess-bot/config.yml`).
+Martuni spielt auf Lichess als **BOT Martuni** via `~/lichess-bot/` (Upstream: `lichess-bot-devs/lichess-bot`). Die Martuni-spezifische Config und Skripte liegen im Unterordner `lichess-bot/` dieses Repos (Token ist maskiert, das Original liegt unter `~/lichess-bot/config.yml`).
 
 ### Systemd-Service
 
 Der Bot läuft als **`lichess-bot.service`** — nicht manuell starten, sonst entstehen doppelte Lichess-Sessions!
 
 ```
+# Pfade sind serverspezifisch
 Unit:             /etc/systemd/system/lichess-bot.service
-User:             librechat
-WorkingDirectory: /home/librechat/lichess-bot
+User:             <systemuser>
+WorkingDirectory: <homedir>/lichess-bot
 ExecStart:        venv/bin/python lichess-bot.py
 Restart:          always
 ```
