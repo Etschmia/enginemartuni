@@ -15,10 +15,16 @@ const MATE: i32 = 100_000;
 const MATE_THRESHOLD: i32 = MATE - 1000;
 // Maximale Summe aller Extensions in einer Suchlinie. 26.04.2026: 6 → 4
 // reduziert. Hintergrund: Check-Extensions wurden gleichzeitig von +2 auf
-// das Standard-+1 verringert (siehe is_candidate_move). Das alte Cap 6
-// erlaubte 3 voll-getriebene Tiefen-Extensions; mit dem neuen, gemischten
-// Schema (Check +1, andere Kandidaten +2) entspricht 4 etwa der gleichen
-// "Reichweite" — bis zu 2 Schach- + 1 anderer Kandidat oder 2 andere.
+// das Standard-+1 verringert. Cap 4 entspricht damit etwa der alten
+// Reichweite — bis zu 2 Schach- + 1 anderer Kandidat oder 2 andere.
+//
+// 28.04.2026: Schach-Extension wieder phase-abhaengig — im Endspiel
+// (game_phase < 16) zurueck auf +2, weil die Suche dort sonst zu wenig
+// Tiefe in Mattlinien hat (Endgame-Blunder/Partie 0.49 → 0.60,
+// missed_mate 0.04 → 0.075). Im Mittelspiel bleibt +1 (positiver Effekt
+// auf positional_collapse / exposed_king bestaetigt). Cap bleibt 4 —
+// im Endspiel sind damit nur 2 Schach-Extensions in Folge moeglich,
+// das reicht fuer die kritischen Mating-Sequenzen.
 const MAX_EXTENSION_PER_LINE: i32 = 4;
 const MAX_DEPTH: i32 = 64;
 // Plies gehen durch Extensions über MAX_DEPTH hinaus — großzügig dimensionieren.
@@ -397,19 +403,27 @@ fn alpha_beta(
     for sm in &ordered {
         let mv = sm.mv;
         let nb = board.make_move_new(mv);
-        // Reines Schach: Standard-+1-Extension (Chess Programming Wiki,
-        // Crafty/Stockfish-Konvention). Andere Kandidatenzüge (gewinnender
-        // Capture, erkanntes Endspiel, Freibauer) bleiben bei +2, weil sie
+        // Schach-Extension phase-abhaengig:
+        //   Mittelspiel (game_phase >= 16) → +1   (CPW/Stockfish/Crafty-Standard)
+        //   Endspiel    (game_phase <  16) → +2   (mehr Tiefe fuer Mating-Sequenzen)
+        // Andere Kandidatenzuege (gewinnender Capture, erkanntes Endspiel,
+        // Freibauer) bleiben unabhaengig von der Phase bei +2, weil sie
         // taktisch erzwingender sind und seltener auftreten.
-        // Vor dem 26.04.2026 war reines Schach ebenfalls +2 — das hatte sich
-        // in den Auswertungen als zu teuer im Verhältnis zum Gewinn erwiesen
-        // (Cap reißt zu früh, Tiefe in Mattlinien geht verloren).
+        //
+        // Historie:
+        //  - vor 26.04.2026: Schach pauschal +2, Cap 6
+        //  - 26.04.2026: Schach pauschal +1, Cap 4 (zu teuer im Mittelspiel)
+        //  - 28.04.2026: Schach +1 im Mittelspiel, +2 im Endspiel — Mittelspiel-
+        //    Verbesserung erhalten, Endspiel-Suche wieder tief genug.
+        // Phase-Schwelle 16 deckt sich mit `king_activity_phase_threshold` aus
+        // der Eval — derselbe Endspiel-Begriff in Suche und Bewertung.
         let in_check = nb.checkers().popcnt() > 0;
         let other_cand = !in_check && is_candidate_move(board, mv, &nb, sm.see_val);
+        let check_ext = if crate::eval::game_phase(&nb) < 16 { 2 } else { 1 };
         let ext = if other_cand && extensions_used + 2 <= MAX_EXTENSION_PER_LINE {
             2
-        } else if in_check && extensions_used + 1 <= MAX_EXTENSION_PER_LINE {
-            1
+        } else if in_check && extensions_used + check_ext <= MAX_EXTENSION_PER_LINE {
+            check_ext
         } else {
             0
         };

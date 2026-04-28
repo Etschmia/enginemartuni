@@ -39,13 +39,26 @@ Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
 
 ## Roadmap
 
-- **Auswertung nach >100 Partien** — die am 26.04.2026 ausgerollten Änderungen
-  (King-Exposure entschärft + phase-getapert, Check-Extension +2 → +1 Standard,
-  MAX_EXTENSION_PER_LINE 6 → 4, neuer Endgame-Malus für eingemauerten Turm)
-  in der Praxis prüfen. Auswertungspunkte: Endgame-Blunder/Partie (Ausgangswert
-  0.49), `exposed_king`/Partie (0.16), `positional_collapse`/Partie (0.35),
-  Eval-Pessimismus-Fälle. Wenn die Zahlen runtergehen, ist der Knoten gelöst.
-- **Null-Move Pruning** — danach. Plan steht in der Memory.
+- **Auswertung nach >100 Partien (Stand 28.04.2026)** — die heute (28.04.)
+  ausgerollte Anpassung (Check-Extension wieder phase-abhängig: `+1` im
+  Mittelspiel, `+2` im Endspiel ab `game_phase < 16`; `MAX_EXTENSION_PER_LINE`
+  bleibt 4) in der Praxis prüfen. Ziel: die seit 26.04. gestiegene
+  Endgame-Blunder-Quote zurückbringen, ohne die Mittelspiel-Verbesserungen
+  zu verlieren.
+  Vergleichszahlen (173 Partien vom 28.04. → soll fallen / gleich bleiben):
+  - Endgame-Blunder/Partie 0.60 → soll Richtung ≤ 0.49 (Stand 26.04.)
+  - `missed_mate`/Partie 0.075 → soll Richtung ≤ 0.04
+  - `exposed_king`/Partie 0.14 → soll **nicht** wieder steigen (Stand 26.04.: 0.16)
+  - `positional_collapse`/Partie 0.24 → soll **nicht** wieder steigen (Stand 26.04.: 0.35)
+  - Eval-Pessimismus-Fälle in Endspielen
+  Wenn Endgame/missed_mate runtergehen UND Mittelspiel-Werte stabil bleiben:
+  Anpassung hat funktioniert, weiter mit Null-Move-Pruning.
+- **Eingemauerter Turm (`rook_trapped_endgame_penalty`)** — am 28.04. mit
+  `tools/diagnose_rook_trapped.py` geprüft: Term feuert in nur 2 von 104
+  Endgame-Blundern (1.9 %), in beiden Fällen sachlich korrekt. Nicht der
+  Treiber der Endgame-Verschlechterung — bleibt bei `-10`, kein Anlass zum
+  Justieren.
+- **Null-Move Pruning** — danach. Plan steht in `docs/null-move-pruning.md`.
 
 ## Lichess-Anbindung
 
