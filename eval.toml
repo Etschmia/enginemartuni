@@ -3,8 +3,16 @@
 # Diese Datei ist die Stellschraube zum Tuning der Engine.
 # Kommentare und freie Formatierung sind erlaubt; die Engine laedt
 # die Werte beim Start (oder nach Neustart) neu.
+#
+# Review-Hinweis: Die "Finding:"-Kommentare unten markieren Tuning-Kandidaten
+# und die Richtung, in die ich als naechstes testen wuerde. Die gesetzten
+# Werte bleiben dabei bewusst unveraendert.
 
 [material]
+# Finding: Springer und Laeufer sind gleich bewertet. Das ist konservativ,
+# aber offene Stellungen koennen Laeufer leicht unterbewerten. Richtung:
+# Laeufer oder Laeuferpaar eher dynamisch staerken, nicht pauschal Material
+# gross verschieben.
 pawn   = 100
 knight = 300
 bishop = 300
@@ -13,34 +21,58 @@ queen  = 900
 
 [pawns]
 # Isolani: Bauer ohne eigene Bauern auf benachbarten Linien
+# Finding: -20 ist ein flacher Malus. Im Endspiel sind isolierte Bauern oft
+# gravierender, im Mittelspiel mit Figurenspiel manchmal harmloser. Richtung:
+# spaeter phase-getapert oder mit Aktivitaetskompensation testen.
 isolated_penalty = -20
 
 # Positionsboni nach Linie (gelten unabhaengig von der Reihe)
+# Finding: Zentralboni sind blind fuer Blockade, Rueckstaendigkeit und Deckung.
+# Falls die Engine zu optimistisch zentrale Bauern vorschiebt, eher absenken
+# oder an Fortschritt/Unterstuetzung koppeln.
 de_file_bonus = 10
 cf_file_bonus = 5
 
 # Phalanx: mehrere eigene Bauern nebeneinander auf derselben Reihe.
 # Bei 4+ zaehlt der 3er-Bonus einmal.
+# Finding: Die Phalanx wird nur nach Breite bewertet. Das kann unbewegliche
+# oder angreifbare Bauernketten ueberzahlen. Richtung: Bonus nur fuer mobile
+# oder gedeckte Phalanx staerken; blockierte Phalanx abschwaechen.
 phalanx_triple = 30
 phalanx_double = 15
 
 # Freibauer: kein gegnerischer Bauer auf eigener Linie oder Nachbarlinien
 # auf den Reihen zwischen dem Bauern und seinem Umwandlungsfeld
+# Finding: Konfigurationsdrift: Der aktuelle Loader liest `passed_rank_bonuses`,
+# nicht `passed_bonus`. Dieser Wert wirkt daher vermutlich nicht. Richtung:
+# rangabhaengig sehr niedrig auf Startreihen, stark steigend auf 6./7. Reihe;
+# blockierte Freibauern separat abschwaechen.
 passed_bonus = 300
 
 [pieces]
 # Springer auf Reihe 1 oder 8 steht schlecht
+# Finding: -50 ist harter Entwicklungsdruck. Gut gegen passive Springer, aber
+# manchmal zu streng fuer legitime Verteidiger/Umgruppierungen. Richtung: bei
+# fruehen taktischen Fehlern oder Rand-Ausweichzuegen eher milder testen.
 knight_backrank_penalty = -50
 
 # Laeuferpaar: solange beide Laeufer vorhanden sind, erhaelt jeder Laeufer
 # diesen Bonus (gesamt also +2 * bishop_pair_each)
+# Finding: Gesamt +30 ist plausibel. Der bessere Hebel ist dynamisch:
+# staerker bei offenem Brett/wenigen Bauern, schwaecher bei blockiertem Zentrum.
 bishop_pair_each = 15
 
 # Verbundene Tuerme (gleiche Linie/Reihe, Sichtverbindung, nichts dazwischen):
 # einmaliger Bonus fuer das Paar
+# Finding: +150 ist der auffaelligste Ueberwertungs-Kandidat: eine reine
+# Sichtverbindung ist selten 1.5 Bauern wert. Richtung: deutlich senken oder
+# nur bei offener Linie, 7. Reihe, Eindringen oder konkretem Ziel gewichten.
 connected_rooks_pair = 150
 
 # Turm auf offener Linie (keine Bauern beider Seiten auf der Linie)
+# Finding: 30/15 fuer offene Linien ist solide, aber aktuell ziellos: ein Turm
+# auf leerer offener Linie zaehlt wie ein aktiver Turm. Richtung: an Zielbauer,
+# 7. Reihe, Koenigszugang oder Verdopplung koppeln.
 rook_open_file_bonus = 30
 
 # Turm auf halb-offener Linie (keine eigenen, aber gegnerische Bauern)
@@ -49,6 +81,9 @@ rook_semiopen_file_bonus = 15
 # Tarrasch-Regel: Turm gehört hinter den Freibauer. Wirkt pro
 # Turm-Freibauer-Paar auf derselben Linie (eigener oder gegnerischer Bauer).
 # Hinter eigenem Freibauer = Turm schiebt.
+# Finding: Diese Tarrasch-Werte sind bewusst klein. Bei Problemen gegen
+# gegnerische Freibauern eher Blockade/`rook_behind_enemy_passed_bonus`
+# staerken, nicht pauschal alle Turmwerte hochziehen.
 rook_behind_own_passed_bonus = 15
 # Hinter gegnerischem Freibauer = Blockade von hinten (etwas stärker, weil
 # der Gegner den Bauer nicht mehr bewegen kann, ohne den Turm zu tauschen).
@@ -57,6 +92,9 @@ rook_behind_enemy_passed_bonus = 20
 rook_blocks_own_passed_penalty = -10
 
 # Turm auf 7. Reihe aus eigener Sicht (Reihe 7 Weiß, Reihe 2 Schwarz).
+# Finding: +15/+15 ist moderat. Wenn Invasionen auf der 7. Reihe verpasst
+# werden, eher Zusatzbedingungen fuer angegriffene Bauern/Koenigsschnitt
+# ausbauen, statt den Basiswert blind stark zu erhoehen.
 rook_seventh_bonus = 15
 # Extra-Bonus, wenn der gegnerische König auf der 8. (Grund-)Reihe steht —
 # der Turm schneidet eine Fluchtlinie ab ("pig on the seventh").
@@ -66,11 +104,17 @@ rook_seventh_vs_king_eighth_bonus = 15
 # (Heimreihe oder zweite Reihe + eigener Bauer eine Reihe weiter vorn auf
 # gleicher Linie) eingemauert sitzt. Phase-getapert: voller Effekt im reinen
 # Endspiel, 0 im vollen Mittelspiel.
+# Finding: -10 ist sehr mild. Bei passiven Turmendspielen Richtung -20..-40
+# testen, aber die Endspiel-Taperung beibehalten.
 rook_trapped_endgame_penalty = -10
 
 [king_safety]
 # Gewichte je gegnerischer Figur, die die 3x3-King-Zone angreift.
 # Bauern und der gegnerische Koenig zaehlen nicht.
+# Finding: King-Safety ist nach den Reports ein grosser Hebel
+# (Mattmotive/entgegengesetzte Rochaden). Einzelangreifer kosten wenig;
+# bei unterschaetzten Angriffen queen/rook weights oder die fruehe
+# SafetyTable-Kurve vorsichtig erhoehen.
 knight_weight = 2
 bishop_weight = 2
 rook_weight   = 3
@@ -79,22 +123,35 @@ queen_weight  = 5
 # König-Expositions-Strafe (cp pro Expositions-Punkt). Greift bei
 # rank_dist >= 3 vom Heimrand UND enemy_npm >= 1500cp UND wird zusätzlich
 # phase-getapert (0 im reinen Endspiel, voll bei phase >= 16).
+# Finding: Dieser Term wurde bereits entschaerft. Nur erhoehen, wenn Koenige
+# im Mittelspiel weiter ins Feuer laufen; bei zu passiver Endspiel-Koenigfuehrung
+# eher niedrig lassen.
 exposure_weight = 12
 
 # Pawn Shield — 3-Linien-Fenster auf der Koenigsseite (a-c bei lang
 # rochiert, f-h bei kurz rochiert).
 # Je Linie: Bauer direkt vor dem Koenig = voller Bonus; bereits vorgerueckt
 # (zwei Reihen vor dem Koenig) = abgeschwaechter Bonus; kein Bauer = Strafe.
+# Finding: Shield wirkt laut Code nur, solange der Koenig auf der Grundreihe
+# steht. -15 je fehlendem Bauern ist moderat; bei Rochade-Angriffen fehlenden
+# Schild eher staerker bestrafen. Das "Koenig ein Feld gelaufen"-Problem ist
+# eher ein Eval-Feature als eine reine TOML-Stellschraube.
 shield_rank1_bonus    =  10
 shield_rank2_bonus    =   5
 shield_missing_penalty = -15
 
 # Koenig auf d/e-Linie ohne Rochade → offenes Zentrum
+# Finding: -30 ist mild fuer einen unrochierten Koenig im Zentrum. Bei
+# Eroeffnungsproblemen mit Koenig auf d/e eher Richtung -40/-60 testen,
+# idealerweise material- oder phase-abhaengig.
 exposed_center_penalty = -30
 
 # SafetyTable: non-lineare Zuordnung Angriffsscore → Strafe in cp.
 # Index = min(n_angreifer * summe_der_gewichte, 99).
 # Kurve nach Chess Programming Wiki, kappt bei 500 cp (5 Bauern).
+# Finding: Feinster Hebel ist nicht das Cap, sondern die Steigung bei Index
+# 8-30, wo typische Dame+Leichtfigur/Turm-Angriffe landen. Bei uebersehenen
+# Mattnetzen dort steiler machen; Cap 500 erst zuletzt anfassen.
 safety_table = [
     0,   0,   1,   2,   3,   5,   7,   9,  12,  15,
    18,  22,  26,  30,  35,  39,  44,  50,  56,  62,
@@ -116,16 +173,25 @@ safety_table = [
 # Mop-up: Gradient, der den schwaecheren Koenig in die Ecke zieht
 # und den staerkeren Koenig heranfuehrt.
 # Maximaler Beitrag pro Term: 7 * corner_weight bzw. 14 * king_weight.
+# Finding: Wenn technische Gewinne wie KRvK/KQvK zu langsam konvertieren,
+# corner/proximity leicht erhoehen. Wenn die Eval in Materialvorteil-Endspielen
+# zu optimistisch wird, eher senken.
 corner_weight         = 20
 king_proximity_weight = 10
 
 # KPK Rule of the Square: wenn der Bauer nicht mehr einholbar ist,
 # wird er sicher zur Dame. Bonus on top des Bauernmaterials.
+# Finding: +500 ist stark, aber fuer sichere Umwandlung plausibel. Bei falschen
+# "unaufhaltbar"-Urteilen zuerst die Erkennung/Tempo-Logik pruefen, nicht nur
+# den Wert senken.
 passed_unstoppable_bonus = 500
 
 # Aktiver Endspielkoenig: Bonus pro Zentralisierungseinheit (0=Ecke, 7=Zentrum),
 # skaliert mit dem Endspielgrad. Wirkt nur wenn Phase < threshold.
 # Maximalbonus (Zentrum vs. Ecke, Phase=0): 7 * 3 = 21 cp
+# Finding: Maximal +21 cp ist zurueckhaltend. Bei passiven Koenigen in
+# Endspielen Richtung 4-6 testen oder die Phase-Schwelle pruefen; bei
+# Mittelspiel-Koenigsausfluegen nicht erhoehen.
 king_activity_bonus = 3
 king_activity_phase_threshold = 16
 
@@ -134,6 +200,9 @@ king_activity_phase_threshold = 16
 # Pro eigenem Freibauer: Bonus = (7 - chebyshev(König, Bauer)) * near_own_bonus.
 # Pro gegnerischem Freibauer (König als Blocker): analog mit near_enemy_bonus.
 # Max pro Bauer und Seite: 7 * bonus * (phase_weight=1) = 14 bzw. 21 cp.
+# Finding: Defensive Blockade ist bewusst staerker als eigene Begleitung.
+# Bei Problemen gegen gegnerische Freibauern zuerst near_enemy erhoehen;
+# bei fehlendem eigenen Gegenspiel near_own anheben.
 king_near_own_passed_bonus = 2
 king_near_enemy_passed_bonus = 3
 
@@ -149,11 +218,22 @@ king_near_enemy_passed_bonus = 3
 #
 # Bauern und Koenig werden bewusst NICHT bewertet: Bauern decken PST +
 # Freibauer-Bonus, Koenig deckt king_safety + king_activity_endgame.
+# Finding: Safe-Mobility ignoriert nur gegnerische Bauernangriffe, nicht
+# Fesselungen, taktische Pins oder Slider-Kontrolle. Werte klein halten und
+# nur in kleinen Schritten aendern.
+# Finding: Springer MG=EG gleich. Bei passiven Springern leicht MG erhoehen
+# oder besser ein Outpost-Feature ergaenzen.
 knight_mg = 3
 knight_eg = 3
+# Finding: Laeufer profitieren im Endspiel etwas mehr. Bei offenen Stellungen
+# eher hier oder beim dynamischen Laeuferpaar nachschaerfen.
 bishop_mg = 3
 bishop_eg = 4
+# Finding: Turm-EG=5 ist ein starker Endspiel-Hebel. Gut fuer aktive
+# Turmendspiele, aber bei kosmetischer Aktivitaet/offenen Linien ggf. senken.
 rook_mg   = 2
 rook_eg   = 5
+# Finding: Niedrige Damenmobilitaet verhindert, dass fruehe Damenausfluege
+# ueberbelohnt werden. Nur erhoehen, wenn die Dame dauerhaft zu passiv bleibt.
 queen_mg  = 1
 queen_eg  = 2
