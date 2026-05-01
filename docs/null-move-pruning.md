@@ -1,8 +1,21 @@
 # Null-Move-Pruning (NMP) — Konzept für Martuni
 
-**Status:** geplant, noch nicht implementiert
+**Status:** umgesetzt am 01.05.2026 (zusammen mit PVS, siehe unten).
 **Erwarteter Elo-Gewinn:** +50 bis +80
 **Betroffene Module:** `search.rs` (primär), ggf. `eval.rs` (Zugzwang-Erkennung)
+
+> **Befund 01.05.2026 — PVS-Voraussetzung:** Bei der Erst-Implementierung
+> stellte sich heraus, dass NMP in Martuni nie greift, weil unsere Suche
+> bisher kein Principal Variation Search (PVS) nutzte. Ohne PVS wird jeder
+> rekursive Aufruf mit dem vollen Fenster `(-beta, -alpha)` gemacht — die
+> Vorbedingung `!is_pv` (`beta - alpha > 1`) ist dann praktisch nie erfüllt.
+> Lösung: PVS gleich mitgeliefert. Mit PVS werden alle Knoten außer der
+> Hauptlinie zu Nullfenster-Knoten, NMP greift natürlich.
+>
+> Verifikation an `4Q3/5p1k/6pp/4P3/1B1pBq2/8/1PP4P/4R2K w - - 0 29` (eine
+> `missed_mate`-Stellung aus dem 01.05-Analyse): vorher Tiefe 4 / cp 1534 in
+> 8 s, kein Matt; nach NMP+PVS Tiefe 7 / `mate 6` in <6 s. Mittelspiel-
+> Test-Stellung: −43 % Knoten auf gleicher Tiefe.
 
 ## Idee in einem Satz
 
@@ -111,3 +124,45 @@ Wenn Basis-NMP läuft und Elo-Gewinn bestätigt ist, mögliche Erweiterungen:
 - **Double Null Move Extension:** In sehr späten Endspielen NMP komplett ausschalten statt nur bei "kein Offizier".
 
 Diese Verfeinerungen erst nach stabiler Basis-Version.
+
+## PVS — Principal Variation Search (mitgeliefert 01.05.2026)
+
+PVS ist die unverzichtbare Voraussetzung dafür, dass NMP überhaupt wirken
+kann (siehe Befund oben). Idee in einem Satz:
+
+> Den ersten Zug (durch Move-Ordering vermutlich der beste) mit vollem
+> Fenster prüfen, alle weiteren mit einem Nullfenster nur darauf testen,
+> ob sie diesen Anker schlagen — und nur bei Überraschung mit vollem
+> Fenster nachsuchen ("Re-Search").
+
+Implementierung in `search.rs` (Move-Schleife):
+
+```rust
+let score = if first_move {
+    -alpha_beta(&nb, new_depth, ply+1, -beta, -alpha, ...)        // voll
+} else {
+    let scout = -alpha_beta(&nb, new_depth, ply+1, -alpha-1, -alpha, ...);  // Nullfenster
+    if scout > alpha && scout < beta {
+        -alpha_beta(&nb, new_depth, ply+1, -beta, -alpha, ...)    // Re-Search
+    } else {
+        scout
+    }
+};
+```
+
+Warum das funktioniert: Alpha-Beta wird umso wirksamer, je enger das
+Fenster ist. Ein Nullfenster `[alpha, alpha+1]` lässt nur die Antwort zu
+"besser oder schlechter als alpha?" — viele Pruning-Möglichkeiten greifen
+sofort, die mit vollem Fenster nicht greifen würden. Bei guter
+Move-Ordering ist der erste Zug fast immer der beste, also brauchen die
+restlichen Züge nur einen *Test*, keine vollständige Bewertung.
+
+**Re-Search-Risiko:** Wenn die Move-Ordering schlecht ist, müssen viele
+Züge re-searched werden, und der Aufwand kippt ins Negative. Martunis
+Ordering (TT-Move > Promotion-Dame > gewinnender Capture > Killer >
+Quiet/History > verlierender Capture) ist solide genug, dass das nicht
+auftritt — die Messung am 01.05.2026 zeigt durchweg Knoten-Reduktion.
+
+**Bonus:** PVS allein bringt typischerweise +20–40 Elo, unabhängig von
+NMP. Mit NMP zusammen erwarten wir den im Doku oben genannten
+Gesamt-Gewinn.

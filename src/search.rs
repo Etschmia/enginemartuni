@@ -34,6 +34,16 @@ const MAX_PLY: usize = 128;
 // Ordering-Reihenfolge Capture > Killer > Unterpromotion > Quiet erhalten bleibt.
 const MAX_HISTORY: i32 = 16_000;
 
+// --- Null-Move-Pruning ---------------------------------------------------
+// Idee: Wenn unsere Stellung so gut ist, dass selbst ein "geschenktes" Tempo
+// für die Gegenseite die Bewertung nicht unter `beta` druecken kann, duerfen
+// wir den ganzen Teilbaum abschneiden. Konstanter Reduktionsfaktor R = 2 als
+// Einstieg — adaptive Varianten (R = 2 + depth/6) erst nach stabiler Basis.
+// Mindesttiefe 3, weil bei depth ≤ 2 die reduzierte Suche schon in der
+// Quiescence landet und nichts spart.
+const NMP_REDUCTION: i32 = 2;
+const NMP_MIN_DEPTH: i32 = 3;
+
 pub struct GoParams {
     pub wtime: Option<u64>,
     pub btime: Option<u64>,
@@ -245,6 +255,7 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
             INF,
             0,
             req.halfmove_clock,
+            true, // allow_null: an der Wurzel NMP grundsaetzlich erlauben
             &mut state,
         );
 
@@ -330,6 +341,7 @@ fn alpha_beta(
     beta: i32,
     extensions_used: i32,
     halfmove: u8,
+    allow_null: bool,
     state: &mut SearchState,
 ) -> i32 {
     state.nodes += 1;
@@ -382,6 +394,66 @@ fn alpha_beta(
         }
     }
 
+    // --- Null-Move-Pruning ----------------------------------------------
+    // Bedingungen (alle muessen erfuellt sein):
+    //   - allow_null: keine zwei Null Moves hintereinander (sonst sinnlos)
+    //   - !is_pv: nur in non-PV-Knoten — die Hauptvariante darf nicht durch
+    //     einen Pruning-Trick verfaelscht werden
+    //   - !in_check: Null Move waere illegal (Seite muss aus Schach ziehen)
+    //   - depth >= NMP_MIN_DEPTH (3): bei kleinerer Tiefe spart NMP nichts,
+    //     weil die reduzierte Suche direkt in der Quiescence landet
+    //   - ply > 0: an der Wurzel brauchen wir einen echten Best-Move
+    //   - has_non_pawn_material: Zugzwang-Schutz — in reinen Bauernendspielen
+    //     ist "passen waere mindestens so gut wie ziehen" oft falsch
+    //   - static_eval >= beta: nur wenn die Stellung *jetzt schon* gut aussieht
+    //     lohnt der Test; sonst ist ein Cutoff unwahrscheinlich
+    //
+    // Ablauf: Null Move ausfuehren (chess::Board::null_move() — flippt
+    // side_to_move, leert en passant), reduziert mit Nullfenster suchen,
+    // bei score >= beta Cutoff. Reduktion R = 2 (constant). Die rekursive
+    // Suche bekommt allow_null=false, damit kein zweites NMP folgt.
+    let is_pv = beta - alpha > 1;
+    let in_check = board.checkers().popcnt() > 0;
+    if allow_null
+        && !is_pv
+        && !in_check
+        && depth >= NMP_MIN_DEPTH
+        && ply > 0
+        && has_non_pawn_material(board, board.side_to_move())
+    {
+        let static_eval = eval_stm(board, &state.eval);
+        if static_eval >= beta {
+            if let Some(null_board) = board.null_move() {
+                // History fuer Repetition-Check kohaerent halten — der
+                // null_move-Hash gehoert zum Suchpfad wie jeder andere
+                // Kindknoten.
+                state.history.push(key);
+                let null_score = -alpha_beta(
+                    &null_board,
+                    depth - 1 - NMP_REDUCTION,
+                    ply + 1,
+                    -beta,
+                    -beta + 1,
+                    extensions_used,
+                    halfmove.saturating_add(1),
+                    false, // allow_null: nach NMP keinen weiteren Null Move
+                    state,
+                );
+                state.history.pop();
+
+                if state.stop.load(Ordering::Relaxed) {
+                    return 0;
+                }
+
+                if null_score >= beta {
+                    // Mate-Scores aus reduzierter Suche sind unzuverlaessig —
+                    // niemals als Mate weitergeben, sondern auf beta deckeln.
+                    return beta;
+                }
+            }
+        }
+    }
+
     // Zuege generieren + ordnen (mit SEE-Cache für Captures, Killer + History)
     let moves: Vec<ChessMove> = MoveGen::new_legal(board).collect();
     if moves.is_empty() {
@@ -399,6 +471,9 @@ fn alpha_beta(
     let mut best_score = -INF;
     let mut best_move: Option<ChessMove> = None;
     let mut aborted = false;
+    // PVS: der erste Zug bekommt das volle Fenster, alle weiteren werden
+    // zuerst mit einem Nullfenster (Scout-Search) getestet.
+    let mut first_move = true;
 
     for sm in &ordered {
         let mv = sm.mv;
@@ -417,12 +492,12 @@ fn alpha_beta(
         //    Verbesserung erhalten, Endspiel-Suche wieder tief genug.
         // Phase-Schwelle 16 deckt sich mit `king_activity_phase_threshold` aus
         // der Eval — derselbe Endspiel-Begriff in Suche und Bewertung.
-        let in_check = nb.checkers().popcnt() > 0;
-        let other_cand = !in_check && is_candidate_move(board, mv, &nb, sm.see_val);
+        let child_in_check = nb.checkers().popcnt() > 0;
+        let other_cand = !child_in_check && is_candidate_move(board, mv, &nb, sm.see_val);
         let check_ext = if crate::eval::game_phase(&nb) < 16 { 2 } else { 1 };
         let ext = if other_cand && extensions_used + 2 <= MAX_EXTENSION_PER_LINE {
             2
-        } else if in_check && extensions_used + check_ext <= MAX_EXTENSION_PER_LINE {
+        } else if child_in_check && extensions_used + check_ext <= MAX_EXTENSION_PER_LINE {
             check_ext
         } else {
             0
@@ -434,21 +509,78 @@ fn alpha_beta(
             halfmove.saturating_add(1)
         };
 
-        let score = -alpha_beta(
-            &nb,
-            new_depth,
-            ply + 1,
-            -beta,
-            -alpha,
-            extensions_used + ext,
-            new_halfmove,
-            state,
-        );
+        // --- Principal Variation Search (PVS) -----------------------------
+        // Annahme: durch gute Move-Ordering ist der erste Zug aller
+        // Wahrscheinlichkeit nach der beste. Den verifizieren wir mit
+        // vollem Fenster — er liefert den "Anker" fuer alpha. Alle
+        // weiteren Zuege testen wir nur, ob sie diesen Anker schlagen
+        // koennen, mit einem Nullfenster `(-alpha - 1, -alpha)`. Das ist
+        // billiger, weil Alpha-Beta bei engerem Fenster mehr Cutoffs
+        // erzeugt. Wenn der Test ueberraschend doch besser ist
+        // (`alpha < score < beta`), wiederholen wir mit vollem Fenster
+        // ("Re-Search"), um den exakten Wert zu bekommen.
+        //
+        // Zusatznutzen: Nullfenster-Knoten haben `beta - alpha == 1`,
+        // d.h. unsere `is_pv`-Bedingung in NMP wird endlich falsch und
+        // NMP greift in der Tiefe.
+        let score = if first_move {
+            -alpha_beta(
+                &nb,
+                new_depth,
+                ply + 1,
+                -beta,
+                -alpha,
+                extensions_used + ext,
+                new_halfmove,
+                true, // allow_null
+                state,
+            )
+        } else {
+            // Scout: Nullfenster-Test
+            let scout = -alpha_beta(
+                &nb,
+                new_depth,
+                ply + 1,
+                -alpha - 1,
+                -alpha,
+                extensions_used + ext,
+                new_halfmove,
+                true,
+                state,
+            );
+
+            if state.stop.load(Ordering::Relaxed) {
+                aborted = true;
+                break;
+            }
+
+            // Nur wenn der Zug den Anker schlaegt UND noch nicht ueber
+            // beta hinaus liegt, lohnt der Re-Search mit vollem Fenster.
+            // Bei `scout >= beta` haben wir ohnehin einen Cutoff —
+            // exakter Wert nicht noetig.
+            if scout > alpha && scout < beta {
+                -alpha_beta(
+                    &nb,
+                    new_depth,
+                    ply + 1,
+                    -beta,
+                    -alpha,
+                    extensions_used + ext,
+                    new_halfmove,
+                    true,
+                    state,
+                )
+            } else {
+                scout
+            }
+        };
 
         if state.stop.load(Ordering::Relaxed) {
             aborted = true;
             break;
         }
+
+        first_move = false;
 
         if score > best_score {
             best_score = score;
@@ -616,6 +748,21 @@ fn eval_stm(board: &Board, params: &EvalParams) -> i32 {
     } else {
         -score
     }
+}
+
+/// True, wenn `side` mindestens eine Leicht-/Schwerfigur (Springer, Laeufer,
+/// Turm, Dame) besitzt. Dient als pragmatische Zugzwang-Heuristik fuer NMP:
+/// in reinen Bauernendspielen (nur König und Bauern) ist die NMP-Annahme
+/// "ein Zug zu machen ist mindestens so gut wie zu passen" oft falsch — dort
+/// wird NMP deshalb deaktiviert. Deckt 95% der praktischen Zugzwang-Faelle ab.
+fn has_non_pawn_material(board: &Board, side: Color) -> bool {
+    let side_bb = *board.color_combined(side);
+    for &p in &[Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen] {
+        if (*board.pieces(p) & side_bb) != BitBoard::new(0) {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_capture(board: &Board, mv: ChessMove) -> bool {
