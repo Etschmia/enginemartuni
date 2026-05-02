@@ -71,9 +71,15 @@ Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
   Best-Moves (Repro: vGwmaXUy, 19.Ng5?? statt 19.Qe4). Neuer Helfer
   `is_repetition_draw` trennt Spielhistorie und Suchpfad
   (`SearchState.root_history_len`); Unit-Tests in `search::tests`.
-- **Analyse-Skript verbessern (`docs/tool-änderung.md`).** Vor der nächsten
-  Auswertungsrunde umsetzen — geplante Änderungen liegen in der Datei. Wird
-  in einem separaten Context-Fenster bearbeitet.
+- **Analyse-Skript verbessern — DONE 02.05.2026.** Pauschales
+  `--min-movetime 0.3` ersetzt durch per-Klasse-Schwellen über
+  `est = base + 40·inc` (Lichess-Konvention): bullet 0s, blitz 1s, rapid 3s,
+  classical 5s. Schwellen sind `int` (PGN-Clocks haben Sekunden-Auflösung),
+  `--min-movetime` (float, Default 0.3) bleibt als Fallback für fehlende /
+  unparsbare `[TimeControl]`-Tags. Skip-Meldung auf stderr zeigt jetzt Klasse
+  + Schwelle. Doku: `docs/blunder-analyse.md` (Wartungshinweis
+  „Movetime-Filter pro Zeitkontrolle (2026-05-02)"); ursprüngliche Planung
+  in `docs/tool-änderung.md` als umgesetzt markiert.
 
 ## Lichess-Anbindung
 

@@ -321,6 +321,45 @@ def classify_motifs(
     return motifs
 
 
+def classify_time_control(tc_tag: str) -> str | None:
+    """Lichess-Klassifikation per est = base + 40 * inc.
+
+    Lichess kategorisiert Partien nach `est = base + 40·inc` (Sekunden):
+    < 180 = bullet, < 480 = blitz, < 1500 = rapid, sonst classical.
+    Korrespondenz (`-`), unbekannt (`*`/leer) und exotische Mehrphasen-
+    Kontrollen (z. B. `15/40+30/60`) liefern `None` — der Aufrufer fällt
+    dann auf `--min-movetime` zurück.
+    """
+    if not tc_tag or tc_tag in ("-", "*"):
+        return None
+    try:
+        base, inc = tc_tag.split("+", 1)
+        est = int(base) + 40 * int(inc)
+    except ValueError:
+        return None
+    if est < 180:
+        return "bullet"
+    if est < 480:
+        return "blitz"
+    if est < 1500:
+        return "rapid"
+    return "classical"
+
+
+def threshold_for_game(game: chess.pgn.Game, args: argparse.Namespace) -> tuple[float, str | None]:
+    """Effektive Movetime-Untergrenze + Klasse für eine Partie.
+
+    Hintergrund: Lichess-PGNs haben `[%clk H:MM:SS]` mit Sekunden-Auflösung,
+    daher sind sub-Sekunden-Schwellen sinnlos. Die per-Klasse-Defaults sind
+    bewusst `int`-typisiert. Wenn der `[TimeControl]`-Tag fehlt oder nicht
+    parsbar ist, fällt die Funktion auf `--min-movetime` zurück (alter Pfad).
+    """
+    klass = classify_time_control(game.headers.get("TimeControl", ""))
+    if klass is None:
+        return float(args.min_movetime), None
+    return float(getattr(args, f"min_movetime_{klass}")), klass
+
+
 def player_colors(game: chess.pgn.Game, player: str) -> set[chess.Color]:
     """Return the set of colors the target player controlled in this game.
 
@@ -380,6 +419,7 @@ def analyze_game(
     game_id: str,
     target_colors: set[chess.Color],
     min_move_time: float = 0.0,
+    tc_class: str | None = None,
 ) -> Iterable[Blunder]:
     board = game.board()
     ply = 0
@@ -469,10 +509,19 @@ def analyze_game(
         board.push(move)
 
     if skipped_fast:
-        print(
-            f"  ({skipped_fast} move(s) skipped in {game_id} — under {min_move_time}s)",
-            file=sys.stderr,
-        )
+        if tc_class is not None:
+            # Schwelle ist int für die per-Klasse-Defaults (s.o.); ohne `:g`
+            # würde 1.0 als "1.0s" geprintet, das verschleiert die Auflösung.
+            thr_disp = f"{int(min_move_time)}" if float(min_move_time).is_integer() else f"{min_move_time}"
+            print(
+                f"  ({skipped_fast} move(s) skipped in {game_id} — {tc_class}, threshold {thr_disp}s)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"  ({skipped_fast} move(s) skipped in {game_id} — under {min_move_time}s)",
+                file=sys.stderr,
+            )
 
 
 def iter_games(pgn_paths: list[Path]) -> Iterable[tuple[str, chess.pgn.Game]]:
@@ -600,14 +649,47 @@ def main() -> int:
         default=150,
         help="Centipawn loss that qualifies as a blunder (default: 150)",
     )
+    # Per-Klasse-Schwellen sind int, weil Lichess-PGNs `[%clk H:MM:SS]`-
+    # Sekundenauflösung haben — Zehntelsekunden kommen aus den PGNs nicht
+    # heraus. Defaults sind die konservative Variante (siehe
+    # docs/blunder-analyse.md): bestehende Stichproben werden nur leicht
+    # strenger gefiltert als zuvor mit dem pauschalen 0.3s-Filter.
+    parser.add_argument(
+        "--min-movetime-bullet",
+        type=int,
+        default=0,
+        metavar="SECS",
+        help="Min. Bedenkzeit (Sekunden, integer) für Bullet-Partien (est < 180s). Default: 0.",
+    )
+    parser.add_argument(
+        "--min-movetime-blitz",
+        type=int,
+        default=1,
+        metavar="SECS",
+        help="Min. Bedenkzeit (Sekunden, integer) für Blitz-Partien (180s ≤ est < 480s). Default: 1.",
+    )
+    parser.add_argument(
+        "--min-movetime-rapid",
+        type=int,
+        default=3,
+        metavar="SECS",
+        help="Min. Bedenkzeit (Sekunden, integer) für Rapid-Partien (480s ≤ est < 1500s). Default: 3.",
+    )
+    parser.add_argument(
+        "--min-movetime-classical",
+        type=int,
+        default=5,
+        metavar="SECS",
+        help="Min. Bedenkzeit (Sekunden, integer) für Classical-Partien (est ≥ 1500s). Default: 5.",
+    )
     parser.add_argument(
         "--min-movetime",
         type=float,
-        default=0.0,
+        default=0.3,
         metavar="SECS",
-        help="Skip moves where the player spent less than SECS seconds (e.g. 0.3). "
-             "Useful to ignore book moves and pre-moves. Requires %clk annotations in the PGN. "
-             "Default: 0.0 (no filtering).",
+        help="Fallback, wenn der [TimeControl]-Tag fehlt oder unparsbar ist (z.B. Korrespondenz '-'). "
+             "Bei vorhandenem Tag greifen --min-movetime-{bullet,blitz,rapid,classical}. "
+             "Default: 0.3.",
     )
     parser.add_argument(
         "--hash",
@@ -689,9 +771,11 @@ def main() -> int:
             if args.losses_only and not martuni_lost(game, args.player, target_colors):
                 skipped_wins += 1
                 continue
+            effective_min_movetime, tc_class = threshold_for_game(game, args)
             for blunder in analyze_game(
                 engine, game, limit, args.threshold, game_id, target_colors,
-                min_move_time=args.min_movetime,
+                min_move_time=effective_min_movetime,
+                tc_class=tc_class,
             ):
                 report.blunders.append(blunder)
     finally:

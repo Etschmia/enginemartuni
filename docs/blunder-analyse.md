@@ -142,8 +142,11 @@ Bewusste Lücken, die ggf. später ergänzt werden können:
   Stellung" sichtbar. Bessere Diagnose: gleiche Stellung Martuni vs.
   Stockfish mit identischer Tiefe vergleichen.
 - **Zeitmanagement-Fehler**: Blitzpartien mit vielen Buchzügen oder Pre-Moves
-  erzeugen Rauschen. Mit `--min-movetime 0.3` werden Züge unter 0,3 Sekunden
-  übersprungen (erfordert `%clk`-Annotationen im PGN).
+  erzeugen Rauschen. Mit den per-Klasse-Schaltern
+  `--min-movetime-{bullet,blitz,rapid,classical}` werden zu schnell gespielte
+  Züge übersprungen (erfordert `%clk`-Annotationen im PGN). Lichess-Clocks
+  haben **Sekunden-Auflösung** (`[%clk H:MM:SS]`), die Schaltern sind deshalb
+  `int`-typisiert; Zehntelsekunden kommen aus den PGNs nicht heraus.
 
 ## Mapping auf konkrete Stellschrauben
 
@@ -206,10 +209,14 @@ python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
 python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
     --losses-only
 
-# Buchzüge / Pre-Moves ignorieren (unter 0,3 s gespielt)
-# — sinnvoll bei Blitzpartien mit vielen schnellen Anfangszügen
+# Buchzüge / Pre-Moves ignorieren — Schwelle wird pro Partie aus dem
+# [TimeControl]-Tag abgeleitet (Defaults: bullet 0s, blitz 1s, rapid 3s,
+# classical 5s). Bei fehlendem/unparsbarem Tag greift --min-movetime.
+python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/
+
+# Strenger filtern: in Rapid-Partien erst ab 5s als „echte Überlegung"
 python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
-    --min-movetime 0.3
+    --min-movetime-rapid 5
 
 # anderen Spieler analysieren (z. B. für Vergleichszwecke)
 python tools/analyze_blunders.py game.pgn --player Stockfish
@@ -249,11 +256,15 @@ python tools/analyze_blunders.py \
     --game-dir ../lichess-bot/game_records/ \
     --since 2026-04-12T16:38 \
     --losses-only \
-    --min-movetime 0.3 \
     --threshold 150 \
     --movetime 0.5 \
     --threads 2 --hash 256
 ```
+
+Die per-Klasse-Defaults (`--min-movetime-bullet=0`, `--min-movetime-blitz=1`,
+`--min-movetime-rapid=3`, `--min-movetime-classical=5`) greifen automatisch —
+sie müssen nur überschrieben werden, wenn man strenger oder lockerer filtern
+will.
 
 ### Alle Optionen auf einen Blick
 
@@ -264,7 +275,11 @@ python tools/analyze_blunders.py \
 | `--since YYYY-MM-DD[THH:MM]` | — | Nur Dateien ab diesem UTC-Datum (mtime) |
 | `--losses-only` | aus | Nur Partien analysieren, die Martuni verloren hat |
 | `--player NAME` | `Martuni` | Welche Seite analysiert wird (Substring-Match) |
-| `--min-movetime SECS` | `0.0` | Züge unter SECS Sekunden überspringen (`%clk` erforderlich) |
+| `--min-movetime-bullet SECS` | `0` | Min. Bedenkzeit (s, integer) für Bullet (est `< 180s`) |
+| `--min-movetime-blitz SECS` | `1` | Min. Bedenkzeit (s, integer) für Blitz (`180 ≤ est < 480`) |
+| `--min-movetime-rapid SECS` | `3` | Min. Bedenkzeit (s, integer) für Rapid (`480 ≤ est < 1500`) |
+| `--min-movetime-classical SECS` | `5` | Min. Bedenkzeit (s, integer) für Classical (`est ≥ 1500`) |
+| `--min-movetime SECS` | `0.3` | Fallback bei fehlendem/unparsbarem `[TimeControl]`-Tag |
 | `--threshold CP` | `150` | Centipawn-Verlust ab dem ein Zug als Patzer gilt |
 | `--movetime SECS` | `0.3` | Stockfish-Analysezeit pro Zug |
 | `--depth N` | — | Feste Suchtiefe statt movetime |
@@ -276,6 +291,42 @@ Der Report wird auf stdout geschrieben: erst die Summentabelle
 (Phase / Motiv / Phase × Motiv), dann die Einzel-Blunder mit FEN, bestem Zug
 laut Stockfish und cp-Loss. Für Regression-Tracking sinnvoll: stdout in eine
 Datei umleiten und mit `diff` gegen den Lauf vor der Eval-Änderung vergleichen.
+
+#### Wartungshinweis: Movetime-Filter pro Zeitkontrolle (2026-05-02)
+
+Die alte pauschale Schwelle `--min-movetime 0.3` hatte ein
+Auflösungsmissverständnis: Lichess-PGNs schreiben `[%clk H:MM:SS]` mit
+**Sekunden-Auflösung**, sub-Sekunden-Werte sind also Schein-Präzision. Effektiv
+filterte `0.3` nur die Züge mit `time_spent == 0.0` (Buchzüge / Premoves
+innerhalb derselben Sekundenmarke).
+
+Stattdessen klassifiziert das Skript jetzt jede Partie über
+`est = base + 40·inc` (Lichess-Konvention) und wendet eine Schwelle pro
+Klasse an. Defaults sind die konservative Variante:
+
+| Klasse | est-Bereich | Default-Schwelle |
+|---|---|---|
+| bullet | `< 180s` | 0s |
+| blitz | `180 ≤ est < 480s` | 1s |
+| rapid | `480 ≤ est < 1500s` | 3s |
+| classical | `≥ 1500s` | 5s |
+
+Bullet bleibt bei 0, weil dort 1s in 1+0/2+1 echte Überlegung ist.
+
+Die Schalter sind `int` typisiert — Zehntelsekunden machen wegen der PGN-
+Auflösung keinen Sinn. Bei fehlendem oder unparsbarem `[TimeControl]`-Tag
+(Korrespondenz `-`, `*`, exotische Mehrphasen-Kontrollen) fällt das Skript
+auf `--min-movetime` (float, Default `0.3`) zurück.
+
+Skip-Meldungen auf stderr enthalten jetzt zusätzlich Klasse und Schwelle, z.B.:
+
+```
+(10 move(s) skipped in <game> — rapid, threshold 3s)
+```
+
+Inkrement-Zeitkontrollen (z.B. `300+1`) erzeugen bei sofortigen Zügen negative
+`time_spent`-Werte (`last - curr = 300 - 301 = -1`); die werden vom `<`-Vergleich
+ohnehin gefiltert.
 
 #### Wartungshinweis: Output-Vertrag vom 2026-04-21
 
