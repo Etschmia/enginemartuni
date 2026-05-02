@@ -20,9 +20,11 @@ The bot accepts challenges in Blitz (3+0, 5+0) and Rapid (10+5, 15+10).
 
 ### Search
 - **Alpha-Beta** with iterative deepening
+- **Principal Variation Search (PVS)** — null-window scout searches for non-PV moves, full re-search only when the scout score lies between alpha and beta
+- **Null-Move Pruning** — when the static evaluation already exceeds beta, give the opponent a free move and prune the subtree if even that doesn't drop below beta. Constant reduction R = 2, minimum depth 3, with zugzwang protection (disabled if the side to move has only pawns)
 - **Quiescence Search** — avoids horizon-effect blunders by resolving captures at leaf nodes
 - **Transposition Table** — Zobrist-hashed, avoids re-searching known positions
-- **Check Extensions** — extends search depth when the king is in check
+- **Check Extensions** — extends search depth when the king is in check (phase-dependent: +1 in midgame, +2 in endgame)
 - **Pondering** — thinks on the opponent's time (`go ponder` / `ponderhit`)
 
 ### Evaluation
@@ -63,7 +65,6 @@ It works with any UCI-compatible GUI: [Arena](http://www.playwitharena.de/), [Cu
 
 Features currently planned or in development:
 
-- **Null-Move Pruning** — prune branches where even passing a move leads to beta cutoff
 - **Late Move Reductions (LMR)** — reduce search depth for moves that are unlikely to be best
 
 ---

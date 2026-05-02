@@ -32,7 +32,7 @@ Ausnahme: Infrastruktur (Board-Repräsentation, Zuggenerierung, UCI-Protokoll) d
 Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
 
 - **UCI:** vollständig, inkl. `go ponder` / `ponderhit` mit echter Ponder-Suche (offene Deadline, TT-basierter Pondermove)
-- **Suche:** Alpha-Beta mit iterativem Deepening, Quiescence Search, Transposition Table
+- **Suche:** Alpha-Beta mit iterativem Deepening, PVS (Null-Window-Scout), Null-Move Pruning (R=2, min-depth 3, mit Zugzwang-Schutz), Quiescence Search, Transposition Table, korrekte Repetition-Detection (Stockfish-Stil: 1-fold in Spielhistorie ≠ Remis)
 - **Evaluation:** Material + Piece-Square-Tables (Tapered Midgame/Endgame), King Safety (3×3-Zone, Angreifer-Gewichte, SafetyTable, Pawn Shield), Endspiel-Heuristiken
 - **Eröffnung:** Polyglot-Books (`.bin`) mit konfigurierbarer Prioritätsreihenfolge via `BOOK_FILES`, auch im Ponder-Modus aktiv
 - **Konfiguration:** `.env` mit kaskadierter Suche; UCI-Optionen `Hash`, `MoveOverhead`, `Ponder` funktional wirksam
@@ -66,6 +66,14 @@ Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
   soll fallen, Rating-Erwartung +50–80 Elo. Wenn alles gut: weiter mit
   LMR (Late Move Reductions, siehe `project_lmr_plan` Memory) oder
   NMP-Verfeinerungen (adaptive R, Verification Search).
+- **Repetition-Detection korrigiert (02.05.2026).** `state.history.contains`
+  zählte vorher 1-fold in Spielhistorie als Remis und blockierte ruhige
+  Best-Moves (Repro: vGwmaXUy, 19.Ng5?? statt 19.Qe4). Neuer Helfer
+  `is_repetition_draw` trennt Spielhistorie und Suchpfad
+  (`SearchState.root_history_len`); Unit-Tests in `search::tests`.
+- **Analyse-Skript verbessern (`docs/tool-änderung.md`).** Vor der nächsten
+  Auswertungsrunde umsetzen — geplante Änderungen liegen in der Datei. Wird
+  in einem separaten Context-Fenster bearbeitet.
 
 ## Lichess-Anbindung
 

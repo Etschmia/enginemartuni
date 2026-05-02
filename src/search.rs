@@ -97,8 +97,17 @@ struct SearchState {
     think_time: Duration,
     start: Instant,
     nodes: u64,
-    // Historie + aktueller Suchpfad; zum Erkennen von Stellungswiederholungen
+    // Historie + aktueller Suchpfad; zum Erkennen von Stellungswiederholungen.
+    // Zu Suchbeginn enthaelt sie die Spielhistorie (vom Position-Tracker uebergeben);
+    // waehrend der Suche pusht jeder Knoten seinen eigenen Hash, bevor er die
+    // Kinder aufruft, und popt ihn wieder beim Ruecksprung.
     history: Vec<u64>,
+    // Anzahl Hashes in `history` zum Suchstart. Trennt Spielhistorie (Index <
+    // root_history_len) vom Suchpfad (Index >= root_history_len). Wird in
+    // is_repetition_draw genutzt, um zwischen "schon einmal in der Partie
+    // aufgetreten" (1-fold, kein Remis) und "im Suchpfad wiederholt"
+    // (2-fold-as-draw-Trick) zu unterscheiden.
+    root_history_len: usize,
     root_best_move: Option<ChessMove>,
     root_best_score: i32,
     // Wenn die Wurzel nur einen legalen Zug hat, merken wir ihn vor: beim
@@ -222,6 +231,8 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         }
     };
 
+    let history = req.history;
+    let root_history_len = history.len();
     let mut state = SearchState {
         tt: Arc::clone(&req.tt),
         eval: Arc::clone(&req.eval),
@@ -231,7 +242,8 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         think_time,
         start,
         nodes: 0,
-        history: req.history,
+        history,
+        root_history_len,
         root_best_move: None,
         root_best_score: 0,
         forced_only_move,
@@ -354,7 +366,7 @@ fn alpha_beta(
 
     // Stellungswiederholung und 50-Zuege-Regel
     if ply > 0 {
-        if state.history.contains(&key) {
+        if is_repetition_draw(&state.history, state.root_history_len, key) {
             return 0;
         }
         if halfmove >= 100 {
@@ -748,6 +760,50 @@ fn eval_stm(board: &Board, params: &EvalParams) -> i32 {
     } else {
         -score
     }
+}
+
+/// Erkennt Stellungswiederholung mit Trennung zwischen Spielhistorie und
+/// Suchpfad. Hintergrund: ein simples `history.contains(&key)` zaehlt jede
+/// frueher gesehene Stellung als Remis (0). Das ist falsch — FIDE verlangt
+/// 3-fold, und Engines duerfen nur dann den 2-fold-Suchpfad-Trick anwenden,
+/// wenn die Wiederholung tatsaechlich im Suchpfad entsteht (sonst wuerden
+/// Wurzelzuege wie 19.Qe4 in vGwmaXUy faelschlich auf 0 gedeckelt — Repro
+/// 02.05.2026: 19.Qe4 mit Historie cp 0, ohne Historie cp -573).
+///
+/// Algorithmus (Stockfish-Stil, vereinfacht): wir gehen `history` rueckwaerts
+/// durch und schauen, wo sich `key` wiederfindet.
+///   - Match an Index >= `root_history_len`  → die Stellung ist schon einmal
+///     im Suchpfad selbst aufgetreten. Das ist der klassische
+///     2-fold-as-draw-Trick: ein rationaler Gegner wuerde die Wiederholung
+///     vermeiden, wenn er gewinnen kann; wir duerfen den Teilbaum mit 0
+///     abschneiden.
+///   - Match an Index < `root_history_len`   → Treffer in der gespielten
+///     Partie. Das alleine ist erst 2-fold ueber den ganzen Spielverlauf,
+///     und FIDE verlangt 3-fold. Wir zaehlen weiter und brauchen ein zweites
+///     Spielhistorie-Match (insgesamt 3-fold = aktuelle + 2 vorherige), um
+///     wirklich 0 zurueckzugeben.
+///
+/// Beachte: der `key` der aktuellen Stellung wurde noch NICHT in `history`
+/// gepusht — der Push passiert spaeter, vor dem Rekursionsaufruf der Kinder.
+/// Daher ist die aktuelle Begegnung nicht in `history`, und ein einzelner
+/// Match in der Spielhistorie bedeutet 2-fold (nicht 3-fold).
+fn is_repetition_draw(history: &[u64], root_history_len: usize, key: u64) -> bool {
+    let mut game_history_matches = 0;
+    for (i, &h) in history.iter().enumerate().rev() {
+        if h != key {
+            continue;
+        }
+        if i >= root_history_len {
+            // Wiederholung innerhalb des Suchpfads → 2-fold-as-draw.
+            return true;
+        }
+        // Match in der Spielhistorie: brauchen ein zweites, um 3-fold zu erreichen.
+        game_history_matches += 1;
+        if game_history_matches >= 2 {
+            return true;
+        }
+    }
+    false
 }
 
 /// True, wenn `side` mindestens eine Leicht-/Schwerfigur (Springer, Laeufer,
@@ -1151,4 +1207,65 @@ fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Du
     let budget = budget.saturating_sub(move_overhead).max(50);
     let ceiling = remaining.saturating_sub(50).max(50);
     Duration::from_millis(budget.min(ceiling))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Repetition-Helper: pruefe die vier relevanten Faelle einzeln.
+
+    #[test]
+    fn repetition_no_match_is_not_draw() {
+        // Saubere Stellung — kein Hash gleicht `key`.
+        let history = vec![0xAAAA, 0xBBBB, 0xCCCC];
+        assert!(!is_repetition_draw(&history, 1, 0x1234));
+    }
+
+    #[test]
+    fn repetition_one_game_history_match_is_not_draw() {
+        // Match nur in der Spielhistorie (Index < root_history_len).
+        // FIDE braucht 3-fold — ein einzelnes Match alleine ergibt 0
+        // (key + 1 vorheriges Vorkommen = 2-fold) und ist KEIN Remis.
+        let history = vec![0xDEAD, 0xBEEF, 0xCAFE];
+        let root = 3; // alle Eintraege sind Spielhistorie
+        assert!(!is_repetition_draw(&history, root, 0xBEEF));
+    }
+
+    #[test]
+    fn repetition_two_game_history_matches_is_draw() {
+        // Position war schon 2x in der Partie — die aktuelle Begegnung ist die
+        // dritte → 3-fold-Remis.
+        let history = vec![0xBEEFu64, 0xCAFE, 0xBEEF, 0xF00D];
+        let root = 4;
+        assert!(is_repetition_draw(&history, root, 0xBEEF));
+    }
+
+    #[test]
+    fn repetition_match_in_search_path_is_draw() {
+        // Match liegt im Suchpfad (Index >= root_history_len) → klassischer
+        // 2-fold-as-draw-Trick: einmaliges Wiedersehen reicht.
+        // root_history_len=2 → Indizes 2,3 sind Suchpfad.
+        let history = vec![0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD];
+        let root = 2;
+        assert!(is_repetition_draw(&history, root, 0xCCCC));
+    }
+
+    #[test]
+    fn repetition_match_in_game_only_is_not_draw_even_if_root_zero() {
+        // Edge-Case: leere Spielhistorie zum Suchstart (root=0). Dann ist
+        // jeder Match per Definition im Suchpfad → 2-fold-as-draw.
+        let history = vec![0x1111, 0x2222, 0x3333];
+        let root = 0;
+        assert!(is_repetition_draw(&history, root, 0x2222));
+    }
+
+    #[test]
+    fn repetition_recent_search_path_match_short_circuits() {
+        // Selbst wenn weiter hinten in der Spielhistorie ein Match waere,
+        // ein Suchpfad-Match (rueckwaerts zuerst gefunden) loest sofort aus.
+        let history = vec![0xAAAA, 0xBBBB, 0xAAAA];
+        let root = 1; // Eintrag 0 = Spielhistorie, 1+2 = Suchpfad
+        assert!(is_repetition_draw(&history, root, 0xAAAA));
+    }
 }
