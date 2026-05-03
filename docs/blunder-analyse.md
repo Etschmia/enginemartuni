@@ -249,6 +249,41 @@ python tools/analyze_blunders.py game.pgn --threshold 100
 python tools/analyze_blunders.py game.pgn --threshold 75
 ```
 
+### Inkrementeller Modus (additiv)
+
+Statt das Tool nur einmal über 100+ Partien laufen zu lassen, kann es jetzt
+zwischendurch immer wieder aufgerufen werden, wenn der Server ruhig ist.
+Der Zustand wird in einer JSON-Datei festgehalten — jede PGN, die einmal
+verarbeitet wurde, wird beim nächsten Lauf übersprungen.
+
+```bash
+# Erster Lauf: legt analysis_state.json neu an
+python tools/analyze_blunders.py \
+    --game-dir ../lichess-bot/game_records/ \
+    --output analysis_state.json
+
+# Folgeläufe: nur neue PGNs werden analysiert, Rest übersprungen
+python tools/analyze_blunders.py \
+    --game-dir ../lichess-bot/game_records/ \
+    --output analysis_state.json
+
+# Kumulierten Report anzeigen, ohne Stockfish zu starten
+python tools/analyze_blunders.py --report --output analysis_state.json
+```
+
+Der Output zeigt bei jedem Lauf zwei Blöcke:
+- **Batch**: neue Blunder und deren Motiv-/Phase-Verteilung aus diesem Lauf
+- **Kumulativ**: Gesamtzahl PGNs + Blunder, Phase/Motiv-Tabellen über alle Läufe
+
+Crash-Sicherheit: der Zustand wird nach **jeder einzelnen PGN-Datei** atomar
+geschrieben (tmp-Datei + rename). Ein Absturz mitten im Lauf verliert nur den
+Fortschritt der gerade laufenden Datei, nicht den gesamten bisherigen Zustand.
+
+**Workflow-Hinweis:** Wenn Du nach einem Analyse-Zyklus die Partien nach
+`game_archiv/` verschiebst, einfach die `analysis_state.json` löschen oder
+umbenennen — beim nächsten Lauf ohne existierende Datei startet das Tool
+automatisch frisch.
+
 ### Vollständiges Beispiel (typischer SEE-Feintuning-Lauf)
 
 ```bash
@@ -286,6 +321,8 @@ will.
 | `--engine PATH` | `stockfish` | Pfad zum Stockfish-Binary |
 | `--threads N` | `1` | Stockfish-Threads |
 | `--hash MB` | `128` | Stockfish-Hashtable-Größe in MB |
+| `--output FILE` | — | JSON-Zustandsdatei für inkrementelle Analyse (neu anlegen oder fortsetzen) |
+| `--report` | aus | Kumulierten Report aus `--output FILE` anzeigen, keine Analyse |
 
 Der Report wird auf stdout geschrieben: erst die Summentabelle
 (Phase / Motiv / Phase × Motiv), dann die Einzel-Blunder mit FEN, bestem Zug
@@ -327,6 +364,14 @@ Skip-Meldungen auf stderr enthalten jetzt zusätzlich Klasse und Schwelle, z.B.:
 Inkrement-Zeitkontrollen (z.B. `300+1`) erzeugen bei sofortigen Zügen negative
 `time_spent`-Werte (`last - curr = 300 - 301 = -1`); die werden vom `<`-Vergleich
 ohnehin gefiltert.
+
+#### Wartungshinweis: Inkrementeller Modus (2026-05-03)
+
+`--output FILE` und `--report` hinzugefügt. Das Tool verwaltet jetzt eine
+JSON-Zustandsdatei, die verarbeitete PGN-Dateinamen und alle Blunder akkumuliert.
+Folgeläufe mit derselben Datei analysieren nur noch neue PGNs. Zustand wird
+nach jeder Datei atomar geschrieben (crash-sicher). Ohne `--output` ist das
+Verhalten identisch zur Vorgängerversion.
 
 #### Wartungshinweis: Output-Vertrag vom 2026-04-21
 

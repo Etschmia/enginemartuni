@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -550,6 +551,34 @@ def collect_pgns(
     return pgns
 
 
+def load_state(path: Path) -> tuple[set[str], list[Blunder]]:
+    """Inkrementellen Analysezustand aus JSON laden.
+
+    Gibt (analyzed_pgns, blunders) zurück — analyzed_pgns ist die Menge der
+    PGN-Dateinamen, die in früheren Läufen bereits verarbeitet wurden.
+    """
+    with path.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    analyzed = set(data.get("analyzed_pgns", []))
+    blunders = [Blunder(**b) for b in data.get("blunders", [])]
+    return analyzed, blunders
+
+
+def save_state(path: Path, analyzed_pgns: set[str], blunders: list[Blunder]) -> None:
+    """Inkrementellen Analysezustand in JSON schreiben (atomar per tmpfile)."""
+    data = {
+        "version": 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "analyzed_pgns": sorted(analyzed_pgns),
+        "blunders": [asdict(b) for b in blunders],
+    }
+    # Schreibe zuerst in tmp-Datei, dann umbenennen — kein halb-geschriebener Zustand.
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    tmp.replace(path)
+
+
 def print_report(report: Report) -> None:
     if not report.blunders:
         print("No blunders above threshold.")
@@ -589,6 +618,44 @@ def print_report(report: Report) -> None:
             f"[{b.game_id}] {b.move_number}{'.' if b.side == 'white' else '...'} "
             f"{b.move_san}  loss={b.loss_cp}cp  phase={b.phase}  motifs={motifs}{best}{fen}{martuni}"
         )
+
+
+def print_incremental_report(
+    new_report: Report,
+    cumulative_report: Report,
+    new_pgn_count: int,
+    total_pgn_count: int,
+) -> None:
+    """Batch-Ergebnis + kumulierte Zusammenfassung für inkrementelle Läufe."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    sep = "=" * 60
+    print(f"\n{sep}")
+    print(f"  Batch: {now} — {new_pgn_count} neue PGN(s)")
+    print(f"{sep}")
+
+    if new_report.blunders:
+        print_report(new_report)
+    else:
+        print("\nKeine neuen Blunder in diesem Batch.\n")
+
+    total = len(cumulative_report.blunders)
+    dsep = "─" * 60
+    print(f"\n{dsep}")
+    print(f"  Kumulativ: {total_pgn_count} PGN(s) analysiert, {total} Blunder gesamt")
+    print(f"{dsep}")
+
+    if not cumulative_report.blunders:
+        return
+
+    print("By phase:")
+    for phase, blunders in sorted(cumulative_report.by_phase().items()):
+        print(f"  {phase:<12} {len(blunders):>4}")
+    print()
+
+    print("By motif:")
+    for motif, blunders in sorted(cumulative_report.by_motif().items(), key=lambda kv: -len(kv[1])):
+        print(f"  {motif:<24} {len(blunders):>4}")
+    print()
 
 
 def main() -> int:
@@ -703,7 +770,38 @@ def main() -> int:
         default=1,
         help="Stockfish threads",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "JSON-Zustandsdatei für inkrementelle Analyse. "
+            "Existiert die Datei, werden bereits verarbeitete PGNs übersprungen "
+            "und neue Blunder angehängt. Existiert sie nicht, wird sie neu angelegt. "
+            "Kombinierbar mit --report (dann nur Anzeige, keine Analyse)."
+        ),
+    )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        default=False,
+        help="Kumulierten Report aus --output FILE anzeigen, ohne neue Analyse zu starten.",
+    )
     args = parser.parse_args()
+
+    # --- --report-Modus: akkumulierten Bericht aus Zustandsdatei anzeigen ---
+    if args.report:
+        if args.output is None:
+            print("error: --report requires --output FILE", file=sys.stderr)
+            return 2
+        if not args.output.exists():
+            print(f"error: Zustandsdatei '{args.output}' nicht gefunden", file=sys.stderr)
+            return 2
+        analyzed_pgns_set, all_blunders = load_state(args.output)
+        print(f"Kumulativ: {len(analyzed_pgns_set)} PGN(s) analysiert\n")
+        print_report(Report(all_blunders))
+        return 0
 
     # --- Build file list ---
     pgn_paths: list[Path] = list(args.pgn)
@@ -729,14 +827,39 @@ def main() -> int:
         # --since without --game-dir: filter the explicitly given files
         pgn_paths = [p for p in pgn_paths if p.stat().st_mtime >= since.timestamp()]
 
-    if not pgn_paths:
-        print("error: no PGN files to analyze. Use positional args or --game-dir.", file=sys.stderr)
-        return 2
-
     for p in pgn_paths:
         if not p.exists():
             print(f"error: {p} not found", file=sys.stderr)
             return 2
+
+    # --- Inkrementell: bereits analysierte PGNs herausfiltern ---
+    analyzed_pgns: set[str] = set()
+    existing_blunders: list[Blunder] = []
+    prev_pgn_count = 0
+    incremental = args.output is not None
+
+    if incremental and args.output.exists():
+        analyzed_pgns, existing_blunders = load_state(args.output)
+        prev_pgn_count = len(analyzed_pgns)
+        before_count = len(pgn_paths)
+        pgn_paths = [p for p in pgn_paths if p.name not in analyzed_pgns]
+        already_done = before_count - len(pgn_paths)
+        if already_done:
+            print(
+                f"info: {already_done} PGN(s) bereits in Zustandsdatei, übersprungen "
+                f"({len(pgn_paths)} neue verbleiben)",
+                file=sys.stderr,
+            )
+
+    if not pgn_paths:
+        if incremental:
+            print("info: keine neuen PGN-Dateien — Zustandsdatei ist aktuell", file=sys.stderr)
+            print(f"\nKumulativ: {prev_pgn_count} PGN(s), {len(existing_blunders)} Blunder\n")
+            print_report(Report(existing_blunders))
+        else:
+            print("error: no PGN files to analyze. Use positional args or --game-dir.", file=sys.stderr)
+            return 2
+        return 0
 
     limit = (
         chess.engine.Limit(depth=args.depth)
@@ -755,29 +878,43 @@ def main() -> int:
     except chess.engine.EngineError:
         pass
 
-    report = Report()
+    new_blunders: list[Blunder] = []
+    processed_pgns: set[str] = set()
     skipped = 0
     skipped_wins = 0
     try:
-        for game_id, game in iter_games(pgn_paths):
-            target_colors = player_colors(game, args.player)
-            if not target_colors:
-                skipped += 1
-                print(
-                    f"skip: {game_id} — '{args.player}' not found in headers",
-                    file=sys.stderr,
+        # Datei für Datei iterieren damit wir nach jeder Datei den Zustand
+        # sichern können — Absturz mitten im Lauf verliert dann nur den
+        # Fortschritt der laufenden Datei, nicht alles.
+        for pgn_path in pgn_paths:
+            for game_id, game in iter_games([pgn_path]):
+                target_colors = player_colors(game, args.player)
+                if not target_colors:
+                    skipped += 1
+                    print(
+                        f"skip: {game_id} — '{args.player}' not found in headers",
+                        file=sys.stderr,
+                    )
+                    continue
+                if args.losses_only and not martuni_lost(game, args.player, target_colors):
+                    skipped_wins += 1
+                    continue
+                effective_min_movetime, tc_class = threshold_for_game(game, args)
+                for blunder in analyze_game(
+                    engine, game, limit, args.threshold, game_id, target_colors,
+                    min_move_time=effective_min_movetime,
+                    tc_class=tc_class,
+                ):
+                    new_blunders.append(blunder)
+
+            processed_pgns.add(pgn_path.name)
+
+            if incremental:
+                save_state(
+                    args.output,
+                    analyzed_pgns | processed_pgns,
+                    existing_blunders + new_blunders,
                 )
-                continue
-            if args.losses_only and not martuni_lost(game, args.player, target_colors):
-                skipped_wins += 1
-                continue
-            effective_min_movetime, tc_class = threshold_for_game(game, args)
-            for blunder in analyze_game(
-                engine, game, limit, args.threshold, game_id, target_colors,
-                min_move_time=effective_min_movetime,
-                tc_class=tc_class,
-            ):
-                report.blunders.append(blunder)
     finally:
         engine.quit()
 
@@ -786,7 +923,17 @@ def main() -> int:
     if skipped_wins:
         print(f"({skipped_wins} game(s) skipped — not a loss, --losses-only active)", file=sys.stderr)
 
-    print_report(report)
+    if incremental:
+        all_blunders = existing_blunders + new_blunders
+        print_incremental_report(
+            new_report=Report(new_blunders),
+            cumulative_report=Report(all_blunders),
+            new_pgn_count=len(processed_pgns),
+            total_pgn_count=prev_pgn_count + len(processed_pgns),
+        )
+    else:
+        print_report(Report(new_blunders))
+
     return 0
 
 
