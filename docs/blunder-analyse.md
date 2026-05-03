@@ -267,7 +267,9 @@ python tools/analyze_blunders.py \
     --game-dir ../lichess-bot/game_records/ \
     --output analysis_state.json
 
-# Kumulierten Report anzeigen, ohne Stockfish zu starten
+# Kumulierten Report anzeigen, ohne Stockfish zu starten.
+# Es werden KEINE PGN-Dateien gelesen oder analysiert —
+# der Report kommt ausschließlich aus der gespeicherten JSON-Zustandsdatei.
 python tools/analyze_blunders.py --report --output analysis_state.json
 ```
 
@@ -322,7 +324,7 @@ will.
 | `--threads N` | `1` | Stockfish-Threads |
 | `--hash MB` | `128` | Stockfish-Hashtable-Größe in MB |
 | `--output FILE` | — | JSON-Zustandsdatei für inkrementelle Analyse (neu anlegen oder fortsetzen) |
-| `--report` | aus | Kumulierten Report aus `--output FILE` anzeigen, keine Analyse |
+| `--report` | aus | Kumulierten Report aus `--output FILE` anzeigen — **kein Stockfish, keine PGN-Verarbeitung**, liest nur die JSON-Zustandsdatei |
 
 Der Report wird auf stdout geschrieben: erst die Summentabelle
 (Phase / Motiv / Phase × Motiv), dann die Einzel-Blunder mit FEN, bestem Zug
