@@ -22,6 +22,7 @@ The bot accepts challenges in Blitz (3+0, 5+0) and Rapid (10+5, 15+10).
 - **Alpha-Beta** with iterative deepening
 - **Principal Variation Search (PVS)** — null-window scout searches for non-PV moves, full re-search only when the scout score lies between alpha and beta
 - **Null-Move Pruning** — when the static evaluation already exceeds beta, give the opponent a free move and prune the subtree if even that doesn't drop below beta. Constant reduction R = 2, minimum depth 3, with zugzwang protection (disabled if the side to move has only pawns)
+- **Late Move Reductions (LMR)** — late, quiet moves are searched at reduced depth first; if the reduced search unexpectedly beats alpha, a full-depth re-search verifies. Active only in non-PV nodes from the 4th move onwards (depth ≥ 3); captures, promotions, checks, killer moves, and positions in check are never reduced
 - **Quiescence Search** — avoids horizon-effect blunders by resolving captures at leaf nodes
 - **Transposition Table** — Zobrist-hashed, avoids re-searching known positions
 - **Check Extensions** — extends search depth when the king is in check (phase-dependent: +1 in midgame, +2 in endgame)
@@ -65,7 +66,8 @@ It works with any UCI-compatible GUI: [Arena](http://www.playwitharena.de/), [Cu
 
 Features currently planned or in development:
 
-- **Late Move Reductions (LMR)** — reduce search depth for moves that are unlikely to be best
+- **Dynamic piece values** — phase-tapered material values for knight and bishop, plus pawn-count adjustments (knight stronger in closed positions, bishop in open ones); dynamic bishop-pair bonus
+- **NMP refinements** — adaptive R (e.g. R = 2 + depth/6), verification search to suppress remaining zugzwang risks
 
 ---
 

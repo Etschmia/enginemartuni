@@ -44,6 +44,26 @@ const MAX_HISTORY: i32 = 16_000;
 const NMP_REDUCTION: i32 = 2;
 const NMP_MIN_DEPTH: i32 = 3;
 
+// --- Late Move Reductions (LMR) -------------------------------------------
+// Annahme: Move-Ordering hat die wahrscheinlich besten Zuege schon nach vorne
+// sortiert (TT-Move, gute Captures, Killer, History-bevorzugte Quiet-Moves).
+// Spaete Quiet-Moves haben empirisch eine sehr geringe Chance, die beste
+// Antwort zu sein — wir suchen sie zuerst flacher und schalten bei Bedarf
+// auf volle Tiefe zurueck (Re-Search).
+//
+// Variante A (Tobias' Wahl, 04.05.2026): einfache Stufenformel.
+//   - depth >= 6 und Index >= 6 → R = 2
+//   - depth >= 3 und Index >= 3 → R = 1
+//   - sonst                     → R = 0
+// Variante B (logarithmisch, Stockfish-Stil) ist im docs/lmr-plan.md
+// vorbereitet und kommt erst, wenn Variante A vermessen ist.
+//
+// Mindesttiefe 3: bei kleinerer Tiefe wuerden wir effektiv in die Quiescence
+// reduzieren und nichts gewinnen. Mindest-Index 3: die ersten drei Zuege
+// werden nie reduziert (TT-Move, gute Captures, Killer).
+const LMR_MIN_DEPTH: i32 = 3;
+const LMR_MIN_MOVE_INDEX: usize = 3;
+
 pub struct GoParams {
     pub wtime: Option<u64>,
     pub btime: Option<u64>,
@@ -487,7 +507,7 @@ fn alpha_beta(
     // zuerst mit einem Nullfenster (Scout-Search) getestet.
     let mut first_move = true;
 
-    for sm in &ordered {
+    for (move_idx, sm) in ordered.iter().enumerate() {
         let mv = sm.mv;
         let nb = board.make_move_new(mv);
         // Schach-Extension phase-abhaengig:
@@ -548,10 +568,65 @@ fn alpha_beta(
                 state,
             )
         } else {
-            // Scout: Nullfenster-Test
-            let scout = -alpha_beta(
+            // --- Late Move Reductions (LMR) ----------------------------
+            // Vorbedingungen (Tobias-Spezifikation 04.05.2026):
+            //   - !is_pv: nur Non-PV-Knoten reduzieren — die Hauptvariante
+            //     bleibt unangetastet.
+            //   - depth >= LMR_MIN_DEPTH (3): bei kleinerer Tiefe nichts
+            //     zu sparen, reduzierte Suche landet direkt in Quiescence.
+            //   - move_idx >= LMR_MIN_MOVE_INDEX (3): die ersten drei
+            //     sortierten Zuege (TT-Move, gute Captures, Killer) sind
+            //     erfahrungsgemaess die wichtigen — niemals reduzieren.
+            //   - !in_check: stehen wir selbst im Schach, ist jeder Zug
+            //     erzwungen — Reduktion waere ein Bug.
+            //   - !child_in_check: Schach-gebende Zuege sind taktisch und
+            //     werden in der Schach-Extension ohnehin verlaengert.
+            //   - ext == 0: keine Extension aktiv → kein taktischer
+            //     Kandidat (gewinnender Capture per SEE>=0, Endspielzug,
+            //     Freibauer). Wir wollen keinen Zug zugleich verlaengern
+            //     und reduzieren.
+            //   - sm.see_val.is_none(): keine Captures reduzieren — der
+            //     SEE-Wert wird in `order_moves` ausschliesslich fuer
+            //     Capture-Zuege berechnet, also dient `is_none()` als
+            //     verlaesslicher "kein Capture"-Marker.
+            //   - mv.get_promotion().is_none(): Umwandlungen sind zu
+            //     entscheidend, um sie flacher zu rechnen.
+            //   - !is_killer: Killer-Moves stehen schon weit vorne, aber
+            //     als Sicherheitsnetz hier nochmal explizit ausgeschlossen.
+            //
+            // History-Heuristic ist BEWUSST kein zusaetzliches LMR-Kriterium
+            // — sie wirkt nur ueber die Zugreihenfolge in `order_moves`.
+            let is_killer = killers_here.iter().any(|k| *k == Some(mv));
+            let can_reduce = !is_pv
+                && depth >= LMR_MIN_DEPTH
+                && move_idx >= LMR_MIN_MOVE_INDEX
+                && !in_check
+                && !child_in_check
+                && ext == 0
+                && sm.see_val.is_none()
+                && mv.get_promotion().is_none()
+                && !is_killer;
+            let reduction = if can_reduce {
+                lmr_reduction(depth, move_idx)
+            } else {
+                0
+            };
+
+            // Scout: Nullfenster-Test mit (evtl.) reduzierter Tiefe.
+            // Wichtig: `.max(1)` darf nur wirken, wenn wir wirklich reduzieren.
+            // Sonst wuerden wir den natuerlichen Uebergang `new_depth == 0`
+            // → Quiescence aufblaehen (eine Extra-Ply pro Blattknoten,
+            // Knoten explodieren). Bei `reduction == 0` bleibt `scout_depth`
+            // exakt gleich `new_depth` — der Pfad ist dann strukturell
+            // identisch zum Pre-LMR-PVS.
+            let scout_depth = if reduction > 0 {
+                (new_depth - reduction).max(1)
+            } else {
+                new_depth
+            };
+            let mut scout = -alpha_beta(
                 &nb,
-                new_depth,
+                scout_depth,
                 ply + 1,
                 -alpha - 1,
                 -alpha,
@@ -566,10 +641,34 @@ fn alpha_beta(
                 break;
             }
 
-            // Nur wenn der Zug den Anker schlaegt UND noch nicht ueber
-            // beta hinaus liegt, lohnt der Re-Search mit vollem Fenster.
-            // Bei `scout >= beta` haben wir ohnehin einen Cutoff —
-            // exakter Wert nicht noetig.
+            // LMR-Re-Search: wenn die reduzierte Suche ueberraschend
+            // besser als alpha war, glauben wir der reduzierten Tiefe
+            // nicht und suchen den Zug mit voller Tiefe noch einmal —
+            // immer noch Nullfenster, weil wir nur wissen wollen, ob
+            // er den Anker schlaegt.
+            if reduction > 0 && scout > alpha {
+                scout = -alpha_beta(
+                    &nb,
+                    new_depth,
+                    ply + 1,
+                    -alpha - 1,
+                    -alpha,
+                    extensions_used + ext,
+                    new_halfmove,
+                    true,
+                    state,
+                );
+
+                if state.stop.load(Ordering::Relaxed) {
+                    aborted = true;
+                    break;
+                }
+            }
+
+            // PVS-Re-Search: wenn der Zug den Anker schlaegt UND noch
+            // nicht ueber beta hinaus liegt, mit vollem Fenster fuer den
+            // exakten Wert. Bei `scout >= beta` haben wir ohnehin einen
+            // Cutoff — exakter Wert nicht noetig.
             if scout > alpha && scout < beta {
                 -alpha_beta(
                     &nb,
@@ -837,6 +936,27 @@ fn is_capture(board: &Board, mv: ChessMove) -> bool {
 
 fn is_irreversible(board: &Board, mv: ChessMove) -> bool {
     is_capture(board, mv) || board.piece_on(mv.get_source()) == Some(Piece::Pawn)
+}
+
+/// Late-Move-Reductions-Stufenformel (Variante A).
+///
+/// Liefert den Reduktions-R-Wert in Plies. Der Aufrufer muss vorher
+/// pruefen, ob LMR ueberhaupt erlaubt ist (siehe Vorbedingungen in
+/// `alpha_beta`). Diese Funktion macht nur die reine Tabellen-
+/// Entscheidung anhand von Tiefe und Move-Index.
+///
+/// Stufen:
+///   - depth >= 6 und move_idx >= 6 → R = 2
+///   - depth >= 3 und move_idx >= 3 → R = 1
+///   - alles andere                 → R = 0
+fn lmr_reduction(depth: i32, move_idx: usize) -> i32 {
+    if depth >= 6 && move_idx >= 6 {
+        2
+    } else if depth >= LMR_MIN_DEPTH && move_idx >= LMR_MIN_MOVE_INDEX {
+        1
+    } else {
+        0
+    }
 }
 /*
 fn is_candidate_move

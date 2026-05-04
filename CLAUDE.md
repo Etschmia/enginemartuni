@@ -32,7 +32,7 @@ Ausnahme: Infrastruktur (Board-Repräsentation, Zuggenerierung, UCI-Protokoll) d
 Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
 
 - **UCI:** vollständig, inkl. `go ponder` / `ponderhit` mit echter Ponder-Suche (offene Deadline, TT-basierter Pondermove)
-- **Suche:** Alpha-Beta mit iterativem Deepening, PVS (Null-Window-Scout), Null-Move Pruning (R=2, min-depth 3, mit Zugzwang-Schutz), Quiescence Search, Transposition Table, korrekte Repetition-Detection (Stockfish-Stil: 1-fold in Spielhistorie ≠ Remis)
+- **Suche:** Alpha-Beta mit iterativem Deepening, PVS (Null-Window-Scout), Null-Move Pruning (R=2, min-depth 3, mit Zugzwang-Schutz), Late Move Reductions (Variante A: R=1 ab depth≥3 & Index≥3, R=2 ab depth≥6 & Index≥6; nur Non-PV, keine Captures/Promotions/Checks/Killer), Quiescence Search, Transposition Table, korrekte Repetition-Detection (Stockfish-Stil: 1-fold in Spielhistorie ≠ Remis)
 - **Evaluation:** Material + Piece-Square-Tables (Tapered Midgame/Endgame), King Safety (3×3-Zone, Angreifer-Gewichte, SafetyTable, Pawn Shield), Endspiel-Heuristiken
 - **Eröffnung:** Polyglot-Books (`.bin`) mit konfigurierbarer Prioritätsreihenfolge via `BOOK_FILES`, auch im Ponder-Modus aktiv
 - **Konfiguration:** `.env` mit kaskadierter Suche; UCI-Optionen `Hash`, `MoveOverhead`, `Ponder` funktional wirksam
@@ -60,12 +60,34 @@ Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
   Stellung aus dem Analyse-File (Martuni vs Bot5551, Zug 29) wird jetzt mit
   `mate 6` gelöst statt vorher unentdeckt zu bleiben. R = 2 konstant,
   Mindesttiefe 3, Zugzwang-Schutz via `has_non_pawn_material`.
-- **Nächste Auswertung nach >100 Partien.** Primärer Ziel-Indikator:
-  `missed_mate`/Partie soll von 0.105 deutlich runter (Erwartung Richtung
-  0.04 wieder, weil das genau der NMP-Effekt ist). Sekundär: Gesamt-Blunder
-  soll fallen, Rating-Erwartung +50–80 Elo. Wenn alles gut: weiter mit
-  LMR (Late Move Reductions, siehe `project_lmr_plan` Memory) oder
-  NMP-Verfeinerungen (adaptive R, Verification Search).
+- **Auswertung 04.05.2026 (175 Partien) — DONE.** NMP-Effekt bestätigt:
+  `missed_mate`/Partie 0.105 → **0.057** (−46 %), Lichess Blitz 1921 → 1965
+  (+44), Rapid 1975 → 2016 (+41). Endgame-Rate stabil (0.358 → 0.337),
+  keine Zugzwang-Regression. Neuer Hotspot `allows_mate` 0.126/P. (22 Fälle),
+  primär Tiefenproblem in bereits verlorenen Stellungen. Details:
+  `project_auswertung_2026_05_04` Memory, Datei `analyse_04.05.2026.txt`.
+- **LMR implementiert (04.05.2026).** Variante A nach Tobias-Spezifikation:
+  Stufenformel (R=1 ab depth≥3 & Index≥3, R=2 ab depth≥6 & Index≥6),
+  nur Non-PV-Knoten, ab dem 4. sortierten Zug. Ausgeschlossen von Reduktion:
+  Captures (über `sm.see_val`), Promotionen, Schachgebote, Züge im Schach,
+  Killer-Moves, alle Züge mit aktiver Extension. Re-Search-Kaskade:
+  reduzierte Nullfenster-Suche → bei Fail-High volle Tiefe Nullfenster →
+  bei `alpha < score < beta` PVS-Re-Search mit vollem Fenster.
+  Verifikation: `missed_mate`-Stellung Tiefe 9/mate 6 in 2.7 s mit 6.8 M
+  Knoten (vorher Tiefe 7/mate 6 in 5.7 s mit 17.4 M Knoten). Wichtig beim
+  Implementieren war: `.max(1)` auf `scout_depth` darf nur greifen, wenn
+  tatsächlich reduziert wird, sonst wird der natürliche Übergang
+  `new_depth==0` → Quiescence aufgebläht und die Suche kollabiert.
+  Konzeption: `docs/lmr-plan.md`. History-Heuristic bewusst NICHT als
+  zusätzliches LMR-Kriterium — wirkt nur über die Zugreihenfolge.
+- **Nächste Auswertung nach ≥100 Partien LMR.** Primäre Ziel-Indikatoren:
+  `allows_mate`/Partie 0.126 → ~0.07, `missed_mate` weiter Richtung 0.03,
+  Rating +30–60 Elo. Wenn positiv und keine neuen Regressionen
+  (`missed_capture`, `exposed_king`): dynamische Figurenwerte angehen
+  (`docs/vorbereiteter_Prompt_dynamische_Figurenbewertung.md`,
+  schrittweiser Rollout in 3 Phasen). NMP-Verfeinerungen (adaptive R,
+  Verification Search) erst, wenn die Endgame-Rate Anlass gibt — aktuell
+  kein Druck.
 - **Repetition-Detection korrigiert (02.05.2026).** `state.history.contains`
   zählte vorher 1-fold in Spielhistorie als Remis und blockierte ruhige
   Best-Moves (Repro: vGwmaXUy, 19.Ng5?? statt 19.Qe4). Neuer Helfer
