@@ -711,19 +711,21 @@ NMP erst, wenn Mobility sich stabilisiert hat.
 
 ---
 
-### Offene Schritte
+### Offene Schritte (Stand 2026-05-05)
 
-5. **Mobility-Term in Eval** (nächster Schritt) — gegen `unclassified` +
-   `positional_collapse` im Mittelspiel. Kleiner cp-Bonus pro legalem
-   (Nicht-König-, Nicht-Bauer-)Zug, Piece-Typ-spezifisch, Tapered
-   Midgame/Endgame.
-6. **Pawn-Endgame-Guard** — Opposition in K+P-vs-K, Square-of-the-Pawn.
-   Nach Mobility-Stabilisierung.
-7. **SEE-Performance optimieren** — `all_attackers_to` könnte inkrementell
-   aktualisiert werden statt pro Schlag neu berechnet.
-8. **Eval-Erweiterungen (nach Daten):**
-   - Outposts / schwache Felder
-   - Turm auf 7. Reihe
-   - Bishop-Trap-Detection
-9. **Null-Move-Pruning** — erst wenn Mobility + Pawn-Endgame-Guard
-   gemessen sind und Endspiel nicht mehr die größte Fehlerquelle ist.
+Erledigt seit der ursprünglichen Liste:
+
+- ✅ **Mobility-Term in Eval** — Variante B (Safe Mobility) in
+  `eval.rs::mobility_score`, Defaults in `eval_config.rs`.
+- ✅ **Turm auf 7. Reihe** — `eval.rs::rook_seventh_rank_bonus`.
+- ✅ **Null-Move-Pruning + PVS** — `search.rs`, 01.05.2026 (siehe
+  `null-move-pruning.md`).
+
+Noch offen — geführt in `roadmap.md`:
+
+- **Pawn-Endgame-Guard** — Opposition in K+P-vs-K, Square-of-the-Pawn.
+- **SEE-Performance optimieren** — `all_attackers_to` inkrementell
+  aktualisieren statt pro Schlag neu berechnen.
+- **Outposts / schwache Felder** — Springer auf gedeckten Zentralfeldern,
+  die nicht durch gegnerische Bauern vertrieben werden können.
+- **Bishop-Trap-Detection**.
