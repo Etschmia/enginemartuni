@@ -9,3 +9,9 @@ description = "UCI chess engine"
 chess = "3.2"
 rand = "0.8"
 toml = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+target-cpu = "native"
