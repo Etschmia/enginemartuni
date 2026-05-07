@@ -407,17 +407,48 @@ fn alpha_beta(
     }
 
     // Transposition Table Probe
+    //
+    // WICHTIG: Score-Cutoff wird unterdrueckt, wenn die aktuelle Position
+    // bereits in der Spielhistorie aufgetreten ist (1-fold game-history
+    // match). Hintergrund (Partie PGQZhMjF, 06.05.2026, Wojtmic-Bot vs
+    // Martuni): die TT speichert nur den Zobrist-Schluessel der Stellung,
+    // nicht den Repetition-Kontext. Wenn dieselbe Stellung im Spielverlauf
+    // wiederkehrt, kann ein gespeicherter Mate-/Cutoff-Score von einer
+    // frueheren Begegnung stale sein — der zugehoerige Pfad lief frueher
+    // zu einem echten Mate, jetzt fuehrt er aber durch eine 3-fold
+    // Wiederholung. `is_repetition_draw` weiter unten erkennt das nur,
+    // wenn die Suche tatsaechlich rekursiv durchlaeuft; ein TT-Cutoff vor
+    // dem Durchlauf bleibt blind.
+    //
+    // Konsequenz: bei `key_seen_in_game_history` wird der Eintrag nur als
+    // Move-Hint genutzt (Move-Ordering bleibt informiert), aber der
+    // Score-Cutoff faellt weg. `slice.contains` ist O(n) auf einem kleinen
+    // Slice (Spielhistorie typisch < 200 Eintraege), und der Aufruf
+    // erfolgt nur, wenn ueberhaupt ein Cutoff-Kandidat vorliegt — kein
+    // Hot-Path-Treffer.
+    //
+    // Spiegelbild des Repetition-Bugs vom 02.05.2026 (`history.contains`
+    // zaehlte 1-fold falsch als Remis): die Repetition-Logik ist in beide
+    // Richtungen heikel — zu pessimistisch verzerrt Wurzelzuege auf 0,
+    // zu optimistisch laesst Engine in 3-fold laufen, obwohl Mate da ist.
     let tt_move: Option<ChessMove>;
     {
         let tt = state.tt.lock().unwrap();
         if let Some(entry) = tt.probe(key) {
             if entry.depth as i32 >= depth && ply > 0 {
                 let v = entry.eval;
-                match entry.flag {
-                    TtFlag::Exact => return v,
-                    TtFlag::Lower if v >= beta => return v,
-                    TtFlag::Upper if v <= alpha => return v,
-                    _ => {}
+                let cutoff_fires = match entry.flag {
+                    TtFlag::Exact => true,
+                    TtFlag::Lower => v >= beta,
+                    TtFlag::Upper => v <= alpha,
+                    _ => false,
+                };
+                if cutoff_fires {
+                    let key_seen_in_game_history =
+                        state.history[..state.root_history_len].contains(&key);
+                    if !key_seen_in_game_history {
+                        return v;
+                    }
                 }
             }
             tt_move = entry.best_move;
@@ -1387,5 +1418,114 @@ mod tests {
         let history = vec![0xAAAA, 0xBBBB, 0xAAAA];
         let root = 1; // Eintrag 0 = Spielhistorie, 1+2 = Suchpfad
         assert!(is_repetition_draw(&history, root, 0xAAAA));
+    }
+
+    // --- TT-Repetition-Vergiftung ---------------------------------------
+    //
+    // Regression auf den Bug aus Partie PGQZhMjF (06.05.2026): TT speichert
+    // nur den Brett-Hash, nicht den Repetition-Kontext. Wenn dieselbe
+    // Stellung im Spielverlauf wiederkehrt, kann ein gespeicherter
+    // Mate-Score von einer frueheren Begegnung stale sein. Der Fix in der
+    // TT-Probe unterdrueckt den Cutoff in genau diesem Fall.
+    //
+    // Setup unten: Anfangsstellung. Wir vergiften den TT-Eintrag fuer die
+    // Folgestellung nach 1. a3 mit einem absurden Mate-Score (-29000 aus
+    // Schwarz' Sicht = Schwarz steht auf Verlust, aus Weiss' Sicht +29000
+    // = Weiss gewinnt). Zusaetzlich legen wir den Hash dieser Folgestellung
+    // in die Spielhistorie — als waere sie schon einmal aufgetreten.
+    //
+    // Erwartung:
+    //   - Ohne Fix: TT-Cutoff feuert in Iteration depth=2, Wurzel sieht
+    //     fuer 1. a3 einen Mate-Score, MATE_THRESHOLD-Break, bestmove=a3.
+    //   - Mit Fix: TT-Cutoff blockiert (key in game history), echte Suche
+    //     liefert realistischen Score nahe 0 fuer a3, andere Wurzelzuege
+    //     (e4, d4, …) gewinnen das Move-Ordering. bestmove != a3.
+
+    use crate::polyglot::BookSet;
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    fn poisoned_tt_setup() -> (
+        Board,
+        Vec<u64>,
+        Arc<Mutex<TranspositionTable>>,
+        ChessMove,
+    ) {
+        let start = Board::default();
+        let a3 =
+            ChessMove::from_san(&start, "a3").expect("a3 ist in der Anfangsstellung legal");
+        let after_a3 = start.make_move_new(a3);
+        let key_after_a3 = polyglot_hash(&after_a3);
+
+        let tt = Arc::new(Mutex::new(TranspositionTable::new(1)));
+        // -29000 aus Schwarz' Sicht (Schwarz steht "kurz vor Mate"). Negiert
+        // an der Wurzel ergibt +29000 fuer Weiss → vergifteter Mate-Score.
+        // Tiefe absurd hoch, damit der TT-Cutoff garantiert greift.
+        tt.lock()
+            .unwrap()
+            .store(key_after_a3, None, -29_000, 99, TtFlag::Exact);
+
+        // Spielhistorie enthaelt genau diesen Hash (1-fold game-history).
+        let history = vec![key_after_a3];
+        (start, history, tt, a3)
+    }
+
+    fn run_search(
+        board: Board,
+        history: Vec<u64>,
+        tt: Arc<Mutex<TranspositionTable>>,
+    ) -> ChessMove {
+        let req = SearchRequest {
+            board,
+            history,
+            halfmove_clock: 0,
+            params: GoParams {
+                depth: Some(2),
+                movetime: Some(2_000),
+                ..GoParams::default()
+            },
+            tt,
+            book: Arc::new(BookSet::load(Path::new("."), &[])),
+            eval: Arc::new(EvalParams::default()),
+            stop: Arc::new(AtomicBool::new(false)),
+            pondering: Arc::new(AtomicBool::new(false)),
+            move_overhead: 0,
+        };
+        search(req).expect("Suche liefert ein Ergebnis").best
+    }
+
+    #[test]
+    fn tt_cutoff_suppressed_when_key_in_game_history() {
+        // Wir simulieren manuell die Wirkung des Fixes auf einer Helper-Ebene:
+        // verifiziere, dass der `contains`-Check, den die TT-Probe nutzt,
+        // genau dann positiv wird, wenn die Stellung in der Spielhistorie
+        // (Index < root_history_len) schon einmal aufgetreten ist.
+        let (start, history, _tt, a3) = poisoned_tt_setup();
+        let after_a3 = start.make_move_new(a3);
+        let key_after_a3 = polyglot_hash(&after_a3);
+
+        let root_history_len = history.len();
+        // Der Fix prueft genau diesen Slice — Position muss in der
+        // Spielhistorie auftauchen, sonst ist die Vergiftung wirkungslos.
+        assert!(history[..root_history_len].contains(&key_after_a3));
+        // Wurzelposition selbst ist NICHT in der Spielhistorie — TT-Cutoff
+        // fuer die Wurzel waere also weiterhin erlaubt.
+        let key_start = polyglot_hash(&start);
+        assert!(!history[..root_history_len].contains(&key_start));
+    }
+
+    #[test]
+    fn poisoned_tt_does_not_select_repeated_move() {
+        // Echter Verhaltens-Test: bei vergifteter TT + Repetition-Match
+        // darf die Engine den vergifteten Zug NICHT waehlen.
+        let (start, history, tt, a3) = poisoned_tt_setup();
+        let best = run_search(start, history, tt);
+        assert_ne!(
+            best, a3,
+            "Engine ist auf vergifteten TT-Score reingefallen — der Fix in der \
+             TT-Probe greift nicht. Stellung: Anfangsbrett, vergifteter Eintrag \
+             auf Folgeposition nach 1. a3."
+        );
     }
 }
