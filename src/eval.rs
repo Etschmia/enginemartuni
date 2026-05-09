@@ -1,8 +1,6 @@
 use crate::endgame;
 use crate::eval_config::EvalParams;
-use crate::pst::{
-    pst_index, BISHOP_PST, KING_PST, KNIGHT_PST, PAWN_PST, QUEEN_PST, ROOK_PST,
-};
+use crate::pst::{pst_index, BISHOP_PST, KING_PST, KNIGHT_PST, PAWN_PST, QUEEN_PST, ROOK_PST};
 use chess::{
     get_adjacent_files, get_bishop_moves, get_file, get_king_moves, get_knight_moves,
     get_rook_moves, BitBoard, Board, Color, File, Piece, Rank, Square,
@@ -22,13 +20,13 @@ pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
         return s;
     }
 
-    let non_pst = evaluate_side(board, Color::White, p) - evaluate_side(board, Color::Black, p);
-
     let (w_mg, w_eg) = pst_score(board, Color::White);
     let (b_mg, b_eg) = pst_score(board, Color::Black);
     let mg = w_mg - b_mg;
     let eg = w_eg - b_eg;
     let phase = game_phase(board);
+    let non_pst =
+        evaluate_side(board, Color::White, p, phase) - evaluate_side(board, Color::Black, p, phase);
 
     let king_act = king_activity_endgame(board, phase, p);
     let king_pass_syn = king_passed_pawn_synergy(board, phase, p);
@@ -89,7 +87,7 @@ fn pst_score(board: &Board, us: Color) -> (i32, i32) {
     (mg, eg)
 }
 
-fn evaluate_side(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn evaluate_side(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
     let mut score: i32 = 0;
 
     let our_bb = *board.color_combined(us);
@@ -98,7 +96,9 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams) -> i32 {
 
     // Pro Figur: Materialwert + figurenspezifische Boni
     for sq in our_bb {
-        let Some(piece) = board.piece_on(sq) else { continue };
+        let Some(piece) = board.piece_on(sq) else {
+            continue;
+        };
         score += piece_material(piece, p);
 
         match piece {
@@ -140,7 +140,7 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams) -> i32 {
     score += phalanx_bonus(our_pawns, p);
 
     // King Safety (positiv = sicher, negativ = in Gefahr)
-    score += king_safety(board, us, p);
+    score += king_safety_with_phase(board, us, p, phase);
 
     score
 }
@@ -153,13 +153,18 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams) -> i32 {
 ///  - `danger`   (-): Angriffsgewichte gegnerischer Offiziere auf die 3×3-Zone
 ///  - `exposure` (-): Malus für König zu weit vom Heimrand, wenn der Gegner
 ///                    noch Schwergewicht-Material hat (siehe king_exposure_penalty)
-pub fn king_safety(board: &Board, us: Color, p: &EvalParams) -> i32 {
+#[cfg(test)]
+fn king_safety(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    king_safety_with_phase(board, us, p, game_phase(board))
+}
+
+fn king_safety_with_phase(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
     let king_sq = board.king_square(us);
     let zone = king_zone(king_sq);
 
     let shield = pawn_shield_score(board, us, king_sq, p);
     let danger = king_danger(board, us, zone, p);
-    let exposure = king_exposure_penalty(board, us, p);
+    let exposure = king_exposure_penalty(board, us, p, phase);
 
     shield - danger - exposure
 }
@@ -204,7 +209,7 @@ pub fn king_safety(board: &Board, us: Color, p: &EvalParams) -> i32 {
 /// Endspielphase wieder `king_activity_endgame`.
 ///
 /// Rückgabewert ist positiv (als "abzuziehender Malus" im Aufrufer gedacht).
-fn king_exposure_penalty(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn king_exposure_penalty(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
     // Abstand des Königs zu seiner Grundreihe
     let king_sq = board.king_square(us);
     let rank = king_sq.get_rank().to_index() as i32;
@@ -242,7 +247,6 @@ fn king_exposure_penalty(board: &Board, us: Color, p: &EvalParams) -> i32 {
     // Phase-Faktor: 1.0 ab Mittelspiel-Schwelle, linear gegen 0 im Endspiel.
     // Komplementär zu `king_activity_endgame`, das genau dann Vollgas gibt,
     // wenn der Exposure-Term hier verschwindet.
-    let phase = game_phase(board);
     let threshold = p.king_activity_phase_threshold;
     let phase_clamped = phase.min(threshold);
 
@@ -337,10 +341,8 @@ fn pawn_shield_score(board: &Board, us: Color, king_sq: Square, p: &EvalParams) 
     let mut score = 0;
 
     for f in file_lo..=file_hi {
-        let sq_r1 =
-            Square::make_square(Rank::from_index(r1), File::from_index(f as usize));
-        let sq_r2 =
-            Square::make_square(Rank::from_index(r2), File::from_index(f as usize));
+        let sq_r1 = Square::make_square(Rank::from_index(r1), File::from_index(f as usize));
+        let sq_r2 = Square::make_square(Rank::from_index(r2), File::from_index(f as usize));
         if (our_pawns & BitBoard::from_square(sq_r1)) != BitBoard::new(0) {
             score += p.ks_shield_rank1_bonus;
         } else if (our_pawns & BitBoard::from_square(sq_r2)) != BitBoard::new(0) {
@@ -406,46 +408,50 @@ fn is_passed(sq: Square, us: Color, their_pawns: BitBoard) -> bool {
     let file_idx = sq.get_file().to_index() as i32;
     let rank_idx = sq.get_rank().to_index() as i32;
 
-    for r in 0..8 {
-        let ahead = match us {
-            Color::White => r > rank_idx,
-            Color::Black => r < rank_idx,
-        };
-        if !ahead {
-            continue;
-        }
-        for df in [-1i32, 0, 1] {
-            let f = file_idx + df;
-            if !(0..8).contains(&f) {
-                continue;
-            }
-            let check_sq = Square::make_square(
-                Rank::from_index(r as usize),
-                File::from_index(f as usize),
-            );
-            if (their_pawns & BitBoard::from_square(check_sq)) != BitBoard::new(0) {
-                return false;
-            }
+    let mut file_mask: u64 = 0;
+    for df in [-1i32, 0, 1] {
+        let f = file_idx + df;
+        if (0..8).contains(&f) {
+            file_mask |= 0x0101_0101_0101_0101u64 << (f as u32);
         }
     }
-    true
+
+    let ahead_mask = match us {
+        Color::White => {
+            if rank_idx >= 7 {
+                0
+            } else {
+                !0u64 << (8 * (rank_idx + 1) as u32)
+            }
+        }
+        Color::Black => {
+            if rank_idx <= 0 {
+                0
+            } else {
+                (1u64 << (8 * rank_idx as u32)) - 1
+            }
+        }
+    };
+
+    // Vorher wurde jedes der maximal 18 relevanten Felder einzeln gebaut und
+    // geprueft. Die Bitmaske beschreibt exakt dieselben Felder: Nachbarlinien
+    // plus eigene Linie, aber nur vor dem Bauern.
+    (their_pawns.0 & file_mask & ahead_mask) == 0
 }
 
 fn phalanx_bonus(our_pawns: BitBoard, p: &EvalParams) -> i32 {
     let mut total: i32 = 0;
     for rank_idx in 0..8 {
+        let mut rank_bits = (our_pawns.0 >> (rank_idx * 8)) & 0xff;
         let mut run: usize = 0;
-        for file_idx in 0..8 {
-            let sq = Square::make_square(
-                Rank::from_index(rank_idx),
-                File::from_index(file_idx),
-            );
-            if (our_pawns & BitBoard::from_square(sq)) != BitBoard::new(0) {
+        for _ in 0..8 {
+            if rank_bits & 1 != 0 {
                 run += 1;
             } else {
                 total += score_run(run, p);
                 run = 0;
             }
+            rank_bits >>= 1;
         }
         total += score_run(run, p);
     }
@@ -466,45 +472,18 @@ fn rooks_connected(board: &Board, our_rooks: BitBoard) -> bool {
     if our_rooks.popcnt() < 2 {
         return false;
     }
-    let squares: Vec<Square> = our_rooks.collect();
-    for i in 0..squares.len() {
-        for j in (i + 1)..squares.len() {
-            if have_sight(board, squares[i], squares[j]) {
-                return true;
-            }
+    let occ = *board.combined();
+    for rook_sq in our_rooks {
+        let other_rooks = our_rooks ^ BitBoard::from_square(rook_sq);
+        // get_rook_moves liefert auf belegten Linien die Felder bis zum ersten
+        // Blocker inklusive. Schneidet diese Maske einen zweiten eigenen Turm,
+        // ist exakt die alte "have_sight"-Bedingung erfuellt, nur ohne Vec und
+        // ohne manuelle Square-fuer-Square-Schleife.
+        if (get_rook_moves(rook_sq, occ) & other_rooks) != BitBoard::new(0) {
+            return true;
         }
     }
     false
-}
-
-fn have_sight(board: &Board, a: Square, b: Square) -> bool {
-    let ar = a.get_rank().to_index() as i32;
-    let af = a.get_file().to_index() as i32;
-    let br = b.get_rank().to_index() as i32;
-    let bf = b.get_file().to_index() as i32;
-
-    let (dr, df) = if ar == br && af != bf {
-        (0, (bf - af).signum())
-    } else if af == bf && ar != br {
-        ((br - ar).signum(), 0)
-    } else {
-        return false;
-    };
-
-    let mut r = ar + dr;
-    let mut f = af + df;
-    while (r, f) != (br, bf) {
-        let sq = Square::make_square(
-            Rank::from_index(r as usize),
-            File::from_index(f as usize),
-        );
-        if board.piece_on(sq).is_some() {
-            return false;
-        }
-        r += dr;
-        f += df;
-    }
-    true
 }
 
 /// Bonus für Türme auf offenen und halb-offenen Linien.
@@ -595,12 +574,7 @@ fn rook_is_behind_pawn(rook_rank: i32, pawn_rank: i32, pawn_color: Color) -> boo
 /// Turm auf 7. Reihe aus eigener Sicht. Extra-Bonus, wenn der gegnerische
 /// König auf der 8. (Grund-)Reihe eingesperrt steht — dann schneidet der
 /// Turm eine Fluchtlinie ab ("pig on the seventh").
-fn rook_seventh_rank_bonus(
-    board: &Board,
-    us: Color,
-    our_rooks: BitBoard,
-    p: &EvalParams,
-) -> i32 {
+fn rook_seventh_rank_bonus(board: &Board, us: Color, our_rooks: BitBoard, p: &EvalParams) -> i32 {
     let (seventh_rank, eighth_rank) = match us {
         Color::White => (6, 7),
         Color::Black => (1, 0),
@@ -648,10 +622,8 @@ fn rook_trapped_endgame_malus(board: &Board, us: Color, p: &EvalParams) -> i32 {
         if !(0..=7).contains(&blocker_rank) {
             continue;
         }
-        let blocker_sq = Square::make_square(
-            Rank::from_index(blocker_rank as usize),
-            rook_sq.get_file(),
-        );
+        let blocker_sq =
+            Square::make_square(Rank::from_index(blocker_rank as usize), rook_sq.get_file());
         if (our_pawns & BitBoard::from_square(blocker_sq)) != BitBoard::new(0) {
             malus += p.rook_trapped_endgame_penalty;
         }

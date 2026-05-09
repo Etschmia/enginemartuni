@@ -1,7 +1,6 @@
 use crate::endgame;
 use crate::eval::evaluate;
 use crate::eval_config::EvalParams;
-use crate::polyglot::hash::polyglot_hash;
 use crate::polyglot::BookSet;
 use crate::position::move_to_uci;
 use crate::tt::{TranspositionTable, TtFlag};
@@ -336,7 +335,7 @@ fn ponder_move_from_tt(
     if next.status() != BoardStatus::Ongoing {
         return None;
     }
-    let key = polyglot_hash(&next);
+    let key = next.get_hash();
     let stored = {
         let tt = tt.lock().unwrap();
         tt.probe(key).and_then(|e| e.best_move)
@@ -360,9 +359,7 @@ fn emit_info(depth: i32, score: i32, nodes: u64, elapsed: Duration, best: Option
         format!("cp {}", score)
     };
     let pv = best.map(move_to_uci).unwrap_or_default();
-    println!(
-        "info depth {depth} score {score_str} nodes {nodes} time {ms} nps {nps} pv {pv}"
-    );
+    println!("info depth {depth} score {score_str} nodes {nodes} time {ms} nps {nps} pv {pv}");
 }
 
 fn alpha_beta(
@@ -382,7 +379,11 @@ fn alpha_beta(
         return 0;
     }
 
-    let key = polyglot_hash(board);
+    // Interner Such-/TT-Key: Die chess-Crate pflegt diesen Zobrist-Hash
+    // inkrementell in Board::make_move(). Das vermeidet die vorherige
+    // Polyglot-Neuberechnung ueber alle 64 Felder an jedem Suchknoten.
+    // Polyglot-Hashes bleiben nur fuer das Eroeffnungsbuch relevant.
+    let key = board.get_hash();
 
     // Stellungswiederholung und 50-Zuege-Regel
     if ply > 0 {
@@ -392,13 +393,6 @@ fn alpha_beta(
         if halfmove >= 100 {
             return 0;
         }
-    }
-
-    // Terminalstellungen
-    match board.status() {
-        BoardStatus::Checkmate => return -MATE + ply,
-        BoardStatus::Stalemate => return 0,
-        BoardStatus::Ongoing => {}
     }
 
     // Blattknoten: Quiescence-Suche
@@ -477,6 +471,18 @@ fn alpha_beta(
     // Suche bekommt allow_null=false, damit kein zweites NMP folgt.
     let is_pv = beta - alpha > 1;
     let in_check = board.checkers().popcnt() > 0;
+
+    // Terminal-Erkennung ohne board.status():
+    // Board::status() baut intern selbst MoveGen::new_legal(). Direkt danach
+    // brauchte die Suche dieselbe Zuggeneration erneut fuer Ordering. Wir
+    // erzeugen die legalen Zuege deshalb genau einmal: erst nachdem TT-Cutoffs
+    // die Arbeit eventuell vermeiden konnten, aber noch vor NMP, damit
+    // Stalemate/Checkmate nicht faelschlich durch Null-Move-Pruning laufen.
+    let legal_moves = MoveGen::new_legal(board);
+    if legal_moves.len() == 0 {
+        return if in_check { -MATE + ply } else { 0 };
+    }
+
     if allow_null
         && !is_pv
         && !in_check
@@ -517,13 +523,17 @@ fn alpha_beta(
         }
     }
 
-    // Zuege generieren + ordnen (mit SEE-Cache für Captures, Killer + History)
-    let moves: Vec<ChessMove> = MoveGen::new_legal(board).collect();
-    if moves.is_empty() {
-        return 0;
-    }
+    // Zuege ordnen (mit SEE-Cache fuer Captures, Killer + History). `legal_moves`
+    // ist derselbe Generator, der oben bereits die Terminal-Erkennung erledigt
+    // hat; damit faellt die fruehere zweite MoveGen-Runde pro Knoten weg.
     let killers_here = state.killers_at(ply);
-    let ordered = order_moves(board, moves, tt_move, killers_here, &state.move_history);
+    let ordered = order_moves(
+        board,
+        legal_moves,
+        tt_move,
+        killers_here,
+        &state.move_history,
+    );
 
     // Eigenen Hash fuer die Kinder in die Historie legen
     if ply > 0 {
@@ -557,7 +567,15 @@ fn alpha_beta(
         // der Eval — derselbe Endspiel-Begriff in Suche und Bewertung.
         let child_in_check = nb.checkers().popcnt() > 0;
         let other_cand = !child_in_check && is_candidate_move(board, mv, &nb, sm.see_val);
-        let check_ext = if crate::eval::game_phase(&nb) < 16 { 2 } else { 1 };
+        let check_ext = if child_in_check {
+            if crate::eval::game_phase(&nb) < 16 {
+                2
+            } else {
+                1
+            }
+        } else {
+            0
+        };
         let ext = if other_cand && extensions_used + 2 <= MAX_EXTENSION_PER_LINE {
             2
         } else if child_in_check && extensions_used + check_ext <= MAX_EXTENSION_PER_LINE {
@@ -566,11 +584,16 @@ fn alpha_beta(
             0
         };
         let new_depth = depth - 1 + ext;
-        let new_halfmove = if is_irreversible(board, mv) {
-            0
-        } else {
-            halfmove.saturating_add(1)
-        };
+        // `see_val` ist nur fuer echte Captures gesetzt (inkl. en passant).
+        // Damit muss die irreversible-Zug-Pruefung hier nicht noch einmal
+        // dieselbe Capture-Logik wiederholen; fuer die 50-Zuege-Regel fehlt
+        // nur noch der Bauernzug-Test.
+        let new_halfmove =
+            if sm.see_val.is_some() || board.piece_on(mv.get_source()) == Some(Piece::Pawn) {
+                0
+            } else {
+                halfmove.saturating_add(1)
+            };
 
         // --- Principal Variation Search (PVS) -----------------------------
         // Annahme: durch gute Move-Ordering ist der erste Zug aller
@@ -778,35 +801,25 @@ const MAX_QPLY: i32 = 12;
 // gestiegen, weil 200cp gute Captures fälschlicherweise prunte.
 const DELTA_MARGIN: i32 = 150;
 
-fn quiescence(
-    board: &Board,
-    mut alpha: i32,
-    beta: i32,
-    ply: i32,
-    state: &mut SearchState,
-) -> i32 {
+fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, state: &mut SearchState) -> i32 {
     state.nodes += 1;
 
     if state.should_stop() {
         return 0;
     }
 
-    match board.status() {
-        BoardStatus::Checkmate => return -MATE + ply,
-        BoardStatus::Stalemate => return 0,
-        BoardStatus::Ongoing => {}
-    }
-
     let in_check = board.checkers().popcnt() > 0;
+    let legal_moves = MoveGen::new_legal(board);
+    if legal_moves.len() == 0 {
+        return if in_check { -MATE + ply } else { 0 };
+    }
 
     if in_check {
         // Im Schach: alle legalen Züge durchsuchen, kein Stand-Pat.
         // Stand-Pat wäre falsch, weil die Seite nicht einfach "passen" kann.
         // Tiefenlimit gilt nicht im Schach — sonst würden Matt-Drohungen übersehen.
-        let moves: Vec<ChessMove> = MoveGen::new_legal(board).collect();
-
         let mut best = -INF;
-        for mv in moves {
+        for mv in legal_moves {
             let nb = board.make_move_new(mv);
             let score = -quiescence(&nb, -beta, -alpha, ply + 1, state);
 
@@ -843,7 +856,7 @@ fn quiescence(
 
     // Nur Schlagzuege generieren (inkl. en passant), SEE einmal pro Zug.
     // Sortierung nach SEE absteigend: beste Captures zuerst → frühere Cutoffs.
-    let mut captures: Vec<(ChessMove, i32)> = MoveGen::new_legal(board)
+    let mut captures: Vec<(ChessMove, i32)> = legal_moves
         .filter(|mv| is_capture(board, *mv))
         .map(|mv| {
             let v = see(board, mv);
@@ -943,12 +956,11 @@ fn is_repetition_draw(history: &[u64], root_history_len: usize, key: u64) -> boo
 /// wird NMP deshalb deaktiviert. Deckt 95% der praktischen Zugzwang-Faelle ab.
 fn has_non_pawn_material(board: &Board, side: Color) -> bool {
     let side_bb = *board.color_combined(side);
-    for &p in &[Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen] {
-        if (*board.pieces(p) & side_bb) != BitBoard::new(0) {
-            return true;
-        }
-    }
-    false
+    let non_pawns = *board.pieces(Piece::Knight)
+        | *board.pieces(Piece::Bishop)
+        | *board.pieces(Piece::Rook)
+        | *board.pieces(Piece::Queen);
+    (non_pawns & side_bb) != BitBoard::new(0)
 }
 
 fn is_capture(board: &Board, mv: ChessMove) -> bool {
@@ -963,10 +975,6 @@ fn is_capture(board: &Board, mv: ChessMove) -> bool {
         return true;
     }
     false
-}
-
-fn is_irreversible(board: &Board, mv: ChessMove) -> bool {
-    is_capture(board, mv) || board.piece_on(mv.get_source()) == Some(Piece::Pawn)
 }
 
 /// Late-Move-Reductions-Stufenformel (Variante A).
@@ -1000,19 +1008,16 @@ Offene Idee (LMR): späte Quiet-Moves könnten reduziert statt extended werden,
 um der wachsenden Suchbreite Herr zu werden. Wartet auf eigene Sitzung.
 */
 
-
 fn is_candidate_move(
     board: &Board,
     mv: ChessMove,
     new_board: &Board,
     see_val: Option<i32>,
 ) -> bool {
-    // Defensiv: falls jemand diesen Helfer doch mal mit einem Schachzug
-    // füttert, soll er nicht "kein Kandidat" sagen — gleiche Semantik wie
-    // vorher behalten. Im Hauptpfad wird das aber durch in_check abgefangen.
-    if new_board.checkers().popcnt() > 0 {
-        return true;
-    }
+    // Der Aufrufer ruft diesen Helfer nur fuer Nicht-Schachzuege auf. Das
+    // Debug-Assert dokumentiert die Vorbedingung ohne Release-Takte fuer einen
+    // Zustand zu verbrennen, der im aktuellen Kontrollfluss nicht eintreten kann.
+    debug_assert_eq!(new_board.checkers().popcnt(), 0);
     // Schlagzug: nur wenn SEE >= 0 (gewinnender oder ausgeglichener Tausch).
     // Verlierende Captures (SEE < 0) brauchen keine Extra-Tiefe — sie werden
     // in der Quiescence ohnehin abgeschnitten.
@@ -1040,33 +1045,37 @@ fn is_candidate_move(
 }
 
 fn is_passed_simple(sq: chess::Square, us: Color, their_pawns: chess::BitBoard) -> bool {
-    use chess::{BitBoard, File, Rank, Square};
     let file_idx = sq.get_file().to_index() as i32;
     let rank_idx = sq.get_rank().to_index() as i32;
 
-    for r in 0..8 {
-        let ahead = match us {
-            Color::White => r > rank_idx,
-            Color::Black => r < rank_idx,
-        };
-        if !ahead {
-            continue;
-        }
-        for df in [-1i32, 0, 1] {
-            let f = file_idx + df;
-            if !(0..8).contains(&f) {
-                continue;
-            }
-            let check_sq = Square::make_square(
-                Rank::from_index(r as usize),
-                File::from_index(f as usize),
-            );
-            if (their_pawns & BitBoard::from_square(check_sq)) != BitBoard::new(0) {
-                return false;
-            }
+    let mut file_mask: u64 = 0;
+    for df in [-1i32, 0, 1] {
+        let f = file_idx + df;
+        if (0..8).contains(&f) {
+            file_mask |= 0x0101_0101_0101_0101u64 << (f as u32);
         }
     }
-    true
+
+    let ahead_mask = match us {
+        Color::White => {
+            if rank_idx >= 7 {
+                0
+            } else {
+                !0u64 << (8 * (rank_idx + 1) as u32)
+            }
+        }
+        Color::Black => {
+            if rank_idx <= 0 {
+                0
+            } else {
+                (1u64 << (8 * rank_idx as u32)) - 1
+            }
+        }
+    };
+
+    // Gleiche Logik wie die alte 8x3-Feldschleife: gegnerische Bauern auf
+    // eigener oder Nachbarlinie, aber nur vor dem Bauern, verhindern Freibauer.
+    (their_pawns.0 & file_mask & ahead_mask) == 0
 }
 
 /// Zug mit vorberechneten Sortier-/SEE-Informationen. `see_val` ist nur
@@ -1090,20 +1099,23 @@ struct ScoredMove {
 ///   Verlierender Capture:     +10_000 - SEE           (stark negative zuletzt)
 fn order_moves(
     board: &Board,
-    moves: Vec<ChessMove>,
+    moves: MoveGen,
     tt_move: Option<ChessMove>,
     killers: [Option<ChessMove>; 2],
     move_history: &[i32],
 ) -> Vec<ScoredMove> {
     let stm = board.side_to_move();
     let mut scored: Vec<ScoredMove> = moves
-        .into_iter()
         .map(|mv| {
             if Some(mv) == tt_move {
                 return ScoredMove {
                     mv,
                     order_key: -100_000,
-                    see_val: if is_capture(board, mv) { Some(see(board, mv)) } else { None },
+                    see_val: if is_capture(board, mv) {
+                        Some(see(board, mv))
+                    } else {
+                        None
+                    },
                 };
             }
             if is_capture(board, mv) {
@@ -1113,22 +1125,46 @@ fn order_moves(
                 } else {
                     10_000 - v
                 };
-                return ScoredMove { mv, order_key, see_val: Some(v) };
+                return ScoredMove {
+                    mv,
+                    order_key,
+                    see_val: Some(v),
+                };
             }
             if mv.get_promotion() == Some(Piece::Queen) {
-                return ScoredMove { mv, order_key: -50_000, see_val: None };
+                return ScoredMove {
+                    mv,
+                    order_key: -50_000,
+                    see_val: None,
+                };
             }
             if Some(mv) == killers[0] {
-                return ScoredMove { mv, order_key: -30_000, see_val: None };
+                return ScoredMove {
+                    mv,
+                    order_key: -30_000,
+                    see_val: None,
+                };
             }
             if Some(mv) == killers[1] {
-                return ScoredMove { mv, order_key: -25_000, see_val: None };
+                return ScoredMove {
+                    mv,
+                    order_key: -25_000,
+                    see_val: None,
+                };
             }
             if mv.get_promotion().is_some() {
-                return ScoredMove { mv, order_key: -20_000, see_val: None };
+                return ScoredMove {
+                    mv,
+                    order_key: -20_000,
+                    see_val: None,
+                };
             }
             let h = move_history[history_idx(stm, mv.get_source(), mv.get_dest())];
-            ScoredMove { mv, order_key: -h, see_val: None }
+            ScoredMove {
+                mv,
+                order_key: -h,
+                see_val: None,
+            }
         })
         .collect();
     scored.sort_by_key(|sm| sm.order_key);
@@ -1136,14 +1172,8 @@ fn order_moves(
 }
 
 fn mvv_lva_key(board: &Board, mv: ChessMove) -> i32 {
-    let target = board
-        .piece_on(mv.get_dest())
-        .map(piece_rank)
-        .unwrap_or(1); // en passant schlaegt einen Bauern
-    let attacker = board
-        .piece_on(mv.get_source())
-        .map(piece_rank)
-        .unwrap_or(0);
+    let target = board.piece_on(mv.get_dest()).map(piece_rank).unwrap_or(1); // en passant schlaegt einen Bauern
+    let attacker = board.piece_on(mv.get_source()).map(piece_rank).unwrap_or(0);
     // Hoher Target-Wert, niedriger Attacker-Wert → niedrigster Key
     -(target * 10 - attacker)
 }
@@ -1237,7 +1267,7 @@ fn least_valuable_attacker(
         Piece::King,
     ] {
         let candidates = side_attackers & *board.pieces(piece);
-        if candidates.popcnt() > 0 {
+        if candidates != BitBoard::new(0) {
             // Nimm irgendeinen (to_square liefert den niedrigsten)
             let sq = candidates.to_square();
             return Some((sq, piece, see_piece_value(piece)));
@@ -1446,17 +1476,11 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
-    fn poisoned_tt_setup() -> (
-        Board,
-        Vec<u64>,
-        Arc<Mutex<TranspositionTable>>,
-        ChessMove,
-    ) {
+    fn poisoned_tt_setup() -> (Board, Vec<u64>, Arc<Mutex<TranspositionTable>>, ChessMove) {
         let start = Board::default();
-        let a3 =
-            ChessMove::from_san(&start, "a3").expect("a3 ist in der Anfangsstellung legal");
+        let a3 = ChessMove::from_san(&start, "a3").expect("a3 ist in der Anfangsstellung legal");
         let after_a3 = start.make_move_new(a3);
-        let key_after_a3 = polyglot_hash(&after_a3);
+        let key_after_a3 = after_a3.get_hash();
 
         let tt = Arc::new(Mutex::new(TranspositionTable::new(1)));
         // -29000 aus Schwarz' Sicht (Schwarz steht "kurz vor Mate"). Negiert
@@ -1503,7 +1527,7 @@ mod tests {
         // (Index < root_history_len) schon einmal aufgetreten ist.
         let (start, history, _tt, a3) = poisoned_tt_setup();
         let after_a3 = start.make_move_new(a3);
-        let key_after_a3 = polyglot_hash(&after_a3);
+        let key_after_a3 = after_a3.get_hash();
 
         let root_history_len = history.len();
         // Der Fix prueft genau diesen Slice — Position muss in der
@@ -1511,7 +1535,7 @@ mod tests {
         assert!(history[..root_history_len].contains(&key_after_a3));
         // Wurzelposition selbst ist NICHT in der Spielhistorie — TT-Cutoff
         // fuer die Wurzel waere also weiterhin erlaubt.
-        let key_start = polyglot_hash(&start);
+        let key_start = start.get_hash();
         assert!(!history[..root_history_len].contains(&key_start));
     }
 
