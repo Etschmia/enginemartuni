@@ -10,18 +10,18 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
-LMR umgesetzt am 04.05.2026 und lokal verifiziert (`lmr-plan.md`, Stufe 1).
-Wartet auf Lichess-Auswertung nach ≥100 Partien (Stufe 3).
+LMR + TT-Cutoff-Fix + Hotpath-Cleanup umgesetzt. Lichess-Rating 09.05.2026
+19:17: **Blitz 1969, Schnellschach 2032**. Auswertung 09.05.2026 (183 Partien)
+liegt vor — siehe Verlauf.
 
 ## Nächste Schritte
 
-1. **Auswertung LMR (≥100 Partien)** — Ziel-KPIs:
-   - `allows_mate`/Partie 0.126 → ~0.07
-   - `missed_mate`/Partie weiter Richtung 0.03
-   - Rating +30–60 Elo
-   - Sekundär: keine Regressionen bei `missed_capture`, `exposed_king`,
-     `positional_collapse`.
-2. Bei positiver Auswertung: **dynamische Figurenbewertung** in 3 Phasen —
+1. **Wirkung der Hotpath-Optimierung beobachten** — der 09.05-Cleanup bringt
+   in Test-Stellungen +60–70 % NPS. Nach ≥50 Partien prüfen, ob die effektive
+   Tiefe in echten Time-Controls steigt und sich das in den
+   tiefenrelevanten Motiven (`allows_mate`, `missed_mate`,
+   `positional_collapse`) niederschlägt.
+2. **Dynamische Figurenbewertung** in 3 Phasen —
    siehe [vorbereiteter_Prompt_dynamische_Figurenbewertung.md](vorbereiteter_Prompt_dynamische_Figurenbewertung.md).
 3. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
    die Endgame-Rate Anlass gibt; aktuell kein Druck.
@@ -74,11 +74,66 @@ Wartet auf Lichess-Auswertung nach ≥100 Partien (Stufe 3).
   `search()` schlanker wird.
 - **Benannte Ordering-Konstanten** — magische Zahlen in
   `order_moves` durch benannte Konstanten oder ein Stage-Enum ersetzen.
+- **`is_passed_simple` (search.rs) vs. `is_passed` (eval.rs)** sind nach
+  dem 09.05-Bitmask-Refactor byte-identisch. Bei Gelegenheit
+  konsolidieren (eine Instanz, gemeinsamer Aufrufer).
 
 ## Verlauf
 
 *Chronologische Zusammenfassung der bereits umgesetzten Maßnahmen.
 Details und Mess-Daten in den verlinkten Dokumenten.*
+
+- **Hotpath-Cleanup (09.05.2026) — DONE.** PR `perf-hotpath-logic-cleanup`,
+  ausgelöst durch Beobachtung in Shredder-GUI auf dem Windows-Host: Martuni
+  blieb bei Tiefe 7, Komodo 12 schon bei 17. Codex-PR im Review identifiziert
+  und gemerged. Wesentliche Änderungen:
+  - **Redundante MoveGen** in `alpha_beta` und `quiescence` entfernt:
+    `board.status()` baut intern selbst `MoveGen::new_legal()`, danach lief
+    derselbe Generator nochmal fürs Ordering. Jetzt: einmalige
+    Generation, Terminal-Erkennung anhand `legal_moves.len() == 0` (vor NMP
+    eingehängt, damit Stalemate/Checkmate nicht durchs Null-Move-Pruning
+    fallen).
+  - **Repetition-/TT-Hash** von `polyglot_hash` (iteriert alle 64 Felder) auf
+    `Board::get_hash()` umgestellt — die `chess`-Crate pflegt diesen
+    Zobrist-Hash inkrementell in `make_move`. Polyglot-Hash bleibt nur
+    fürs Eröffnungsbuch zuständig.
+  - **`check_ext`** wird nicht mehr unkonditional berechnet (sondern nur,
+    wenn das Kind tatsächlich im Schach steht).
+  - **`is_passed`/`is_passed_simple`** und **`rooks_connected`** auf
+    Bitmask-Operationen umgebaut, kein `Vec`/`Square`-Loop mehr.
+  - **`endgame::signature`** mit Fast-Exit `pawn_total > 1 → None`.
+  - **`target-cpu=native`** korrekt nach `.cargo/config.toml` als rustflag —
+    in `[profile.release]` wurde der Schlüssel von Cargo ignoriert
+    (Compiler-Warnung "unused manifest key").
+  - Verifikation Mittelspiel-Stellung `r4rk1/1bqnppbp/p2p1np1/1pp5/3PP3/
+    2NBBN1P/PPPQ1PP1/R4RK1 w` mit `go movetime 12000`: Master Tiefe 6 in
+    8.7 s (Tiefe 7 nicht erreicht), neuer Build Tiefe 7 in 9.1 s. NPS
+    ≈1.6 M → ≈2.8 M (+64 %). Scores und Best-Moves auf jeder Tiefe
+    identisch — reine Geschwindigkeit, keine Logikänderung.
+- **Auswertung 09.05.2026 (183 Partien) — DONE.** Tiefenrelevante Motive
+  weiter rückläufig: `allows_mate`/Partie 0.126 (04.05) → **0.109** (-13 %);
+  `missed_mate`/Partie 0.057 → **0.038** (-33 %, sehr nah am ursprünglichen
+  Ziel 0.03). Lichess Blitz 1965 → 1969 (+4), Rapid 2016 → 2032 (+16) —
+  unterhalb der LMR-Zielspanne +30 bis +60, aber das Mess-Intervall enthält
+  zwei zwischenzeitliche Bug-Fixes (Repetition-Detection 02.05, TT-Cutoff
+  07.05) plus den Compiler-Tweak vom 06.05; klare Attribution
+  schwierig. Neue Hotspots im Mittelspiel: `unclassified` 91 (40 %),
+  `positional_collapse` 27, `hangs_bishop` 22 — typischer Mittelspiel-
+  Bodensatz, kein klares Strukturproblem. Datei: `analyse_09.05.2026.txt`.
+- **TT-Cutoff bei Repetition-Vergiftung (07.05.2026) — DONE.** Reproduzierer
+  PGQZhMjF (Wojtmic-Bot vs Martuni, 06.05.): die TT speichert nur den
+  Stellungs-Schlüssel, keinen Repetition-Kontext. Wenn dieselbe Stellung im
+  Spielverlauf bereits aufgetaucht war, kann ein gespeicherter Mate-/
+  Cutoff-Score stale werden — der frühere Pfad führte zu echtem Mate, der
+  jetzige läuft durch eine 3-fold-Wiederholung. Fix in
+  `alpha_beta`: bei TT-Hit prüfen, ob `key` im Slice
+  `state.history[..root_history_len]` (Spielhistorie) liegt; wenn ja, nur
+  Move-Hint übernehmen, Score-Cutoff unterdrücken. `slice.contains` ist
+  O(n) auf einem Slice typisch < 200 Einträge und wird nur betreten, wenn
+  überhaupt ein Cutoff-Kandidat anliegt — kein Hot-Path-Treffer. Spiegelbild
+  des Repetition-Bugs vom 02.05.: die Repetition-Logik ist in beide
+  Richtungen heikel. Tests: `search::tests::poisoned_tt_does_not_select_
+  repeated_move`, `tt_cutoff_suppressed_when_key_in_game_history`.
 
 - **Auswertung 01.05.2026 (162 Partien) — DONE.** Die 28.04-Anpassung hat
   geliefert: Endgame-Blunder/Partie 0.60 → 0.358, exposed_king 0.14 → 0.086,
