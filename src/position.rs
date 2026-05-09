@@ -1,4 +1,3 @@
-use crate::polyglot::hash::polyglot_hash;
 use chess::{Board, ChessMove, MoveGen, Piece, Square};
 use std::str::FromStr;
 
@@ -15,7 +14,7 @@ impl Position {
     pub fn new() -> Self {
         let board = Board::default();
         Self {
-            hash_history: vec![polyglot_hash(&board)],
+            hash_history: vec![board.get_hash()],
             halfmove_clock: 0,
             board,
         }
@@ -35,7 +34,7 @@ impl Position {
 
     pub fn set_startpos(&mut self) {
         self.board = Board::default();
-        self.hash_history = vec![polyglot_hash(&self.board)];
+        self.hash_history = vec![self.board.get_hash()];
         self.halfmove_clock = 0;
     }
 
@@ -47,7 +46,7 @@ impl Position {
             .and_then(|s| s.parse::<u8>().ok())
             .unwrap_or(0);
         self.board = board;
-        self.hash_history = vec![polyglot_hash(&self.board)];
+        self.hash_history = vec![self.board.get_hash()];
         self.halfmove_clock = hmc;
         Ok(())
     }
@@ -55,8 +54,8 @@ impl Position {
     pub fn apply_moves(&mut self, moves: &[&str]) -> Result<(), String> {
         for uci_move in moves {
             let m = parse_uci_move(&self.board, uci_move)?;
-            let is_capture = self.board.piece_on(m.get_dest()).is_some()
-                || is_en_passant(&self.board, m);
+            let is_capture =
+                self.board.piece_on(m.get_dest()).is_some() || is_en_passant(&self.board, m);
             let is_pawn_move = self.board.piece_on(m.get_source()) == Some(Piece::Pawn);
 
             self.board = self.board.make_move_new(m);
@@ -68,7 +67,7 @@ impl Position {
             } else {
                 self.halfmove_clock = self.halfmove_clock.saturating_add(1);
             }
-            self.hash_history.push(polyglot_hash(&self.board));
+            self.hash_history.push(self.board.get_hash());
         }
         Ok(())
     }

@@ -21,9 +21,7 @@ pub fn endgame_score(board: &Board, p: &EvalParams) -> Option<i32> {
     match signature(board)? {
         Signature::Mopup { strong } => Some(mop_up_score(board, strong, p)),
         Signature::Kpk { strong, pawn_sq } => kpk_score(board, strong, pawn_sq, p),
-        Signature::Kbnk { strong, bishop_sq } => {
-            Some(kbnk_score(board, strong, bishop_sq, p))
-        }
+        Signature::Kbnk { strong, bishop_sq } => Some(kbnk_score(board, strong, bishop_sq, p)),
     }
 }
 
@@ -36,61 +34,93 @@ pub fn is_recognized(board: &Board) -> bool {
 #[derive(Copy, Clone)]
 enum Signature {
     /// KRvK, KQvK, KRRvK, KQQvK — alle Mop-up-Endspiele
-    Mopup { strong: Color },
-    Kpk { strong: Color, pawn_sq: Square },
-    Kbnk { strong: Color, bishop_sq: Square },
+    Mopup {
+        strong: Color,
+    },
+    Kpk {
+        strong: Color,
+        pawn_sq: Square,
+    },
+    Kbnk {
+        strong: Color,
+        bishop_sq: Square,
+    },
 }
 
 fn signature(board: &Board) -> Option<Signature> {
     let w_pawns = count(board, Piece::Pawn, Color::White);
     let b_pawns = count(board, Piece::Pawn, Color::Black);
-    let w_knight = count(board, Piece::Knight, Color::White);
-    let b_knight = count(board, Piece::Knight, Color::Black);
-    let w_bishop = count(board, Piece::Bishop, Color::White);
-    let b_bishop = count(board, Piece::Bishop, Color::Black);
-    let w_rook = count(board, Piece::Rook, Color::White);
-    let b_rook = count(board, Piece::Rook, Color::Black);
-    let w_queen = count(board, Piece::Queen, Color::White);
-    let b_queen = count(board, Piece::Queen, Color::Black);
+    let pawn_total = w_pawns + b_pawns;
 
-    let w_minor_or_more = w_knight + w_bishop + w_rook + w_queen;
-    let b_minor_or_more = b_knight + b_bishop + b_rook + b_queen;
-
-    // KPK: genau ein Bauer, keine sonstigen Figuren
-    if w_pawns + b_pawns == 1 && w_minor_or_more == 0 && b_minor_or_more == 0 {
-        let strong = if w_pawns == 1 { Color::White } else { Color::Black };
-        let pawn_sq = first_square(
-            *board.pieces(Piece::Pawn) & *board.color_combined(strong),
-        )?;
-        return Some(Signature::Kpk { strong, pawn_sq });
-    }
-
-    if w_pawns + b_pawns != 0 {
+    // Fast-Exit fuer den Normalfall: Dieses Modul kennt nur KPK mit genau
+    // einem Bauern sowie bauernlose Matt-/Mop-up-Endspiele. Jede Stellung mit
+    // zwei oder mehr Bauern kann hier niemals erkannt werden; frueher wurden
+    // trotzdem erst alle Offiziere beider Seiten gezaehlt.
+    if pawn_total > 1 {
         return None;
     }
 
+    let w_npm_bb = (*board.pieces(Piece::Knight)
+        | *board.pieces(Piece::Bishop)
+        | *board.pieces(Piece::Rook)
+        | *board.pieces(Piece::Queen))
+        & *board.color_combined(Color::White);
+    let b_npm_bb = (*board.pieces(Piece::Knight)
+        | *board.pieces(Piece::Bishop)
+        | *board.pieces(Piece::Rook)
+        | *board.pieces(Piece::Queen))
+        & *board.color_combined(Color::Black);
+    let w_minor_or_more = w_npm_bb.popcnt();
+    let b_minor_or_more = b_npm_bb.popcnt();
+
+    // KPK: genau ein Bauer, keine sonstigen Figuren
+    if pawn_total == 1 && w_minor_or_more == 0 && b_minor_or_more == 0 {
+        let strong = if w_pawns == 1 {
+            Color::White
+        } else {
+            Color::Black
+        };
+        let pawn_sq = first_square(*board.pieces(Piece::Pawn) & *board.color_combined(strong))?;
+        return Some(Signature::Kpk { strong, pawn_sq });
+    }
+
+    if pawn_total != 0 {
+        return None;
+    }
+
+    let w_knight = (*board.pieces(Piece::Knight) & *board.color_combined(Color::White)).popcnt();
+    let b_knight = (*board.pieces(Piece::Knight) & *board.color_combined(Color::Black)).popcnt();
+    let w_bishop = (*board.pieces(Piece::Bishop) & *board.color_combined(Color::White)).popcnt();
+    let b_bishop = (*board.pieces(Piece::Bishop) & *board.color_combined(Color::Black)).popcnt();
+    let w_rook = (*board.pieces(Piece::Rook) & *board.color_combined(Color::White)).popcnt();
+    let b_rook = (*board.pieces(Piece::Rook) & *board.color_combined(Color::Black)).popcnt();
+    let w_queen = (*board.pieces(Piece::Queen) & *board.color_combined(Color::White)).popcnt();
+    let b_queen = (*board.pieces(Piece::Queen) & *board.color_combined(Color::Black)).popcnt();
+
     // Mop-up: eine Seite ist nackt, die andere hat nur schwere Figuren
     if b_minor_or_more == 0 && is_mopup_force(w_knight, w_bishop, w_rook, w_queen) {
-        return Some(Signature::Mopup { strong: Color::White });
+        return Some(Signature::Mopup {
+            strong: Color::White,
+        });
     }
     if w_minor_or_more == 0 && is_mopup_force(b_knight, b_bishop, b_rook, b_queen) {
-        return Some(Signature::Mopup { strong: Color::Black });
+        return Some(Signature::Mopup {
+            strong: Color::Black,
+        });
     }
 
     // KBNK: genau ein Laeufer + ein Springer auf der starken Seite, andere Seite nackt
     if b_minor_or_more == 0 && w_bishop == 1 && w_knight == 1 && w_rook + w_queen == 0 {
-        let bishop_sq = first_square(
-            *board.pieces(Piece::Bishop) & *board.color_combined(Color::White),
-        )?;
+        let bishop_sq =
+            first_square(*board.pieces(Piece::Bishop) & *board.color_combined(Color::White))?;
         return Some(Signature::Kbnk {
             strong: Color::White,
             bishop_sq,
         });
     }
     if w_minor_or_more == 0 && b_bishop == 1 && b_knight == 1 && b_rook + b_queen == 0 {
-        let bishop_sq = first_square(
-            *board.pieces(Piece::Bishop) & *board.color_combined(Color::Black),
-        )?;
+        let bishop_sq =
+            first_square(*board.pieces(Piece::Bishop) & *board.color_combined(Color::Black))?;
         return Some(Signature::Kbnk {
             strong: Color::Black,
             bishop_sq,
@@ -117,8 +147,8 @@ fn mop_up_score(board: &Board, strong: Color, p: &EvalParams) -> i32 {
     let corner_d = nearest_corner_distance(weak_king, &ALL_CORNERS);
     let king_d = chebyshev(weak_king, strong_king);
 
-    let bonus = p.eg_corner_weight * (7 - corner_d)
-        + p.eg_king_proximity_weight * (14 - 2 * king_d);
+    let bonus =
+        p.eg_corner_weight * (7 - corner_d) + p.eg_king_proximity_weight * (14 - 2 * king_d);
 
     let material = strong_material(board, strong, p);
     signed(material + bonus, strong)
@@ -139,8 +169,8 @@ fn kbnk_score(board: &Board, strong: Color, bishop_sq: Square, p: &EvalParams) -
     let corner_d = nearest_corner_distance(weak_king, corners);
     let king_d = chebyshev(weak_king, strong_king);
 
-    let bonus = p.eg_corner_weight * (7 - corner_d)
-        + p.eg_king_proximity_weight * (14 - 2 * king_d);
+    let bonus =
+        p.eg_corner_weight * (7 - corner_d) + p.eg_king_proximity_weight * (14 - 2 * king_d);
 
     let material = strong_material(board, strong, p);
     signed(material + bonus, strong)
@@ -153,12 +183,7 @@ fn is_light_square(sq: Square) -> bool {
 /// Phase B: Rule of the Square. Wenn der Bauer nicht mehr einholbar ist,
 /// liefert die Funktion die Spezial-Bewertung. Sonst `None`, damit die
 /// normale Eval die KPK-Stellung uebernimmt.
-fn kpk_score(
-    board: &Board,
-    strong: Color,
-    pawn_sq: Square,
-    p: &EvalParams,
-) -> Option<i32> {
+fn kpk_score(board: &Board, strong: Color, pawn_sq: Square, p: &EvalParams) -> Option<i32> {
     if is_pawn_unstoppable(board, strong, pawn_sq) {
         let cp = p.pawn + p.eg_passed_unstoppable_bonus;
         return Some(signed(cp, strong));
@@ -199,11 +224,19 @@ fn pawn_distance_to_promotion(pawn_sq: Square, color: Color) -> i32 {
     match color {
         Color::White => {
             let d = 7 - r;
-            if r == 1 { d - 1 } else { d }
+            if r == 1 {
+                d - 1
+            } else {
+                d
+            }
         }
         Color::Black => {
             let d = r;
-            if r == 6 { d - 1 } else { d }
+            if r == 6 {
+                d - 1
+            } else {
+                d
+            }
         }
     }
 }
@@ -228,7 +261,11 @@ fn count(board: &Board, piece: Piece, color: Color) -> u32 {
 }
 
 fn signed(cp: i32, strong: Color) -> i32 {
-    if strong == Color::White { cp } else { -cp }
+    if strong == Color::White {
+        cp
+    } else {
+        -cp
+    }
 }
 
 fn chebyshev(a: Square, b: Square) -> i32 {
@@ -238,15 +275,10 @@ fn chebyshev(a: Square, b: Square) -> i32 {
 }
 
 fn nearest_corner_distance(sq: Square, corners: &[Square]) -> i32 {
-    corners
-        .iter()
-        .map(|c| chebyshev(sq, *c))
-        .min()
-        .unwrap_or(0)
+    corners.iter().map(|c| chebyshev(sq, *c)).min().unwrap_or(0)
 }
 
-const ALL_CORNERS: [Square; 4] =
-    [Square::A1, Square::H1, Square::A8, Square::H8];
+const ALL_CORNERS: [Square; 4] = [Square::A1, Square::H1, Square::A8, Square::H8];
 
 const LIGHT_CORNERS: [Square; 2] = [Square::A8, Square::H1];
 
@@ -266,7 +298,9 @@ mod tests {
         let b = Board::from_str("4k3/8/8/8/8/8/8/4K2R w - - 0 1").unwrap();
         assert!(matches!(
             signature(&b),
-            Some(Signature::Mopup { strong: Color::White })
+            Some(Signature::Mopup {
+                strong: Color::White
+            })
         ));
     }
 
@@ -275,7 +309,9 @@ mod tests {
         let b = Board::from_str("4k3/8/8/8/8/8/8/3qK3 w - - 0 1").unwrap();
         assert!(matches!(
             signature(&b),
-            Some(Signature::Mopup { strong: Color::Black })
+            Some(Signature::Mopup {
+                strong: Color::Black
+            })
         ));
     }
 
@@ -284,7 +320,9 @@ mod tests {
         let b = Board::from_str("4k3/8/8/8/8/8/8/R3K2R w - - 0 1").unwrap();
         assert!(matches!(
             signature(&b),
-            Some(Signature::Mopup { strong: Color::White })
+            Some(Signature::Mopup {
+                strong: Color::White
+            })
         ));
     }
 
@@ -306,13 +344,14 @@ mod tests {
         // Beide Stellungen mit aehnlicher Koenigsdistanz → der Eckenterm
         // entscheidet. Schwarzer Koenig in der Ecke ist deutlich schlechter
         // (= besser fuer Weiss) als im Zentrum.
-        let center =
-            Board::from_str("8/8/8/3k4/8/4K3/8/7R w - - 0 1").unwrap();
-        let edge =
-            Board::from_str("k7/8/2K5/8/8/8/8/7R w - - 0 1").unwrap();
+        let center = Board::from_str("8/8/8/3k4/8/4K3/8/7R w - - 0 1").unwrap();
+        let edge = Board::from_str("k7/8/2K5/8/8/8/8/7R w - - 0 1").unwrap();
         let s_center = endgame_score(&center, &p()).unwrap();
         let s_edge = endgame_score(&edge, &p()).unwrap();
-        assert!(s_edge > s_center, "edge {s_edge} should beat center {s_center}");
+        assert!(
+            s_edge > s_center,
+            "edge {s_edge} should beat center {s_center}"
+        );
     }
 
     #[test]
@@ -330,7 +369,10 @@ mod tests {
         let b = Board::from_str("4k3/8/8/8/8/8/4P3/4K3 w - - 0 1").unwrap();
         assert!(matches!(
             signature(&b),
-            Some(Signature::Kpk { strong: Color::White, .. })
+            Some(Signature::Kpk {
+                strong: Color::White,
+                ..
+            })
         ));
     }
 
@@ -355,7 +397,10 @@ mod tests {
         let b = Board::from_str("4k3/8/8/8/8/8/8/2BNK3 w - - 0 1").unwrap();
         assert!(matches!(
             signature(&b),
-            Some(Signature::Kbnk { strong: Color::White, .. })
+            Some(Signature::Kbnk {
+                strong: Color::White,
+                ..
+            })
         ));
     }
 

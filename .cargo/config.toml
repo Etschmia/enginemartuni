@@ -1,0 +1,4 @@
+[build]
+# Cargo ignoriert `target-cpu` in [profile.release]. Als rustc-Flag wird die
+# beabsichtigte lokale CPU-Spezialisierung tatsaechlich angewendet.
+rustflags = ["-C", "target-cpu=native"]
