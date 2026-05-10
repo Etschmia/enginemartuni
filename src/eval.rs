@@ -99,7 +99,7 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
         let Some(piece) = board.piece_on(sq) else {
             continue;
         };
-        score += piece_material(piece, p);
+        score += piece_material(piece, p, phase);
 
         match piece {
             Piece::Pawn => {
@@ -354,11 +354,26 @@ fn pawn_shield_score(board: &Board, us: Color, king_sq: Square, p: &EvalParams) 
     score
 }
 
-fn piece_material(piece: Piece, p: &EvalParams) -> i32 {
+/// Materialwert einer Figur in Centipawns.
+///
+/// Springer und Läufer nutzen MG/EG-Tapering (dynamische Figurenbewertung,
+/// Schritt 1). Die übrigen Figuren bleiben statisch — der Bauer ist
+/// definitionsgemäß die Centipawn-Skala selbst (100), Turm und Dame sind
+/// genug standardisierte Werte, dass eine Phase-Abhängigkeit keinen
+/// belastbaren Mehrwert verspricht.
+///
+/// Wichtige Abgrenzung: dieser Wert wird *nur* im Per-Figur-Materialscore
+/// von `evaluate_side` verwendet. Andere Stellen, die einen Materialwert
+/// brauchen — `king_exposure_penalty` (NPM-Schwelle 1500cp) und
+/// `endgame::strong_material` (Endspiel-Klassifizierung) —, greifen weiter
+/// auf `p.knight` / `p.bishop` direkt zu. Das ist Absicht: jene Terme
+/// definieren ihre eigenen Schwellen relativ zu einem festen Anker, und
+/// eine wandernde Figurenbewertung würde dort die Anker mitbewegen.
+fn piece_material(piece: Piece, p: &EvalParams, phase: i32) -> i32 {
     match piece {
         Piece::Pawn => p.pawn,
-        Piece::Knight => p.knight,
-        Piece::Bishop => p.bishop,
+        Piece::Knight => taper(p.knight_mg, p.knight_eg, phase),
+        Piece::Bishop => taper(p.bishop_mg, p.bishop_eg, phase),
         Piece::Rook => p.rook,
         Piece::Queen => p.queen,
         Piece::King => 0,

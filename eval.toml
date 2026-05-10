@@ -9,15 +9,48 @@
 # Werte bleiben dabei bewusst unveraendert.
 
 [material]
-# Finding: Springer und Laeufer sind gleich bewertet. Das ist konservativ,
-# aber offene Stellungen koennen Laeufer leicht unterbewerten. Richtung:
-# Laeufer oder Laeuferpaar eher dynamisch staerken, nicht pauschal Material
-# gross verschieben.
+# Statische Anker-Werte. Werden weiterhin gelesen von:
+#   - king_exposure_penalty (NPM-Schwelle 1500 cp)
+#   - endgame::strong_material (Endspiel-Klassifizierung)
+# Hier nichts anfassen, sonst bewegt sich der Eval-Anker an mehreren
+# Stellen gleichzeitig und A/B-Messungen werden unklar. Dynamische
+# Figurenbewertung läuft separat über [material_dynamic] unten.
 pawn   = 100
 knight = 300
 bishop = 300
 rook   = 500
 queen  = 900
+
+[material_dynamic]
+# Experimenteller Schritt 1 der dynamischen Figurenbewertung (10.05.2026).
+#
+# Idee (Kaufman 1999 + offene Beobachtung): Springer ist im Mittelspiel
+# wegen taktischer Bauern-Kooperation marginal stärker, der Läufer im
+# Endspiel wegen Reichweite und Freibauern-Begleitung deutlich stärker.
+# Die N–B-Differenz "kippt" über die Phase.
+#
+# Wirkung: nur im Per-Figur-Materialscore von evaluate_side, getapert
+# zwischen MG (phase=24) und EG (phase=0) wie die übrigen Tapering-Terme.
+# Andere Eval-Stellen (king_exposure, endgame.rs) lesen weiter [material]
+# oben — bewusste Trennung, damit der A/B-Test sauber ist.
+#
+# Werte:
+#   - knight_mg=310: +10 cp leichter Mittelspiel-Vorzug für Springer.
+#   - knight_eg=290: -10 cp schwächer im Endspiel.
+#   - bishop_mg=305: leicht stärker als Default, vor allem in offenen
+#     Stellungen — der reine Wert ist noch konservativ; der echte
+#     Läufer-Vorteil im Endspiel kommt aus bishop_eg.
+#   - bishop_eg=320: +20 cp Endspiel — deutlichster Effekt-Treiber.
+# Symmetrie: Springer verliert 20 cp über die Phase, Läufer gewinnt 15 cp.
+# N–B-Differenz: MG +5 (≈null), EG -30 (klar Läufer) — Kaufman-konsistent.
+#
+# Defaults im Code sind 300/300/300/300 (verhaltensgleich mit alter Eval).
+# Wenn diese Sektion gelöscht oder auskommentiert wird, fällt die Engine
+# auf statische 300/300 zurück und verhält sich wie das Baseline-Binary.
+knight_mg = 310
+knight_eg = 290
+bishop_mg = 305
+bishop_eg = 320
 
 [pawns]
 # Isolani: Bauer ohne eigene Bauern auf benachbarten Linien

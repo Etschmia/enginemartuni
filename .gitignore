@@ -20,3 +20,6 @@ docs/blog-*.md
 docs/human-training-concept.md
 docs/lichess-community-blog.md
 docs/post-tobias-*.md
+
+# A/B-Test-Output (lokal, kann gross werden)
+matches/

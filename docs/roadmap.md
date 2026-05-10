@@ -10,20 +10,24 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
-LMR + TT-Cutoff-Fix + Hotpath-Cleanup umgesetzt. Lichess-Rating 09.05.2026
-19:17: **Blitz 1969, Schnellschach 2032**. Auswertung 09.05.2026 (183 Partien)
-liegt vor — siehe Verlauf.
+LMR + TT-Cutoff-Fix + Hotpath-Cleanup umgesetzt. Buchlücken-Patch +
+**dynamische Figurenbewertung Schritt 1** (MG/EG-Tapering N/B) am 10.05.
+ergänzt — A/B-Match Baseline vs Dynmat-Step1 über 1000 Partien (5+0.05,
+fastchess) zeigt ~+11 Elo für Dynmat (CI ±17, LOS 90 %). Lichess-Rating
+10.05.2026 19:17: **Blitz 1950, Schnellschach 2055**.
 
 ## Nächste Schritte
 
-1. **Wirkung der Hotpath-Optimierung beobachten** — der 09.05-Cleanup bringt
-   in Test-Stellungen +60–70 % NPS. Nach ≥50 Partien prüfen, ob die effektive
-   Tiefe in echten Time-Controls steigt und sich das in den
-   tiefenrelevanten Motiven (`allows_mate`, `missed_mate`,
-   `positional_collapse`) niederschlägt.
-2. **Dynamische Figurenbewertung** in 3 Phasen —
-   siehe [vorbereiteter_Prompt_dynamische_Figurenbewertung.md](vorbereiteter_Prompt_dynamische_Figurenbewertung.md).
-3. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
+1. **Dynmat-Step1 nach Lichess deployen** und ≥100 Partien beobachten.
+   Selbst wenn der A/B-Effekt klein ist (~+11 Elo Self-Play), interessiert
+   uns vor allem: ändert sich das Motiv-Profil? Erwartung: Rückgang von
+   `hangs_bishop`/`trade_down` in offenen Stellungen.
+2. **Dynamische Figurenbewertung Schritt 2** — Pawn-Adjustment
+   (`knight_pawn_scale`, `bishop_pawn_scale` aktivieren). Erst nach
+   Lichess-Validierung von Schritt 1.
+3. **Dynamische Figurenbewertung Schritt 3** — dynamisches Bishop-Pair
+   (Phase + Brett-Offenheit). Erst nach Schritt 2.
+4. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
    die Endgame-Rate Anlass gibt; aktuell kein Druck.
 
 ## Offene Themen — Search
@@ -83,6 +87,32 @@ liegt vor — siehe Verlauf.
 *Chronologische Zusammenfassung der bereits umgesetzten Maßnahmen.
 Details und Mess-Daten in den verlinkten Dokumenten.*
 
+- **Dynamische Figurenbewertung Schritt 1 (10.05.2026) — DONE.** MG/EG-
+  Tapering nur für Springer und Läufer im Per-Figur-Materialscore
+  (`piece_material(piece, p, phase)` in `eval.rs`). Statische `p.knight` /
+  `p.bishop` bleiben Anker für `king_exposure_penalty` (NPM-Schwelle 1500cp)
+  und `endgame::strong_material` — Eigene Vorgabe von Tobias, damit der A/B-
+  Test sauber ist und nicht versehentlich indirekte Eval-Drift entsteht.
+  Neue Sektion `[material_dynamic]` in `eval.toml` mit Werten
+  knight_mg=310 / knight_eg=290 / bishop_mg=305 / bishop_eg=320 — Kaufman-
+  konsistent: N–B-Differenz ≈ 0 cp im MG, ≈ −30 cp im EG. Defaults im Code
+  sind 300/300/300/300, ohne Override neutral. Mess-Setup: fastchess
+  (`~/tools/fastchess`) + UHO_Lichess_4852_v1.epd (`~/tools/openings`).
+  A/B-Match 1000 Partien (5+0.05, UHO, fastchess SPRT [0,10]):
+  Dynmat +11.47 Elo ± 17.30, LOS 90.35 %, 402W / 163D / 435L Baseline-
+  Sicht. SPRT formal nicht entschieden (Effekt unter +10-Schwelle), aber
+  positive Tendenz konsistent mit dem 200-Spiele-Vorlauf (+15.65 Elo) — als
+  bestanden gewertet. Schritte 2 (Pawn-Adjustment) und 3 (dynamisches
+  Bishop-Pair) zurückgestellt bis Lichess-Validierung. Match-Outputs
+  unter `matches/baseline_vs_dynmat_step1*/` (gitignored).
+- **Buchlücken-Patch (10.05.2026) — DONE.** `src/polyglot/martuni_patches.bin`
+  als Polyglot-Datei mit Vorrang vor den externen Büchern. Erster Eintrag:
+  `9...Bc7 statt 9...Bxc5` in der wiederkehrenden sxphia-Stellung
+  (`r1bq1rk1/1p1n1ppp/p1pbpn2/2Pp4/3P2P1/2N1PN1P/PPQ2P2/R1B1KB1R b KQ - 0 9`),
+  Martuni hatte dort viermal in Folge denselben hangs_bishop-Blunder
+  gespielt (Verlust ~270 cp pro Partie). Generator: `tools/build_book_patches.py`
+  (python-chess, gegengeprüft am Polyglot-Startpos-Hash). `.gitignore`-
+  Ausnahme für die Patch-Bin, externe Bücher bleiben ungetrackt.
 - **Hotpath-Cleanup (09.05.2026) — DONE.** PR `perf-hotpath-logic-cleanup`,
   ausgelöst durch Beobachtung in Shredder-GUI auf dem Windows-Host: Martuni
   blieb bei Tiefe 7, Komodo 12 schon bei 17. Codex-PR im Review identifiziert

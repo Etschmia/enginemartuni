@@ -6,11 +6,33 @@ use toml::Value;
 #[derive(Debug, Clone)]
 pub struct EvalParams {
     // Material
+    // Statische Anker-Werte. Bewusst NICHT ersetzt durch dynmat: sie sind
+    // weiterhin Referenz für `king_exposure_penalty` (NPM-Schwelle) und
+    // `endgame::strong_material` (Endspiel-Klassifizierung). Wer hier den
+    // Anker bewegt, verschiebt indirekt auch jene Terme — für die Eval-
+    // Kalibrierung 2026 wollen wir das ausdrücklich vermeiden.
     pub pawn: i32,
     pub knight: i32,
     pub bishop: i32,
     pub rook: i32,
     pub queen: i32,
+
+    // Dynamische Springer-/Läufer-Werte für Tapering im Material-Score.
+    // Wirken NUR im Per-Figur-Materialbeitrag in `evaluate_side`; die
+    // statischen `knight`/`bishop` oben bleiben Anker für andere Terme.
+    //
+    // Idee (Kaufman 1999): Springer profitieren leicht im Mittelspiel von
+    // taktischer Bauern-Kooperation, Läufer im Endspiel von Reichweite und
+    // Freibauern-Begleitung. Die N–B-Differenz "kippt" im Spielverlauf.
+    //
+    // Defaults sind *verhaltensgleich* zur statischen Bewertung (alle 300).
+    // Damit ist die Code-Änderung ohne TOML-Override neutral. Erst eine
+    // Sektion `[material_dynamic]` in eval.toml aktiviert das Feature
+    // tatsächlich messbar — siehe eval.toml für die experimentellen Werte.
+    pub knight_mg: i32,
+    pub knight_eg: i32,
+    pub bishop_mg: i32,
+    pub bishop_eg: i32,
 
     // Pawn bonuses/penalties
     pub pawn_isolated_penalty: i32,
@@ -115,6 +137,14 @@ impl Default for EvalParams {
             bishop: 300,
             rook: 500,
             queen: 900,
+
+            // Dynmat-Defaults verhaltensgleich (alle 300). Der Phase-Tapering-
+            // Codepfad ist somit aktiv, liefert aber bei diesen Defaults exakt
+            // den statischen Wert. Wirkliche Werte kommen aus eval.toml.
+            knight_mg: 300,
+            knight_eg: 300,
+            bishop_mg: 300,
+            bishop_eg: 300,
 
             pawn_isolated_penalty: -20,
             pawn_de_file_bonus: 10,
@@ -225,6 +255,17 @@ impl EvalParams {
         p.bishop = i(&mat, "bishop", p.bishop);
         p.rook = i(&mat, "rook", p.rook);
         p.queen = i(&mat, "queen", p.queen);
+
+        // [material_dynamic] — optional; Defaults fallen auf den statischen
+        // Anker zurück (z.B. knight_mg = p.knight = 300), damit eine fehlende
+        // Sektion wirklich neutral ist. So spielen Baseline-Binaries (die
+        // diese Sektion noch nicht kennen) und das Step-1-Binary mit derselben
+        // eval.toml unterschiedlich nur dann, wenn der Override gesetzt wurde.
+        let dyn_mat = section(v, "material_dynamic");
+        p.knight_mg = i(&dyn_mat, "knight_mg", p.knight);
+        p.knight_eg = i(&dyn_mat, "knight_eg", p.knight);
+        p.bishop_mg = i(&dyn_mat, "bishop_mg", p.bishop);
+        p.bishop_eg = i(&dyn_mat, "bishop_eg", p.bishop);
 
         let pw = section(v, "pawns");
         p.pawn_isolated_penalty = i(&pw, "isolated_penalty", p.pawn_isolated_penalty);
