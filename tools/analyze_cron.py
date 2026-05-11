@@ -193,10 +193,19 @@ def main() -> int:
         logging.info("starting analysis: %s (already done: %d)", pgn.name, len(analyzed))
         logging.info("cmd: %s", " ".join(cmd))
 
+        # Cron hat einen minimalen PATH (/usr/bin:/bin), `stockfish` liegt
+        # unter /usr/games. Ohne Erweiterung findet python-chess die Engine
+        # nicht und analyze_blunders.py bricht mit rc=2 ab.
+        env = os.environ.copy()
+        STOCKFISH_DIR = "/usr/games"
+        path = env.get("PATH", "")
+        if STOCKFISH_DIR not in path.split(os.pathsep):
+            env["PATH"] = f"{STOCKFISH_DIR}{os.pathsep}{path}" if path else STOCKFISH_DIR
+
         start = time.monotonic()
         # check=False: nicht-null-rc loggen wir selbst, statt eine Exception
         # zu werfen — Cron soll keinen Stack-Trace per Mail verschicken.
-        proc = subprocess.run(cmd, cwd=REPO_ROOT, check=False)
+        proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, check=False)
         dur = time.monotonic() - start
 
         logging.info("done %s in %.1fs (rc=%d)", pgn.name, dur, proc.returncode)
