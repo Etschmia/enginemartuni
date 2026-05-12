@@ -52,6 +52,28 @@ knight_eg = 290
 bishop_mg = 305
 bishop_eg = 320
 
+# Schritt 2 der dynamischen Figurenbewertung (12.05.2026): Pawn-Adjustment.
+# Aktiviert zusätzlich zum MG/EG-Tapering eine bauernabhängige Skalierung
+# der Springer- und Läuferbewertung im Per-Figur-Materialscore.
+#
+# Formeln in eval::piece_material:
+#   knight_adj = (own_pawns  -  8) * knight_pawn_scale   (-24..0 cp)
+#   bishop_adj = (16 - total_pawns) * bishop_pawn_scale  (  0..+64 cp)
+#
+# Intuition:
+#   - Springer braucht eigene Bauern als Hilfsstruktur (Outposts, taktische
+#     Kooperation). Weniger eigene Bauern → Springer verliert Wirkung.
+#   - Läufer braucht freie Diagonalen. Weniger Bauern insgesamt auf dem
+#     Brett → Läufer gewinnt Wirkung. Stützt sich auf total_pawns (analog
+#     zur Läuferpaar-Logik in Schritt 3, die später dazukommt).
+#
+# Werte 3/4 sind Kaufman-konservative Hausnummern. Im Schritt 2 explizit
+# nur dieser eine Hebel — Step 3 (dynamisches Läuferpaar) bleibt parkiert
+# bis dieses Match durchgemessen ist.
+# Defaults im Code sind beide 0 (verhaltensgleich zur Step-1-Bewertung).
+knight_pawn_scale = 3
+bishop_pawn_scale = 4
+
 [pawns]
 # Isolani: Bauer ohne eigene Bauern auf benachbarten Linien
 # Finding: -20 ist ein flacher Malus. Im Endspiel sind isolierte Bauern oft

@@ -34,6 +34,22 @@ pub struct EvalParams {
     pub bishop_mg: i32,
     pub bishop_eg: i32,
 
+    // Schritt 2 der dynamischen Figurenbewertung (Pawn-Adjustment).
+    // Formeln in `piece_material`:
+    //   knight_adj = (own_pawn_count - 8) * knight_pawn_scale
+    //   bishop_adj = (16 - total_pawn_count) * bishop_pawn_scale
+    // Springer profitiert von eigenen Bauern (Outpost-Stützen,
+    // taktische Bauern-Kooperation) → maximaler Wert bei 8 eigenen Bauern,
+    // Malus pro verlorenem eigenem Bauern.
+    // Läufer profitiert von offener Gesamt-Stellung (weniger Bauern auf dem
+    // Brett, freie Diagonalen) → 0 bei vollem Brett, Bonus mit jedem
+    // fehlenden Bauer (egal welche Farbe).
+    //
+    // Defaults sind 0 — verhaltensgleich zur reinen Step-1-Bewertung. Erst
+    // ein eval.toml-Override aktiviert das Pawn-Adjustment messbar.
+    pub knight_pawn_scale: i32,
+    pub bishop_pawn_scale: i32,
+
     // Pawn bonuses/penalties
     pub pawn_isolated_penalty: i32,
     pub pawn_de_file_bonus: i32,
@@ -145,6 +161,12 @@ impl Default for EvalParams {
             knight_eg: 300,
             bishop_mg: 300,
             bishop_eg: 300,
+
+            // Step-2-Defaults: ebenfalls 0 → kein Pawn-Adjustment, solange
+            // eval.toml keine Werte überschreibt. Damit bleibt das alte
+            // Step-1-Verhalten ohne TOML-Override exakt erhalten.
+            knight_pawn_scale: 0,
+            bishop_pawn_scale: 0,
 
             pawn_isolated_penalty: -20,
             pawn_de_file_bonus: 10,
@@ -266,6 +288,10 @@ impl EvalParams {
         p.knight_eg = i(&dyn_mat, "knight_eg", p.knight);
         p.bishop_mg = i(&dyn_mat, "bishop_mg", p.bishop);
         p.bishop_eg = i(&dyn_mat, "bishop_eg", p.bishop);
+        // Step 2 (Pawn-Adjustment): bei fehlender Sektion bleiben die Werte
+        // auf 0 (Default in EvalParams), das Feature ist dann neutral.
+        p.knight_pawn_scale = i(&dyn_mat, "knight_pawn_scale", p.knight_pawn_scale);
+        p.bishop_pawn_scale = i(&dyn_mat, "bishop_pawn_scale", p.bishop_pawn_scale);
 
         let pw = section(v, "pawns");
         p.pawn_isolated_penalty = i(&pw, "isolated_penalty", p.pawn_isolated_penalty);

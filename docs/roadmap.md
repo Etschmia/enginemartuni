@@ -15,16 +15,23 @@ post-Deploy): `missed_mate` 0.038 → **0.029**, `allows_mate` 0.109 →
 **0.080**, `hangs_bishop` 0.120 → **0.109** (Roadmap-Vorhersage
 eingelöst, kleiner Effekt). Lichess-Rating 12.05.2026 19:00:
 **Blitz 2027 (+77 seit 10.05), Schnellschach 2075 (+20)**.
-Zweiter Buchlücken-Patch (11. Nbd4 statt Na3 vs EpimetheusBot, 5×
-beobachtet) am 12.05. ergänzt.
+
+**Dynmat-Step2** (Pawn-Adjustment) am 12.05. im Code: `piece_material`
+addiert jetzt `(own_pawns − 8) * knight_pawn_scale` bzw.
+`(16 − total_pawns) * bishop_pawn_scale`. eval.toml-Aktivierung mit
+Kaufman-konservativen 3 / 4. A/B-Match Step1 vs Step2 vorbereitet
+(`matches/step1_vs_step2/run.sh`), Lichess bleibt bis zum Ergebnis auf
+Step1. Zweiter Buchlücken-Patch (11. Nbd4 statt Na3 vs EpimetheusBot,
+5× beobachtet) am 12.05. ergänzt.
 
 ## Nächste Schritte
 
-1. **Dynamische Figurenbewertung Schritt 2** — Pawn-Adjustment
-   (`knight_pawn_scale`, `bishop_pawn_scale` aktivieren). A/B Step1 vs
-   Step2 über 1000 Partien (analog Step1).
+1. **A/B-Match Step1 vs Step2** über 1000 Partien (5+0.05, UHO, SPRT
+   [0, 10]) starten und auswerten. Bei positivem Signal Step2 nach
+   Lichess deployen + ≥100 Partien beobachten (analog Step1-Validierung
+   11.05.).
 2. **Dynamische Figurenbewertung Schritt 3** — dynamisches Bishop-Pair
-   (Phase + Brett-Offenheit). Erst nach Schritt 2.
+   (Phase + Brett-Offenheit). Erst nach Schritt 2 Lichess-Validierung.
 3. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
    die Endgame-Rate Anlass gibt; aktuell kein Druck.
 

@@ -94,12 +94,20 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
     let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
     let our_pawns = *board.pieces(Piece::Pawn) & our_bb;
 
+    // Vorab für die dynamische Material-Bewertung (Schritt 2):
+    //   - own_pawn_count: skaliert den Springer (Pawn-Kooperation)
+    //   - total_pawn_count: skaliert den Läufer (Linien-Offenheit)
+    // Beide Werte sind innerhalb von evaluate_side konstant — günstiger,
+    // sie einmal pro Seite zu zählen statt in jedem Schleifendurchlauf neu.
+    let own_pawn_count = our_pawns.popcnt() as i32;
+    let total_pawn_count = own_pawn_count + their_pawns.popcnt() as i32;
+
     // Pro Figur: Materialwert + figurenspezifische Boni
     for sq in our_bb {
         let Some(piece) = board.piece_on(sq) else {
             continue;
         };
-        score += piece_material(piece, p, phase);
+        score += piece_material(piece, p, phase, own_pawn_count, total_pawn_count);
 
         match piece {
             Piece::Pawn => {
@@ -357,10 +365,22 @@ fn pawn_shield_score(board: &Board, us: Color, king_sq: Square, p: &EvalParams) 
 /// Materialwert einer Figur in Centipawns.
 ///
 /// Springer und Läufer nutzen MG/EG-Tapering (dynamische Figurenbewertung,
-/// Schritt 1). Die übrigen Figuren bleiben statisch — der Bauer ist
-/// definitionsgemäß die Centipawn-Skala selbst (100), Turm und Dame sind
-/// genug standardisierte Werte, dass eine Phase-Abhängigkeit keinen
-/// belastbaren Mehrwert verspricht.
+/// Schritt 1) plus optionales Pawn-Adjustment (Schritt 2). Die übrigen
+/// Figuren bleiben statisch — der Bauer ist definitionsgemäß die
+/// Centipawn-Skala selbst (100), Turm und Dame sind genug standardisierte
+/// Werte, dass eine Phase-Abhängigkeit keinen belastbaren Mehrwert
+/// verspricht.
+///
+/// Pawn-Adjustment (Step 2, Kaufman 1999):
+///   * **Springer** profitiert von eigenen Bauern — sie liefern Hilfs-
+///     struktur und Outpost-Stützen. Bei 8 eigenen Bauern (Startposition)
+///     ist der Adjustment 0; jeder verlorene eigene Bauer kostet
+///     `knight_pawn_scale` cp.
+///   * **Läufer** profitiert von offener Gesamt-Stellung (Diagonalen-
+///     Sichtweiten). Bei vollem Brett (16 Bauern) Adjustment 0; jeder
+///     fehlende Bauer (egal welche Farbe) gibt `bishop_pawn_scale` cp.
+/// Beide Skalen sind 0-Default → ohne `eval.toml`-Override identisch zu
+/// Step 1.
 ///
 /// Wichtige Abgrenzung: dieser Wert wird *nur* im Per-Figur-Materialscore
 /// von `evaluate_side` verwendet. Andere Stellen, die einen Materialwert
@@ -369,11 +389,25 @@ fn pawn_shield_score(board: &Board, us: Color, king_sq: Square, p: &EvalParams) 
 /// auf `p.knight` / `p.bishop` direkt zu. Das ist Absicht: jene Terme
 /// definieren ihre eigenen Schwellen relativ zu einem festen Anker, und
 /// eine wandernde Figurenbewertung würde dort die Anker mitbewegen.
-fn piece_material(piece: Piece, p: &EvalParams, phase: i32) -> i32 {
+fn piece_material(
+    piece: Piece,
+    p: &EvalParams,
+    phase: i32,
+    own_pawn_count: i32,
+    total_pawn_count: i32,
+) -> i32 {
     match piece {
         Piece::Pawn => p.pawn,
-        Piece::Knight => taper(p.knight_mg, p.knight_eg, phase),
-        Piece::Bishop => taper(p.bishop_mg, p.bishop_eg, phase),
+        Piece::Knight => {
+            let base = taper(p.knight_mg, p.knight_eg, phase);
+            let adj = (own_pawn_count - 8) * p.knight_pawn_scale;
+            base + adj
+        }
+        Piece::Bishop => {
+            let base = taper(p.bishop_mg, p.bishop_eg, phase);
+            let adj = (16 - total_pawn_count) * p.bishop_pawn_scale;
+            base + adj
+        }
         Piece::Rook => p.rook,
         Piece::Queen => p.queen,
         Piece::King => 0,
