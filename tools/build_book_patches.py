@@ -37,6 +37,15 @@ PATCHES: list[tuple[str, str, int, str]] = [
         1,
         "sxphia 9...Bxc5 hangs_bishop, replace with Bc7",
     ),
+    (
+        # EpimetheusBot-Falle: Martuni spielt 5x in Folge 11. Na3 (loss ~200cp,
+        # Springer landet auf totem Randfeld). Korrekt ist Nbd4 (zentraler
+        # Tausch, ausgeglichene Stellung).
+        "r1bk1b1r/p3pppp/2p2n2/1N6/1nP5/5N2/PP3PPP/R1B1KB1R w KQ - 0 11",
+        "b5d4",
+        1,
+        "EpimetheusBot 11. Na3, replace with Nbd4",
+    ),
 ]
 
 # Polyglot Move-Encoding (16 bit):

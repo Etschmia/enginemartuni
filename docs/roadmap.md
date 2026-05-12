@@ -10,24 +10,22 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
-LMR + TT-Cutoff-Fix + Hotpath-Cleanup umgesetzt. Buchlücken-Patch +
-**dynamische Figurenbewertung Schritt 1** (MG/EG-Tapering N/B) am 10.05.
-ergänzt — A/B-Match Baseline vs Dynmat-Step1 über 1000 Partien (5+0.05,
-fastchess) zeigt ~+11 Elo für Dynmat (CI ±17, LOS 90 %). Lichess-Rating
-10.05.2026 19:17: **Blitz 1950, Schnellschach 2055**.
+Dynmat-Step1 ist Lichess-validiert (Auswertung 11.05., 137 Partien
+post-Deploy): `missed_mate` 0.038 → **0.029**, `allows_mate` 0.109 →
+**0.080**, `hangs_bishop` 0.120 → **0.109** (Roadmap-Vorhersage
+eingelöst, kleiner Effekt). Lichess-Rating 12.05.2026 19:00:
+**Blitz 2027 (+77 seit 10.05), Schnellschach 2075 (+20)**.
+Zweiter Buchlücken-Patch (11. Nbd4 statt Na3 vs EpimetheusBot, 5×
+beobachtet) am 12.05. ergänzt.
 
 ## Nächste Schritte
 
-1. **Dynmat-Step1 nach Lichess deployen** und ≥100 Partien beobachten.
-   Selbst wenn der A/B-Effekt klein ist (~+11 Elo Self-Play), interessiert
-   uns vor allem: ändert sich das Motiv-Profil? Erwartung: Rückgang von
-   `hangs_bishop`/`trade_down` in offenen Stellungen.
-2. **Dynamische Figurenbewertung Schritt 2** — Pawn-Adjustment
-   (`knight_pawn_scale`, `bishop_pawn_scale` aktivieren). Erst nach
-   Lichess-Validierung von Schritt 1.
-3. **Dynamische Figurenbewertung Schritt 3** — dynamisches Bishop-Pair
+1. **Dynamische Figurenbewertung Schritt 2** — Pawn-Adjustment
+   (`knight_pawn_scale`, `bishop_pawn_scale` aktivieren). A/B Step1 vs
+   Step2 über 1000 Partien (analog Step1).
+2. **Dynamische Figurenbewertung Schritt 3** — dynamisches Bishop-Pair
    (Phase + Brett-Offenheit). Erst nach Schritt 2.
-4. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
+3. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
    die Endgame-Rate Anlass gibt; aktuell kein Druck.
 
 ## Offene Themen — Search
@@ -87,6 +85,26 @@ fastchess) zeigt ~+11 Elo für Dynmat (CI ±17, LOS 90 %). Lichess-Rating
 *Chronologische Zusammenfassung der bereits umgesetzten Maßnahmen.
 Details und Mess-Daten in den verlinkten Dokumenten.*
 
+- **Auswertung 11.05.2026 (137 Partien post Dynmat-Step1) — DONE.**
+  Sample 10.05 22:17 — 12.05 19:05, alle mit Dynmat-Step1 live. Mate-
+  Metriken weiter gesunken: `missed_mate`/Partie 0.038 → **0.029**,
+  `allows_mate` 0.109 → **0.080**. Roadmap-Vorhersage eingelöst:
+  `hangs_bishop` 0.120 → **0.109** (−9 %), `trade_down` 0.082 → 0.088
+  ≈ flat. Lichess Blitz 1969 → 2027 (+58), Rapid 2032 → 2075 (+43). Σ
+  Blunder/Partie 1.23 → 1.98 (+61 %), aber Gegner-Mix verzerrt
+  (HynobiusChess 19×, black_numba 15×, TiSchachBot 13× → Bot-Turnier mit
+  wenigen Teilnehmern, höheres Rating zieht härtere Stellungen). `hangs_
+  knight` 0.066 → 0.190 ist überwiegend MG-Taktik in bereits gewonnenen
+  Stellungen, kein Trade-Calculus-Effekt — vor Step 2 keine Eval-
+  Reaktion. Datei: `analyse_11.05.2026.txt`.
+- **Buchlücken-Patch EpimetheusBot 11. Nbd4 (12.05.2026) — DONE.**
+  Zweiter Eintrag in `tools/build_book_patches.py` /
+  `src/polyglot/martuni_patches.bin` (Polyglot-Hash
+  `0xecaa75f8ae670fcc`): in `r1bk1b1r/p3pppp/2p2n2/1N6/1nP5/5N2/PP3PPP/
+  R1B1KB1R w KQ - 0 11` spielt Martuni jetzt **Nbd4** statt **Na3**. Das
+  alte `Na3` lief 5× in 137 Partien (≈200 cp Verlust pro Partie) — neben
+  dem sxphia-Bxc5-Eintrag der zweite EpimetheusBot-typische Wiederholer.
+  Verifikation: `info string book hit / bestmove b5d4`.
 - **Dynamische Figurenbewertung Schritt 1 (10.05.2026) — DONE.** MG/EG-
   Tapering nur für Springer und Läufer im Per-Figur-Materialscore
   (`piece_material(piece, p, phase)` in `eval.rs`). Statische `p.knight` /
