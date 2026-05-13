@@ -71,8 +71,8 @@ bishop_eg = 320
 # nur dieser eine Hebel — Step 3 (dynamisches Läuferpaar) bleibt parkiert
 # bis dieses Match durchgemessen ist.
 # Defaults im Code sind beide 0 (verhaltensgleich zur Step-1-Bewertung).
-knight_pawn_scale = 3
-bishop_pawn_scale = 4
+knight_pawn_scale = 2
+bishop_pawn_scale = 2
 
 [pawns]
 # Isolani: Bauer ohne eigene Bauern auf benachbarten Linien

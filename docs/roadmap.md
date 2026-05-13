@@ -10,28 +10,37 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
-Dynmat-Step1 ist Lichess-validiert (Auswertung 11.05., 137 Partien
-post-Deploy): `missed_mate` 0.038 → **0.029**, `allows_mate` 0.109 →
-**0.080**, `hangs_bishop` 0.120 → **0.109** (Roadmap-Vorhersage
-eingelöst, kleiner Effekt). Lichess-Rating 12.05.2026 19:00:
-**Blitz 2027 (+77 seit 10.05), Schnellschach 2075 (+20)**.
+**Dynmat-Step2 (v2, Scales 2/2) am 13.05.2026 nach Lichess ausgerollt.**
+A/B vs Step1 (1000 Partien, 5+0.05, UHO): Step2v2 nominell **+5.56 Elo
+±18.89** (LOS ~72 %, CI deckt Null), v1-Variante (Scales 3/4) zuvor
++4.52 Elo bei ähnlich breitem CI. Beide A/B-Läufe lieferten kein
+signifikantes Signal, **bewusste Entscheidung trotzdem auszurollen**:
 
-**Dynmat-Step2** (Pawn-Adjustment) am 12.05. im Code: `piece_material`
-addiert jetzt `(own_pawns − 8) * knight_pawn_scale` bzw.
-`(16 − total_pawns) * bishop_pawn_scale`. eval.toml-Aktivierung mit
-Kaufman-konservativen 3 / 4. A/B-Match Step1 vs Step2 vorbereitet
-(`matches/step1_vs_step2/run.sh`), Lichess bleibt bis zum Ergebnis auf
-Step1. Zweiter Buchlücken-Patch (11. Nbd4 statt Na3 vs EpimetheusBot,
-5× beobachtet) am 12.05. ergänzt.
+- Step 1 zeigte im SPRT denselben Muster (+11.47 Elo, LOS 90 %, SPRT
+  formal nicht bestanden), brachte aber auf Lichess klar messbare
+  Verbesserung (Blitz +77, Rapid +20 nach 137 Partien).
+- fastchess-Selfplay testet nur den Spiegel-Stil. Lichess deckt ein
+  breiteres Stilspektrum (Maia, Greedy-Bots, positionelle Bots) ab —
+  empirisch der bessere Indikator für Pawn-/Material-Hebel bei dieser
+  Engine-Familie.
+- Risiko ist klein und reversibel (Binary tauschen + Service-Restart).
+
+Dynmat-Step1 hatte zuvor seinen Lichess-Trend bestätigt (Auswertung
+11.05., 137 Partien): `missed_mate` 0.038 → **0.029**, `allows_mate`
+0.109 → **0.080**, `hangs_bishop` 0.120 → **0.109**. Lichess-Rating
+12.05. 19:00: Blitz 2027 (+77 seit 10.05), Schnellschach 2075 (+20).
+Zweiter Buchlücken-Patch (11. Nbd4 vs EpimetheusBot) am 12.05. ergänzt.
 
 ## Nächste Schritte
 
-1. **A/B-Match Step1 vs Step2** über 1000 Partien (5+0.05, UHO, SPRT
-   [0, 10]) starten und auswerten. Bei positivem Signal Step2 nach
-   Lichess deployen + ≥100 Partien beobachten (analog Step1-Validierung
-   11.05.).
+1. **Lichess-Validierung Dynmat-Step2 v2** — ≥100–150 Partien post-Deploy
+   beobachten (analog Step1-Validierung 11.05.). Rollback-Trigger:
+   Blitz oder Rapid fällt >30 Punkte unter 2027/2075 und stabilisiert
+   sich, ODER analyse_cron-Hotspots verschlechtern sich klar
+   (`hangs_bishop`, `missed_mate`, `allows_mate`). Während des
+   Lookbacks `eval.toml` nicht weiter anfassen.
 2. **Dynamische Figurenbewertung Schritt 3** — dynamisches Bishop-Pair
-   (Phase + Brett-Offenheit). Erst nach Schritt 2 Lichess-Validierung.
+   (Phase + Brett-Offenheit). Erst nach Step-2-Lichess-Validierung.
 3. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
    die Endgame-Rate Anlass gibt; aktuell kein Druck.
 
