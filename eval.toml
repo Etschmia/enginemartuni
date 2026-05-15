@@ -119,10 +119,12 @@ bishop_pair_each = 15
 
 # Verbundene Tuerme (gleiche Linie/Reihe, Sichtverbindung, nichts dazwischen):
 # einmaliger Bonus fuer das Paar
-# Finding: +150 ist der auffaelligste Ueberwertungs-Kandidat: eine reine
-# Sichtverbindung ist selten 1.5 Bauern wert. Richtung: deutlich senken oder
-# nur bei offener Linie, 7. Reihe, Eindringen oder konkretem Ziel gewichten.
-connected_rooks_pair = 150
+# Finding (15.05.2026): A/B 150 vs 30 ueber fastchess (SPRT, 5+0.05, UHO):
+# CR150 -150.65 Elo +/-41.14 nach 240 Partien, LOS 0 %, H0 akzeptiert.
+# Eval-Audit auf den Cluster-1b-Stellungen (W5AboGf0, 54iwUiMx) hatte den
+# 150-Wert als 92-99 % Bias-Treiber gegen Stockfish d1 identifiziert.
+# Aktion: Reduktion auf 30 (industriestandard 10-40 cp).
+connected_rooks_pair = 30
 
 # Turm auf offener Linie (keine Bauern beider Seiten auf der Linie)
 # Finding: 30/15 fuer offene Linien ist solide, aber aktuell ziellos: ein Turm

@@ -62,19 +62,16 @@ Pawn-/Material-Hebel empirisch der bessere Indikator.
    Damen-/Turm-Captures vor neutrale Bauern-Captures heben — ohne
    Tiefen-Gewinn könnte das in `W5AboGf0` reichen, Qxd6 als ersten
    Capture-Versuch an der Wurzel zu wählen. Klein, lokal, risikoarm.
-3. **`connected_rooks_pair`-Tuning — Eval-Audit liefert klaren Hebel.**
-   Debug-Print-Modus (`eval`-UCI-Kommando, neu in `src/eval.rs` +
-   `src/uci.rs`) und Validierungs-Tool
-   (`tools/validate_connected_rooks.py`) zeigen: in den **beiden
-   echten Cluster-1b-Stellungen** (W5AboGf0 und 54iwUiMx) erklärt
-   der Term `connected_rooks_pair = 150` **92–99 %** des Eval-Bias
-   gegen Stockfish. Nach Abzug des Beitrags bleibt ein Rest-Gap von
-   nur ±11–12 cp (Rauschen). 150 cp ist auch deutlich über
-   Industriestandard (Stockfish/Crafty 10–40 cp).
-   **A/B-Match läuft** (siehe Verlauf): `connected_rooks_pair = 30`
-   als Variante B gegen 150 als Variante A, fastchess SPRT [0, 10],
-   1000 Partien 5+0.05 / UHO. Erwartung: nominell positiv durch zwei
-   nachgewiesene Cluster-1b-Hits in den letzten 144 Lichess-Partien.
+3. **`connected_rooks_pair = 30` ausgerollt am 15.05.2026.** A/B-Match
+   `matches/conn_rooks_150_vs_30` lief 15.05. 17:15–17:39, SPRT [0, 10]
+   nach 240 Partien terminiert (H0 akzeptiert): **CR30 schlägt CR150
+   um +150.65 Elo ±41.14**, LOS 100 % für CR30, Ptnml [45, 22, 43, 6, 4],
+   PairsRatio 0.15, Total Time 00:23:54. Damit ist der Eval-Audit-
+   Befund (92–99 % Bias-Treiber) live bestätigt — selfplay-Signal so
+   deutlich, dass das übliche A/B-↔-Lichess-Caveat nicht greift.
+   `eval.toml` im Repo-Root auf 30 gesetzt; kein Rebuild nötig
+   (Laufzeit-Config). Lichess-Lookback am 16.05. Bei Plateau evtl.
+   Folge-A/B 30 vs 0 oder 30 vs 60.
 4. **Dynamische Figurenbewertung Schritt 3** — dynamisches Bishop-Pair
    (Phase + Brett-Offenheit). **Zurückgestellt** hinter (1)–(3):
    Cluster-1b-Befund zeigt, dass aktuelle Search-Tiefe der größere
