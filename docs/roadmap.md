@@ -10,44 +10,80 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
-**Dynmat-Step2 (v2, Scales 2/2) am 13.05.2026 nach Lichess ausgerollt.**
-A/B vs Step1 (1000 Partien, 5+0.05, UHO): Step2v2 nominell **+5.56 Elo
-±18.89** (LOS ~72 %, CI deckt Null), v1-Variante (Scales 3/4) zuvor
-+4.52 Elo bei ähnlich breitem CI. Beide A/B-Läufe lieferten kein
-signifikantes Signal, **bewusste Entscheidung trotzdem auszurollen**:
+**Dynmat-Step2 v2 am 15.05.2026 nach 144-Partien-Lichess-Lookback
+behalten.** Lichess-Rating 15.05. 15:00: Blitz **2010** (−17 ggü 12.05),
+Schnellschach **2083** (+8) — netto flach innerhalb Rauschen, kein
+Rollback-Trigger erfüllt. Decisive-Blunder-Rate stabil; `allows_mate`-
+Spike (0.080 → 0.188/P) ist Statistik-Artefakt: alle 27 Fälle aus bereits
+verlorenen Stellungen (`eval_before < −300cp`), 7 davon stammen aus
+einem einzigen Endspiel-Shuffling-Spiel (`pD9ZAV3G` vs stickshark99).
+`missed_mate` bleibt mit 0.035/P stabil niedrig.
 
-- Step 1 zeigte im SPRT denselben Muster (+11.47 Elo, LOS 90 %, SPRT
-  formal nicht bestanden), brachte aber auf Lichess klar messbare
-  Verbesserung (Blitz +77, Rapid +20 nach 137 Partien).
-- fastchess-Selfplay testet nur den Spiegel-Stil. Lichess deckt ein
-  breiteres Stilspektrum (Maia, Greedy-Bots, positionelle Bots) ab —
-  empirisch der bessere Indikator für Pawn-/Material-Hebel bei dieser
-  Engine-Familie.
-- Risiko ist klein und reversibel (Binary tauschen + Service-Restart).
+Vorgeschichte: Step 2 v2 wurde am 13.05. **trotz nicht-signifikantem
+A/B** ausgerollt (Step2v2 +5.56 Elo ±18.89 vs Step1, LOS ~72 %).
+Dieselbe Datenlage hatte Step 1 schon im SPRT formal nicht bestanden,
+auf Lichess aber +77/+20 geliefert. fastchess-Selfplay testet nur den
+Spiegelstil; Lichess deckt ein breiteres Stilspektrum ab und ist für
+Pawn-/Material-Hebel empirisch der bessere Indikator.
 
-Dynmat-Step1 hatte zuvor seinen Lichess-Trend bestätigt (Auswertung
-11.05., 137 Partien): `missed_mate` 0.038 → **0.029**, `allows_mate`
-0.109 → **0.080**, `hangs_bishop` 0.120 → **0.109**. Lichess-Rating
-12.05. 19:00: Blitz 2027 (+77 seit 10.05), Schnellschach 2075 (+20).
-Zweiter Buchlücken-Patch (11. Nbd4 vs EpimetheusBot) am 12.05. ergänzt.
+**Befunde aus dem 15.05-Lookback und Cluster-1-Stichprobe:**
+- Vier Buch-Patches für `stickshark99` ausgerollt (15.05.,
+  `martuni_patches.bin` jetzt 6 Einträge).
+- Cluster-1-Stichprobe `missed_capture` (`tools/probe_missed_captures.py`):
+  3/9 lösen sich mit Tiefe (Such-/NPS-Hebel), 3/9 sind echte Eval-Hebel
+  in der Erstbewertung — nach SF-Sanity-Check bis d30
+  (`tools/verify_cluster1b_stockfish.py`) bleiben **2/9 als echte
+  Bugs**: `54iwUiMx` m25 (Nxd4) und `W5AboGf0` m29 (Qxd6).
+  `m1oQlfmG` war SF-Artefakt der d17-Momentaufnahme (Stockfish d30
+  selbst flippt auf `Be2`).
+- **W5AboGf0 Deep-Dive** (`tools/trace_w5abogf0.py`): Engine bei
+  120 s/100 M Knoten erreicht d10 und bleibt bei Qg4 (−49 cp).
+  Post-Move-Eval an d10 separat: Qxd6 = **+47 cp**, Qg4 = **−44 cp**
+  (Diff 91 cp). SEE rechnet die Q-für-Q-Capture korrekt mit Netto 0.
+  Diagnose: **Such-Tiefe-/Move-Ordering-Issue, kein statischer
+  Eval-Bug**. Bei Root-d11 wäre der Flip da, kostet aber ~5–10× mehr
+  Knoten als das Blitz-Budget liefert.
+- Neue Hotspots: `stickshark99` 2.25 B/P (vor den Patches),
+  `AetherBot` 2.04 B/P (25 Spiele) — eigener Lookback offen;
+  `sxphia` von 1.7 auf 1.42 B/P gefallen.
 
 ## Nächste Schritte
 
-1. **Lichess-Validierung Dynmat-Step2 v2** — ≥100–150 Partien post-Deploy
-   beobachten (analog Step1-Validierung 11.05.). Rollback-Trigger:
-   Blitz oder Rapid fällt >30 Punkte unter 2027/2075 und stabilisiert
-   sich, ODER analyse_cron-Hotspots verschlechtern sich klar
-   (`hangs_bishop`, `missed_mate`, `allows_mate`). Während des
-   Lookbacks `eval.toml` nicht weiter anfassen.
-2. **Dynamische Figurenbewertung Schritt 3** — dynamisches Bishop-Pair
-   (Phase + Brett-Offenheit). Erst nach Step-2-Lichess-Validierung.
-3. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
+1. **Aspiration Windows** — **hochgezogen aus den Offenen Themen.**
+   Cluster-1b zeigt: Eval ist korrekt, es fehlt 1 Ply Tiefe pro
+   Zeiteinheit. Engeres Startfenster pro ID-Tiefe spart Knoten bei
+   stabiler Bewertung, genau für solche Stellungen der direkte Hebel.
+   Erwartung: +1 Ply in vergleichbarer Zeit, Cluster-1b-Stellungen
+   flippen dann auf den richtigen Capture-Zug. Falls Aspiration
+   Re-Searches häufiger auslösen als erwartet, schlimmstenfalls neutral.
+2. **Move-Ordering: MVV-Bonus auch bei SEE = 0 Captures mit
+   high-value-victim**. Qxd6 hat SEE 0 (Q für Q) und sortiert sich
+   aktuell wie ein "neutraler Schlag". Ein zusätzlicher MVV-Bias würde
+   Damen-/Turm-Captures vor neutrale Bauern-Captures heben — ohne
+   Tiefen-Gewinn könnte das in `W5AboGf0` reichen, Qxd6 als ersten
+   Capture-Versuch an der Wurzel zu wählen. Klein, lokal, risikoarm.
+3. **`connected_rooks_pair`-Tuning — Eval-Audit liefert klaren Hebel.**
+   Debug-Print-Modus (`eval`-UCI-Kommando, neu in `src/eval.rs` +
+   `src/uci.rs`) und Validierungs-Tool
+   (`tools/validate_connected_rooks.py`) zeigen: in den **beiden
+   echten Cluster-1b-Stellungen** (W5AboGf0 und 54iwUiMx) erklärt
+   der Term `connected_rooks_pair = 150` **92–99 %** des Eval-Bias
+   gegen Stockfish. Nach Abzug des Beitrags bleibt ein Rest-Gap von
+   nur ±11–12 cp (Rauschen). 150 cp ist auch deutlich über
+   Industriestandard (Stockfish/Crafty 10–40 cp).
+   **A/B-Match läuft** (siehe Verlauf): `connected_rooks_pair = 30`
+   als Variante B gegen 150 als Variante A, fastchess SPRT [0, 10],
+   1000 Partien 5+0.05 / UHO. Erwartung: nominell positiv durch zwei
+   nachgewiesene Cluster-1b-Hits in den letzten 144 Lichess-Partien.
+4. **Dynamische Figurenbewertung Schritt 3** — dynamisches Bishop-Pair
+   (Phase + Brett-Offenheit). **Zurückgestellt** hinter (1)–(3):
+   Cluster-1b-Befund zeigt, dass aktuelle Search-Tiefe der größere
+   Engpass ist als feinere Eval-Hebel.
+5. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
    die Endgame-Rate Anlass gibt; aktuell kein Druck.
 
 ## Offene Themen — Search
 
-- **Aspiration Windows** — engeres Startfenster pro ID-Tiefe; spart
-  Knoten bei stabiler Bewertung über aufeinanderfolgende Tiefen.
 - **Futility / Reverse Futility Pruning** — Blattnähe-Pruning, wenn die
   statische Bewertung selbst mit großzügigem Margin Alpha nicht erreicht.
 - **Lazy MovePicker** — inkrementelle Zuggenerierung (Hash → Captures →
@@ -101,6 +137,64 @@ Zweiter Buchlücken-Patch (11. Nbd4 vs EpimetheusBot) am 12.05. ergänzt.
 *Chronologische Zusammenfassung der bereits umgesetzten Maßnahmen.
 Details und Mess-Daten in den verlinkten Dokumenten.*
 
+- **Debug-Eval-Breakdown + `connected_rooks_pair`-Befund (15.05.2026) — DONE.**
+  Neues UCI-Kommando `eval` druckt jede Eval-Komponente als
+  `info string`-Zeile (`src/eval.rs` `evaluate_breakdown`,
+  `print_eval_breakdown`; rein additiv, alle Tests grün). Damit
+  Validierungs-Tool `tools/validate_connected_rooks.py` über
+  mehrere Stellungen gefahren. Befund: `connected_rooks_pair = 150`
+  erklärt **92–99 %** des Eval-Bias in beiden echten Cluster-1b-
+  Stellungen — `W5AboGf0` post Qxd6 Nxd6: Bias +161 cp, davon
+  +150 vom Term; `54iwUiMx` m25 vor Ne7: Bias −162 cp, davon −150
+  vom Term. Nach Abzug Rest-Gap ±11–12 cp (Rauschen). Standard-
+  Mittelspiel zeigt deutlich anderes Bild (Rest-Gap −564 cp) —
+  separates Thema, nicht hier. Konsequenz: A/B-Match
+  `connected_rooks_pair = 30` vs 150 gestartet. Logs:
+  `validate_connected_rooks_2026-05-15.txt`,
+  `eval_breakdown_w5abogf0_2026-05-15.txt`,
+  `quiesce_trace_w5abogf0_2026-05-15.txt`.
+- **Cluster-1-Stichprobe `missed_capture` (15.05.2026) — DONE.**
+  9 Stellungen aus dem 15.05-Auswertungsfenster auf Engine-Verhalten
+  abgeklopft (`tools/probe_missed_captures.py`, je 30 s / d ≤ 14):
+  3/9 lösen sich ab d4–d10 (Such-/Zeitdruck-Problem, kein Eval-Bug),
+  4/9 bleiben bis d10 falsch, 2/9 oszillieren. Sanity-Check via
+  Stockfish d30 (`tools/verify_cluster1b_stockfish.py`) reduziert die
+  4 echten Kandidaten auf **2 belastbare Bugs** — `m1oQlfmG` war
+  Artefakt der d17-Momentaufnahme (Stockfish flippt bei d30 selbst auf
+  `Be2`). Übrig: `54iwUiMx` m25 (`Nxd4`, SF-Score läuft −66→0 cp) und
+  `W5AboGf0` m29 (`Qxd6`, −62→−32 cp). Deep-Dive an W5AboGf0
+  (`tools/trace_w5abogf0.py`): Free-Search 120 s / 100 M Knoten
+  erreicht d10 und bleibt bei Qg4 (−49 cp); Post-Move-Eval pro Kandidat
+  einzeln zeigt Qxd6 = +47 cp vs Qg4 = −44 cp (Diff 91 cp). SEE
+  rechnet Q-für-Q-Capture korrekt mit Netto 0. **Befund: Search-
+  Tiefe-/Move-Ordering, kein statischer Eval-Bug.** Daraus die
+  Priorisierung in "Nächste Schritte": Aspiration Windows hochgezogen.
+  Logs: `probe_cluster1_2026-05-15.txt`,
+  `verify_cluster1b_sf_2026-05-15.txt`,
+  `trace_w5abogf0_2026-05-15.txt`.
+- **Buchlücken-Patches stickshark99-Block (15.05.2026) — DONE.**
+  Vier zusätzliche Einträge in `tools/build_book_patches.py` →
+  `src/polyglot/martuni_patches.bin` (jetzt 6 Einträge): `7…c5` statt
+  `Bxc3+` (J6OoNBPQ), `10…Nge5` statt `Nxf2` (B8ZDeiEi), `11…a5` statt
+  `O-O-O` (PLLnwdrh), `12.Nb5` statt `Nc4` (FdSEbZbU). Anders als die
+  bisherigen Patches einmalige FENs aus 16 stickshark99-Partien — Wert
+  niedriger, aber für frühe Mittelspielzüge plausibel; Reviewhinweis
+  im Patch-Kommentar (entfernen falls keine Recurrence).
+- **Auswertung 15.05.2026 (144 Partien post Dynmat-Step2 v2) — DONE.**
+  Sample 13.05. (post-Deploy) — 15.05. 14:40. Lichess Blitz 2027 → 2010
+  (−17), Rapid 2075 → 2083 (+8); netto flach im Rauschen, kein Rollback-
+  Trigger erfüllt. **Entscheidung: Step 2 v2 behalten.** Σ 1.69
+  Blunder/Partie (243 total). `missed_mate` stabil 0.035/P,
+  `allows_mate` 0.188/P ist Artefakt aus bereits verlorenen Stellungen
+  (alle 27 Fälle `eval_before < −300cp`, 7 davon aus einem einzigen
+  Endspiel-Shuffling-Spiel `pD9ZAV3G`). `hangs_bishop` 0.109 → 0.139/P
+  leichter Drift (11 in offenem Spiel), im Auge behalten. Neue
+  Auffälligkeit: `missed_capture` 0.181/P, 13 davon in offenem Spiel —
+  zwei Cluster (Capture-vs-Capture-Ordering und Forcing-Sac-Pruning).
+  Neuer Sparring-Hotspot `stickshark99` (16 Spiele, 2.25 B/P, davon 5
+  Eröffnungspatzer); `sxphia` von 1.7 auf 1.42 B/P gefallen. Datei:
+  `analyse-13.05.2026.json`. Backup-Binary
+  `target/release/martuni.backup-step1-20260513` bleibt aufgehoben.
 - **Auswertung 11.05.2026 (137 Partien post Dynmat-Step1) — DONE.**
   Sample 10.05 22:17 — 12.05 19:05, alle mit Dynmat-Step1 live. Mate-
   Metriken weiter gesunken: `missed_mate`/Partie 0.038 → **0.029**,
