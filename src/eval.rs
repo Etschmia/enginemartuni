@@ -844,6 +844,246 @@ fn king_centralization_score(sq: Square) -> i32 {
     7 - file_dist - rank_dist
 }
 
+// =========================================================================
+// Debug-Breakdown: parallel zu evaluate(), aber legt jeden Term einzeln ab.
+// Wird NICHT vom Hot-Path aufgerufen — nur ueber das UCI-Kommando `eval`.
+// =========================================================================
+
+#[derive(Default, Debug, Clone)]
+pub struct PerSideBreakdown {
+    pub material: i32,
+    pub pawn_bonus: i32,
+    pub knight_backrank: i32,
+    pub bishop_pair: i32,
+    pub connected_rooks: i32,
+    pub rook_file: i32,
+    pub rook_passed: i32,
+    pub rook_seventh: i32,
+    pub phalanx: i32,
+    pub king_safety: i32,
+    pub pst_mg: i32,
+    pub pst_eg: i32,
+    pub mobility_mg: i32,
+    pub mobility_eg: i32,
+    pub rook_trapped_eg: i32,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct EvalBreakdown {
+    pub endgame_override: Option<i32>,
+    pub phase: i32,
+    pub white: PerSideBreakdown,
+    pub black: PerSideBreakdown,
+    pub pst_tapered: i32,
+    pub mobility_tapered: i32,
+    pub rook_trapped_tapered: i32,
+    pub king_activity_eg: i32,
+    pub king_passed_synergy: i32,
+    pub total: i32,
+}
+
+/// Spiegelt evaluate_side, schreibt aber jeden Beitrag separat in eine
+/// PerSideBreakdown statt sie zu einer Summe zu addieren.
+fn evaluate_side_breakdown(
+    board: &Board,
+    us: Color,
+    p: &EvalParams,
+    phase: i32,
+) -> PerSideBreakdown {
+    let mut b = PerSideBreakdown::default();
+
+    let our_bb = *board.color_combined(us);
+    let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
+    let our_pawns = *board.pieces(Piece::Pawn) & our_bb;
+    let own_pawn_count = our_pawns.popcnt() as i32;
+    let total_pawn_count = own_pawn_count + their_pawns.popcnt() as i32;
+
+    for sq in our_bb {
+        let Some(piece) = board.piece_on(sq) else {
+            continue;
+        };
+        b.material += piece_material(piece, p, phase, own_pawn_count, total_pawn_count);
+
+        match piece {
+            Piece::Pawn => b.pawn_bonus += pawn_bonus(sq, us, our_pawns, their_pawns, p),
+            Piece::Knight => {
+                let rank = sq.get_rank();
+                if rank == Rank::First || rank == Rank::Eighth {
+                    b.knight_backrank += p.knight_backrank_penalty;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let our_bishops = *board.pieces(Piece::Bishop) & our_bb;
+    if our_bishops.popcnt() >= 2 {
+        b.bishop_pair = 2 * p.bishop_pair_each;
+    }
+
+    let our_rooks = *board.pieces(Piece::Rook) & our_bb;
+    if rooks_connected(board, our_rooks) {
+        b.connected_rooks = p.connected_rooks_pair;
+    }
+    b.rook_file = rook_file_bonus(our_rooks, our_pawns, their_pawns, p);
+    b.rook_passed = rook_passed_pawn_bonus(us, our_rooks, our_pawns, their_pawns, p);
+    b.rook_seventh = rook_seventh_rank_bonus(board, us, our_rooks, p);
+    b.phalanx = phalanx_bonus(our_pawns, p);
+    b.king_safety = king_safety_with_phase(board, us, p, phase);
+
+    let (mg, eg) = pst_score(board, us);
+    b.pst_mg = mg;
+    b.pst_eg = eg;
+
+    let (mob_mg, mob_eg) = mobility_score(board, us, p);
+    b.mobility_mg = mob_mg;
+    b.mobility_eg = mob_eg;
+
+    b.rook_trapped_eg = rook_trapped_endgame_malus(board, us, p);
+
+    b
+}
+
+/// Liefert eine komponentenweise Aufschluesselung der Stellungsbewertung.
+/// Das Total stimmt mit `evaluate()` ueberein (Sanity-Check unten).
+pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
+    let mut bd = EvalBreakdown::default();
+    bd.phase = game_phase(board);
+
+    if let Some(s) = endgame::endgame_score(board, p) {
+        bd.endgame_override = Some(s);
+        bd.total = s;
+        return bd;
+    }
+
+    bd.white = evaluate_side_breakdown(board, Color::White, p, bd.phase);
+    bd.black = evaluate_side_breakdown(board, Color::Black, p, bd.phase);
+
+    bd.pst_tapered = taper(
+        bd.white.pst_mg - bd.black.pst_mg,
+        bd.white.pst_eg - bd.black.pst_eg,
+        bd.phase,
+    );
+    bd.mobility_tapered = taper(
+        bd.white.mobility_mg - bd.black.mobility_mg,
+        bd.white.mobility_eg - bd.black.mobility_eg,
+        bd.phase,
+    );
+    bd.rook_trapped_tapered = taper(
+        0,
+        bd.white.rook_trapped_eg - bd.black.rook_trapped_eg,
+        bd.phase,
+    );
+    bd.king_activity_eg = king_activity_endgame(board, bd.phase, p);
+    bd.king_passed_synergy = king_passed_pawn_synergy(board, bd.phase, p);
+
+    // Summe aller Per-Side-Terme (so wie evaluate_side sie addiert), als Differenz.
+    let side_sum_white = bd.white.material
+        + bd.white.pawn_bonus
+        + bd.white.knight_backrank
+        + bd.white.bishop_pair
+        + bd.white.connected_rooks
+        + bd.white.rook_file
+        + bd.white.rook_passed
+        + bd.white.rook_seventh
+        + bd.white.phalanx
+        + bd.white.king_safety;
+    let side_sum_black = bd.black.material
+        + bd.black.pawn_bonus
+        + bd.black.knight_backrank
+        + bd.black.bishop_pair
+        + bd.black.connected_rooks
+        + bd.black.rook_file
+        + bd.black.rook_passed
+        + bd.black.rook_seventh
+        + bd.black.phalanx
+        + bd.black.king_safety;
+    let non_pst = side_sum_white - side_sum_black;
+
+    bd.total = non_pst
+        + bd.pst_tapered
+        + bd.king_activity_eg
+        + bd.king_passed_synergy
+        + bd.mobility_tapered
+        + bd.rook_trapped_tapered;
+    bd
+}
+
+/// Druckt die EvalBreakdown als `info string`-Zeilen — UCI-konform, sodass
+/// das Kommando `eval` aus jedem UCI-Tool / Skript sauber gelesen werden kann.
+/// Vorzeichen-Konvention: Diff = White - Black (positiv = gut fuer Weiss).
+pub fn print_eval_breakdown(board: &Board, p: &EvalParams) {
+    let bd = evaluate_breakdown(board, p);
+
+    println!("info string ===== eval breakdown (Sicht: Weiss) =====");
+    if let Some(eg) = bd.endgame_override {
+        println!("info string ENDGAME-OVERRIDE aktiv: {} cp", eg);
+        println!("info string total                {:>6} cp", bd.total);
+        return;
+    }
+    println!("info string phase: {} / {}", bd.phase, MAX_PHASE);
+
+    let line = |name: &str, w: i32, b: i32| {
+        println!(
+            "info string {:>22}  W={:>6}  B={:>6}  Diff={:>6}",
+            name,
+            w,
+            b,
+            w - b
+        );
+    };
+    line("material", bd.white.material, bd.black.material);
+    line("pawn_bonus", bd.white.pawn_bonus, bd.black.pawn_bonus);
+    line(
+        "knight_backrank",
+        bd.white.knight_backrank,
+        bd.black.knight_backrank,
+    );
+    line("bishop_pair", bd.white.bishop_pair, bd.black.bishop_pair);
+    line(
+        "connected_rooks",
+        bd.white.connected_rooks,
+        bd.black.connected_rooks,
+    );
+    line("rook_file", bd.white.rook_file, bd.black.rook_file);
+    line("rook_passed", bd.white.rook_passed, bd.black.rook_passed);
+    line("rook_seventh", bd.white.rook_seventh, bd.black.rook_seventh);
+    line("phalanx", bd.white.phalanx, bd.black.phalanx);
+    line("king_safety", bd.white.king_safety, bd.black.king_safety);
+    line("pst_mg", bd.white.pst_mg, bd.black.pst_mg);
+    line("pst_eg", bd.white.pst_eg, bd.black.pst_eg);
+    line("mobility_mg", bd.white.mobility_mg, bd.black.mobility_mg);
+    line("mobility_eg", bd.white.mobility_eg, bd.black.mobility_eg);
+    line(
+        "rook_trapped_eg",
+        bd.white.rook_trapped_eg,
+        bd.black.rook_trapped_eg,
+    );
+
+    println!("info string ----- abgeleitete Terme (Weiss-Sicht) -----");
+    println!("info string pst_tapered          {:>6}", bd.pst_tapered);
+    println!("info string mobility_tapered     {:>6}", bd.mobility_tapered);
+    println!(
+        "info string rook_trapped_tapered {:>6}",
+        bd.rook_trapped_tapered
+    );
+    println!("info string king_activity_eg     {:>6}", bd.king_activity_eg);
+    println!(
+        "info string king_passed_synergy  {:>6}",
+        bd.king_passed_synergy
+    );
+    println!("info string total                {:>6} cp", bd.total);
+
+    // Sanity: muss mit evaluate() uebereinstimmen.
+    let direct = evaluate(board, p);
+    if direct != bd.total {
+        println!(
+            "info string WARN breakdown.total ({}) != evaluate() ({}) — Refactor noetig",
+            bd.total, direct
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

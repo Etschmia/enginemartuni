@@ -109,6 +109,12 @@ pub fn uci_loop() {
                     }
                 }));
             }
+            "eval" => {
+                // Debug-Kommando: druckt die komponentenweise Aufschluesselung
+                // der statischen Bewertung der aktuell gesetzten Stellung.
+                // Greift NICHT in die laufende Suche ein.
+                crate::eval::print_eval_breakdown(position.board(), &eval_params);
+            }
             "ponderhit" => {
                 // Gegner hat den vorhergesagten Zug gespielt: aus dem Ponder-Modus
                 // in normales Zeitmanagement umschalten. Die Suche erkennt den
