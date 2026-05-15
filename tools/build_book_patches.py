@@ -46,6 +46,47 @@ PATCHES: list[tuple[str, str, int, str]] = [
         1,
         "EpimetheusBot 11. Na3, replace with Nbd4",
     ),
+    # --- stickshark99-Block (Auswertung 15.05.2026, je 1x in 16 Partien) ----
+    # Anders als die ersten beiden Patches sind das KEINE wiederkehrer mit
+    # identischer Stellung, sondern Eroeffnungs-FENs (m7-m12), in denen
+    # Stockfish (Depth 17) >=150 cp Differenz zur Engine-Wahl meldet. Wert
+    # ist niedriger; entfernen, falls keine Recurrence in der naechsten
+    # Auswertung sichtbar wird.
+    (
+        # stickshark99 J6OoNBPQ m7 Schwarz: Bxc3+ tauscht Laeufer fuer
+        # Springer ohne Kompensation (loss ~159 cp). Stockfish: ...c5
+        # greift d4 direkt an und behaelt das Laeuferpaar.
+        "rnbqk3/ppp2p1p/4pnr1/3p4/1b1PP3/2N1Q3/PPP2PPP/R1B1KBNR b KQq - 4 7",
+        "c7c5",
+        1,
+        "stickshark99 7...Bxc3+ hangs_bishop, replace with c5",
+    ),
+    (
+        # stickshark99 B8ZDeiEi m10 Schwarz: Nxf2?! verliert den g4-Springer
+        # (Rf1 verteidigt, Bxg4 folgt). Loss ~248 cp. Stockfish: Nge5 setzt
+        # den Springer zentral mit Druck auf d3/f3.
+        "r1b1k2r/1pqp1ppp/p1n1p3/2b3B1/4P1n1/2NB1N1P/PPP2PP1/R2Q1RK1 b kq - 0 10",
+        "g4e5",
+        1,
+        "stickshark99 10...Nxf2 hangs_knight, replace with Nge5",
+    ),
+    (
+        # stickshark99 PLLnwdrh m11 Schwarz: O-O-O rochiert in Weiss'
+        # Damenfluegelangriff (a4-c4-d5 Bauernkette). Loss ~194 cp.
+        # Stockfish: ...a5 bremst b4-Vorstoss und haelt die Mitte stabil.
+        "r3k2r/pppbqpb1/3p1npp/3Pp3/P1P1P3/2N2N2/1P2BPPP/R2Q1RK1 b kq - 0 11",
+        "a7a5",
+        1,
+        "stickshark99 11...O-O-O hineinrochiert, replace with a5",
+    ),
+    (
+        # stickshark99 FdSEbZbU m12 Weiss: Nc4 verpasst den Sprung nach
+        # b5 (Drohung Nc7+ und Bxa8-Idee). Loss ~168 cp. Stockfish: Nb5.
+        "rn2kb1r/pp2pppp/2p2n2/8/8/N3BBPq/PP2QP2/R4RK1 w kq - 0 12",
+        "a3b5",
+        1,
+        "stickshark99 12.Nc4 verpasst Nb5, replace with Nb5",
+    ),
 ]
 
 # Polyglot Move-Encoding (16 bit):
