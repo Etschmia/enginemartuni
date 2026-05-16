@@ -74,6 +74,26 @@ bishop_eg = 320
 knight_pawn_scale = 2
 bishop_pawn_scale = 2
 
+# --- Schritt 3 der dynamischen Figurenbewertung (Bishop-Pair, 16.05.2026) ---
+#
+# Vorher: konstanter Bonus `2 * bishop_pair_each = 30 cp` in jeder Phase.
+# Jetzt: phasen-getapert, Endspiel-Pol zusaetzlich nach Brett-Offenheit
+# moduliert. Formel in `evaluate_side`:
+#
+#   eg_value = bishop_pair_eg + (16 - total_pawn_count) * bp_open_scale
+#   bonus    = taper(bishop_pair_mg, eg_value, phase)
+#
+# Variante A (Tobias' Wahl, 16.05.2026; siehe docs/dynmat-step3.md):
+#   - MG-Verhalten unveraendert (=30 cp wie bisher)
+#   - EG-Basis +20 cp (50 statt 30)
+#   - Offenheits-Skala: pro fehlendem Bauer +2 cp im EG-Pol
+#     volle Brett-Bauern (16) → EG-Bonus 50; leere Bauern → EG-Bonus 82
+# Defaults im Code 30/30/0 → identisch zu altem 2 * bishop_pair_each
+# (Anker-Konsistenz mit Step-1-Pattern).
+bishop_pair_mg = 30
+bishop_pair_eg = 50
+bp_open_scale  = 2
+
 [pawns]
 # Isolani: Bauer ohne eigene Bauern auf benachbarten Linien
 # Finding: -20 ist ein flacher Malus. Im Endspiel sind isolierte Bauern oft

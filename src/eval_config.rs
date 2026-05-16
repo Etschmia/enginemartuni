@@ -62,7 +62,28 @@ pub struct EvalParams {
 
     // Piece bonuses/penalties
     pub knight_backrank_penalty: i32,
+    /// **Statischer Anker (16.05.2026, Step 3 ausgerollt):** wird von der
+    /// Eval-Logik nicht mehr direkt verwendet — `evaluate_side` taperiert
+    /// jetzt ueber `bishop_pair_mg`, `bishop_pair_eg`, `bp_open_scale`
+    /// (siehe unten). Feld bleibt fuer Kompatibilitaet alter TOML-Configs
+    /// und als Konsistenz mit dem Step-1-Pattern (analog `p.knight` /
+    /// `p.bishop`, die ebenfalls als statische Anker stehen).
     pub bishop_pair_each: i32,
+    /// Schritt 3 der dynamischen Figurenbewertung (Bishop-Pair, 16.05.2026).
+    /// Mittelspiel-Bonus fuer ein vorhandenes Laeuferpaar (Summe fuer das
+    /// Paar, NICHT pro Laeufer). Default 30 = altes Verhalten
+    /// (`2 * bishop_pair_each` mit `bishop_pair_each = 15`).
+    pub bishop_pair_mg: i32,
+    /// Endspiel-Basis-Bonus fuer das Laeuferpaar. Im EG profitiert das
+    /// Laeuferpaar deutlich (Reichweite, kein Tempoverlust). Default 30,
+    /// experimentelle Werte ab 50.
+    pub bishop_pair_eg: i32,
+    /// Offenheits-Skala: zusaetzliche cp pro fehlendem Bauer auf dem Brett
+    /// (Formel: `bishop_pair_eg + (16 - total_pawn_count) * bp_open_scale`,
+    /// wirkt nur im EG-Pol des `taper`). Konsistent zur Step-2-Laeufer-
+    /// Logik, die `total_pawn_count` als Brett-Offenheits-Maesszahl nutzt.
+    /// Default 0 = keine Offenheits-Modulation.
+    pub bp_open_scale: i32,
     pub connected_rooks_pair: i32,
     /// Turm auf vollständig offener Linie (keine eigenen und keine gegnerischen Bauern)
     pub rook_open_file_bonus: i32,
@@ -178,7 +199,15 @@ impl Default for EvalParams {
             pawn_passed_rank_bonuses: vec![5, 15, 30, 55, 100, 170],
 
             knight_backrank_penalty: -50,
+            // Anker — wird von evaluate_side nicht mehr genutzt (siehe oben),
+            // bleibt fuer Kompatibilitaet/Konsistenz.
             bishop_pair_each: 15,
+            // Step-3-Defaults verhaltensgleich zum alten `2 * 15 = 30 cp`
+            // statisch in beiden Phasen. Echte Werte kommen aus eval.toml
+            // (`[material_dynamic]`).
+            bishop_pair_mg: 30,
+            bishop_pair_eg: 30,
+            bp_open_scale: 0,
             connected_rooks_pair: 150,
             rook_open_file_bonus: 30,
             rook_semiopen_file_bonus: 15,
@@ -292,6 +321,12 @@ impl EvalParams {
         // auf 0 (Default in EvalParams), das Feature ist dann neutral.
         p.knight_pawn_scale = i(&dyn_mat, "knight_pawn_scale", p.knight_pawn_scale);
         p.bishop_pawn_scale = i(&dyn_mat, "bishop_pawn_scale", p.bishop_pawn_scale);
+
+        // Step 3 (Bishop-Pair-Tapering): Defaults 30/30/0 = altes Verhalten,
+        // beliebige Werte ueberschreiben via [material_dynamic] in eval.toml.
+        p.bishop_pair_mg = i(&dyn_mat, "bishop_pair_mg", p.bishop_pair_mg);
+        p.bishop_pair_eg = i(&dyn_mat, "bishop_pair_eg", p.bishop_pair_eg);
+        p.bp_open_scale = i(&dyn_mat, "bp_open_scale", p.bp_open_scale);
 
         let pw = section(v, "pawns");
         p.pawn_isolated_penalty = i(&pw, "isolated_penalty", p.pawn_isolated_penalty);

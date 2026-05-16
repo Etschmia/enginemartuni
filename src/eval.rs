@@ -123,10 +123,16 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
         }
     }
 
-    // Laeuferpaar
+    // Laeuferpaar — Schritt 3 der dynamischen Figurenbewertung (16.05.2026):
+    // statt konstantem `2 * bishop_pair_each` (=30) jetzt phasen-getapert,
+    // Endspiel-Pol zusaetzlich nach Brett-Offenheit moduliert (mehr fehlende
+    // Bauern → freiere Diagonalen → wertvolleres Paar).
+    // Defaults im Code (30/30/0) reproduzieren das alte statische Verhalten;
+    // wirksame Werte stehen in eval.toml `[material_dynamic]`.
     let our_bishops = *board.pieces(Piece::Bishop) & our_bb;
     if our_bishops.popcnt() >= 2 {
-        score += 2 * p.bishop_pair_each;
+        let eg_value = p.bishop_pair_eg + (16 - total_pawn_count) * p.bp_open_scale;
+        score += taper(p.bishop_pair_mg, eg_value, phase);
     }
 
     // Verbundene Tuerme — einmal pro Paar
@@ -916,9 +922,11 @@ fn evaluate_side_breakdown(
         }
     }
 
+    // Step-3-Spiegelung der `evaluate_side`-Logik fuer den Debug-Breakdown.
     let our_bishops = *board.pieces(Piece::Bishop) & our_bb;
     if our_bishops.popcnt() >= 2 {
-        b.bishop_pair = 2 * p.bishop_pair_each;
+        let eg_value = p.bishop_pair_eg + (16 - total_pawn_count) * p.bp_open_scale;
+        b.bishop_pair = taper(p.bishop_pair_mg, eg_value, phase);
     }
 
     let our_rooks = *board.pieces(Piece::Rook) & our_bb;

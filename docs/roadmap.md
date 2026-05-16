@@ -10,21 +10,35 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
-**Dynmat-Step2 v2 am 15.05.2026 nach 144-Partien-Lichess-Lookback
-behalten.** Lichess-Rating 15.05. 15:00: Blitz **2010** (−17 ggü 12.05),
-Schnellschach **2083** (+8) — netto flach innerhalb Rauschen, kein
-Rollback-Trigger erfüllt. Decisive-Blunder-Rate stabil; `allows_mate`-
-Spike (0.080 → 0.188/P) ist Statistik-Artefakt: alle 27 Fälle aus bereits
-verlorenen Stellungen (`eval_before < −300cp`), 7 davon stammen aus
-einem einzigen Endspiel-Shuffling-Spiel (`pD9ZAV3G` vs stickshark99).
-`missed_mate` bleibt mit 0.035/P stabil niedrig.
+**Dynmat-Step3 (Bishop-Pair-Tapering Variante A) am 16.05.2026 ~22:23
+nach 1000-Partien-A/B ausgerollt.** A/B-Match
+`matches/baseline_vs_dynmat_step3`: Step3 nominell **+6.95 Elo ±18.06**
+gegen pre-Step3-Baseline, LOS 77.5 %, 411W / 158D / 431L (Baseline-
+Sicht), DrawRatio 44.8 %, PairsRatio 0.85. SPRT [0, 10] hat nicht
+terminiert (LLR −1.10, Match komplett durchgespielt 1000/1000) — Profil
+sehr ähnlich zu Step 2 v2 (+5.56 Elo, LOS 72 %). Werte in eval.toml:
+`bishop_pair_mg = 30`, `bishop_pair_eg = 50`, `bp_open_scale = 2`.
+Sanity-Check im Eval-Breakdown verifiziert (MG/Phase 23 → 30 cp = alter
+Wert; EG/Phase 2 → 68 cp). Backup als
+`target/release/martuni.backup-pre-step3-20260516`, Lookback offen.
+**Rollout-Entscheidung trotz CI-deckt-Null**: Step 2 v2 hatte unter
+identischer Datenlage auf Lichess flat (kein Rückschritt) abgeschnitten,
+und der Selfplay-↔-Lichess-Caveat aus
+[[feedback-ab-vs-lichess-signal]] gilt für Eval-Material-Hebel weiterhin
+— Spiegelstil im A/B ist nicht repräsentativ für Bot-Mix.
 
-Vorgeschichte: Step 2 v2 wurde am 13.05. **trotz nicht-signifikantem
-A/B** ausgerollt (Step2v2 +5.56 Elo ±18.89 vs Step1, LOS ~72 %).
-Dieselbe Datenlage hatte Step 1 schon im SPRT formal nicht bestanden,
-auf Lichess aber +77/+20 geliefert. fastchess-Selfplay testet nur den
-Spiegelstil; Lichess deckt ein breiteres Stilspektrum ab und ist für
-Pawn-/Material-Hebel empirisch der bessere Indikator.
+Lichess-Stand 16.05. (vor Rollout, Cluster-1b/CR30-Effekt): Blitz
+**2039** (+29 ggü 15.05.), Rapid **2100** (+17). Nächster Lookback in
+100–150 Partien gegen diesen Anker.
+
+Vorgeschichte: Step 2 v2 wurde am 13.05. trotz nicht-signifikantem A/B
+ausgerollt, am 15.05. nach 144 Partien Lichess-Lookback behalten
+(Blitz 2027 → 2010, Rapid 2075 → 2083, netto flach im Rauschen).
+`connected_rooks_pair = 150 → 30` am 15.05. live nach SPRT-Sieg
++150.65 Elo ±41 (240 Partien, H0). Cluster-1b-Stichprobe ergab **2 echte
+missed_capture-Bugs** (`54iwUiMx`, `W5AboGf0`); Aspiration Windows und
+Centipawn-MVV wurden am 16.05. als Lösungsversuche **verworfen** (siehe
+Punkte 2/3 unten).
 
 **Befunde aus dem 15.05-Lookback und Cluster-1-Stichprobe:**
 - Vier Buch-Patches für `stickshark99` ausgerollt (15.05.,
@@ -49,20 +63,38 @@ Pawn-/Material-Hebel empirisch der bessere Indikator.
 
 ## Nächste Schritte
 
-1. **Aspiration Windows** — **hochgezogen aus den Offenen Themen.**
-   Cluster-1b zeigt: Eval ist korrekt, es fehlt 1 Ply Tiefe pro
-   Zeiteinheit. Engeres Startfenster pro ID-Tiefe spart Knoten bei
-   stabiler Bewertung, genau für solche Stellungen der direkte Hebel.
-   Erwartung: +1 Ply in vergleichbarer Zeit, Cluster-1b-Stellungen
-   flippen dann auf den richtigen Capture-Zug. Falls Aspiration
-   Re-Searches häufiger auslösen als erwartet, schlimmstenfalls neutral.
-2. **Move-Ordering: MVV-Bonus auch bei SEE = 0 Captures mit
-   high-value-victim**. Qxd6 hat SEE 0 (Q für Q) und sortiert sich
-   aktuell wie ein "neutraler Schlag". Ein zusätzlicher MVV-Bias würde
-   Damen-/Turm-Captures vor neutrale Bauern-Captures heben — ohne
-   Tiefen-Gewinn könnte das in `W5AboGf0` reichen, Qxd6 als ersten
-   Capture-Versuch an der Wurzel zu wählen. Klein, lokal, risikoarm.
-3. **`connected_rooks_pair = 30` ausgerollt am 15.05.2026.** A/B-Match
+1. **AetherBot-Lookback** als nächste Eval-Priorität, nachdem Schritt 3
+   der dynamischen Figurenbewertung am 16.05. live ist (siehe „Aktueller
+   Status" und Verlauf). Im 16.05.-Sample 3.38 B/P bei 8 Spielen
+   ([[project-aetherbot-lookback-2026-05-16]]) — bisher zu dünn für
+   einen Buch-Patch, aber das deutlichste neue Sparring-Signal.
+   Erst-Re-Check empfohlen nach ≥20 Partien. Parallel dazu wartet die
+   Step-3-Lichess-Lookback-Erfassung (100–150 Partien gegen Blitz 2039 /
+   Rapid 2100).
+2. **Aspiration Windows — VERWORFEN am 16.05.2026.** Variante B
+   (δ=30 cp, Faktor 2, ab d≥5) implementiert und auf den 9 Cluster-1b-
+   Stichproben gemessen: Σ maxD −2, Re-Search-Quote **102 %**, und
+   W5AboGf0 spielt mit Aspiration den falschen Zug (`Qg4` statt
+   `Qxd6`), den die volle Suche bei gleicher Tiefe findet. Cluster-1b-
+   Stellungen sind genau Score-Diskontinuitäten zwischen ID-Tiefen
+   (~90 cp Sprünge); ±30 cp Startfenster ist viel zu eng, exponentielles
+   Widening verbrennt mehr Knoten als das engere Fenster spart. Code
+   aus `search.rs` entfernt, `docs/aspiration-windows.md` mit
+   Smoke-Befund versehen, `tools/probe_aspiration.py` (umbenannt zu
+   `probe_capture_ordering.py`) für künftige Versuche im Repo gelassen.
+3. **MVV-Bonus / Centipawn-MVV — VERWORFEN am 16.05.2026.** Variante A
+   (Centipawn-MVV mit LVA-Modifier) implementiert, Smoke + fastchess-
+   SPRT 1000 Partien gegen pre-MVV-Baseline. A/B: +6.60 ± 16.76 Elo
+   für MVV-CP, LOS 78 %, SPRT nicht entschieden (LLR −1.12 Richtung
+   H0). Smoke zeigte +1 Quality-G (4 → 5) und +2 maxD, aber eine
+   **Regression auf W5AboGf0** (Qxd6 → Qg4) — der ursprünglichen
+   Cluster-1b-Anker-Stellung. Profil ähnlich Step 2 v2, aber bei
+   Move-Ordering greift [[feedback-ab-vs-lichess-signal]] nicht
+   (Spiegelstil ist hier ehrlich). Code aus `search.rs` entfernt
+   (reproduzierbarer Revert), `docs/mvv-bonus.md` mit VERWORFEN-
+   Status + Befund, Reproduktions-Binary `target/release/martuni-mvv-cp`
+   und Match-Setup `matches/baseline_vs_mvv_cp/` aufgehoben.
+4. **`connected_rooks_pair = 30` ausgerollt am 15.05.2026.** A/B-Match
    `matches/conn_rooks_150_vs_30` lief 15.05. 17:15–17:39, SPRT [0, 10]
    nach 240 Partien terminiert (H0 akzeptiert): **CR30 schlägt CR150
    um +150.65 Elo ±41.14**, LOS 100 % für CR30, Ptnml [45, 22, 43, 6, 4],
@@ -72,10 +104,6 @@ Pawn-/Material-Hebel empirisch der bessere Indikator.
    `eval.toml` im Repo-Root auf 30 gesetzt; kein Rebuild nötig
    (Laufzeit-Config). Lichess-Lookback am 16.05. Bei Plateau evtl.
    Folge-A/B 30 vs 0 oder 30 vs 60.
-4. **Dynamische Figurenbewertung Schritt 3** — dynamisches Bishop-Pair
-   (Phase + Brett-Offenheit). **Zurückgestellt** hinter (1)–(3):
-   Cluster-1b-Befund zeigt, dass aktuelle Search-Tiefe der größere
-   Engpass ist als feinere Eval-Hebel.
 5. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
    die Endgame-Rate Anlass gibt; aktuell kein Druck.
 
@@ -134,6 +162,29 @@ Pawn-/Material-Hebel empirisch der bessere Indikator.
 *Chronologische Zusammenfassung der bereits umgesetzten Maßnahmen.
 Details und Mess-Daten in den verlinkten Dokumenten.*
 
+- **Dynamische Figurenbewertung Schritt 3 — Bishop-Pair-Tapering
+  (16.05.2026) — DONE.** Statisches `2 * bishop_pair_each = 30 cp`
+  ersetzt durch phasen-getaperten Term mit Offenheits-Skala in
+  `evaluate_side` und `evaluate_side_breakdown` (`src/eval.rs`):
+  `eg_value = bishop_pair_eg + (16 - total_pawn_count) * bp_open_scale`,
+  dann `taper(bishop_pair_mg, eg_value, phase)`. Drei neue Felder in
+  `EvalParams` (`bishop_pair_mg/eg`, `bp_open_scale`) mit Defaults
+  30/30/0 — ohne TOML-Override identisch zum alten Verhalten. Wirksame
+  Werte aus `eval.toml [material_dynamic]`: Variante A 30/50/2 (MG
+  unverändert, EG +20, +2 cp pro fehlendem Bauer). Sanity-Check vor
+  Match: MG/Phase 23 → 30 cp, EG/Phase 2 → 68 cp.
+  A/B-Match `matches/baseline_vs_dynmat_step3/`: 1000 Partien
+  5+0.05 UHO_Lichess_4852_v1, Hash 64 MB, SPRT [0, 10] nicht
+  terminiert. **Ergebnis +6.95 Elo ±18.06 für Step3, LOS 77.5 %**,
+  411W/158D/431L Baseline-Sicht, DrawRatio 44.8 %, PairsRatio 0.85,
+  LLR −1.10. Trotz CI-deckt-Null ausgerollt analog Step 2 v2
+  ([[feedback-ab-vs-lichess-signal]]): Selfplay-Spiegelstil ist für
+  Eval-Material-Hebel nicht das definitive Signal, Lichess-Lookback
+  entscheidet. Rollout 22:23 als Hot-Replace (kein laufendes Spiel),
+  `target/release/martuni.backup-pre-step3-20260516` als Backup-Binary.
+  Konzept: [dynmat-step3.md](dynmat-step3.md). `bishop_pair_each = 15`
+  bleibt als toter Anker im Code (Konsistenz mit Step-1-Pattern, keine
+  externe Referenz). Lookback offen.
 - **Debug-Eval-Breakdown + `connected_rooks_pair`-Befund (15.05.2026) — DONE.**
   Neues UCI-Kommando `eval` druckt jede Eval-Komponente als
   `info string`-Zeile (`src/eval.rs` `evaluate_breakdown`,
