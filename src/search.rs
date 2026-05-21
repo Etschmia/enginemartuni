@@ -132,6 +132,11 @@ struct SearchState {
     // Wenn die Wurzel nur einen legalen Zug hat, merken wir ihn vor: beim
     // Uebergang Ponder → Normal koennen wir dann sofort abbrechen.
     forced_only_move: Option<ChessMove>,
+    // Debug-Schalter fuer Root-Move-Traces. Aktivieren mit
+    // MARTUNI_DEBUG_ROOT=1, damit normale UCI-Ausgaben unveraendert bleiben.
+    debug_root: bool,
+    // Diagnose-Schalter: NMP komplett aus, wenn MARTUNI_NMP_OFF=1.
+    nmp_off: bool,
     // Killer Moves: pro ply zwei Quiet-Züge, die zuletzt einen Beta-Cutoff
     // erzeugt haben. Werden in der Sortierung direkt hinter gewinnenden
     // Captures einsortiert.
@@ -266,6 +271,8 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         root_best_move: None,
         root_best_score: 0,
         forced_only_move,
+        debug_root: std::env::var_os("MARTUNI_DEBUG_ROOT").is_some(),
+        nmp_off: std::env::var_os("MARTUNI_NMP_OFF").is_some(),
         killers: [[None; 2]; MAX_PLY],
         move_history: vec![0; 2 * 64 * 64],
     };
@@ -483,7 +490,8 @@ fn alpha_beta(
         return if in_check { -MATE + ply } else { 0 };
     }
 
-    if allow_null
+    if !state.nmp_off
+        && allow_null
         && !is_pv
         && !in_check
         && depth >= NMP_MIN_DEPTH
@@ -534,6 +542,20 @@ fn alpha_beta(
         killers_here,
         &state.move_history,
     );
+    if state.debug_root && ply == 0 {
+        for sm in &ordered {
+            let see = sm
+                .see_val
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            println!(
+                "info string rootdbg depth {depth} generated move {} order {} see {}",
+                move_to_uci(sm.mv),
+                sm.order_key,
+                see
+            );
+        }
+    }
 
     // Eigenen Hash fuer die Kinder in die Historie legen
     if ply > 0 {
@@ -550,6 +572,7 @@ fn alpha_beta(
 
     for (move_idx, sm) in ordered.iter().enumerate() {
         let mv = sm.mv;
+        let alpha_before = alpha;
         let nb = board.make_move_new(mv);
         // Schach-Extension phase-abhaengig:
         //   Mittelspiel (game_phase >= 16) → +1   (CPW/Stockfish/Crafty-Standard)
@@ -743,6 +766,13 @@ fn alpha_beta(
         if state.stop.load(Ordering::Relaxed) {
             aborted = true;
             break;
+        }
+
+        if state.debug_root && ply == 0 {
+            println!(
+                "info string rootdbg depth {depth} move {} score {score} alpha {alpha_before} beta {beta}",
+                move_to_uci(mv)
+            );
         }
 
         first_move = false;
