@@ -10,6 +10,42 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**20.05.2026 21:15 — Step-3-Lookback bestätigt, neuer Engine-Befund.**
+291 Partien post-Rollout: Lichess Blitz **2039 → 2080** (+41), Rapid
+**2100 → 2142** (+42). Blunder/Partie 1.39 → 1.32, keine
+Regression. Step 3 bleibt — Backup-Datei
+`target/release/martuni.backup-pre-step3-20260516` kann entfernt
+werden. Volle Auswertung: `analyse-18.05.2026.json` /
+[[project-auswertung-2026-05-20]].
+
+**Operative Änderung 20.05. ~22:08:** `lichess-bot/config.yml`
+`challenge.concurrency` **3 → 2** reduziert. Begründung: VM hat
+2 logische Kerne; 3 parallele Engines kosteten in Stresstest ~33 %
+NPS / ~0.5–1 Tiefe pro Zug. Hard-Restart durchgeführt (idle).
+
+**21.05.2026 — m19/PVS-Recheck:** Die Vermutung "Off-by-one im
+Root-PVS-Scout" ist nach Reproduktion **nicht bestätigt**. Das
+Nullfenster im Root-Loop steht korrekt auf `(-alpha - 1, -alpha)`, und
+`score == alpha` bei Folgezügen ist fuer fail-hard/Nullfenster-PVS ein
+normaler Bound, kein exakter Zugwert. Die angeblich objektiv gewinnende
+Probe `d1d7` ist in der Stellung
+`4kb1r/rqp2ppp/1p2P3/8/8/2Q5/PP3PPP/R2R2K1 w k - 0 19` kein klarer
+Gewinn: aus der Folgestellung findet Martuni bei d7 unter anderem
+`f7e6`, Bewertung auf Tiefe 7 ca. ausgeglichen. Root-Suche mit
+`MARTUNI_NMP_OFF=1`, Hash=1 MB und `go depth 8 movetime 100000` bleibt
+bei `c3c4` mit `+169 cp`. Aktuell daher **kein PVS-Fix offen**; bevor
+Search-Code geaendert wird, braucht es eine Gegenprobe mit einem
+Root-Folgezug, der in voller Suche eindeutig `> alpha` ist, im
+PVS-Scout aber trotzdem bei `score == alpha` haengen bleibt.
+
+**Methodischer Hinweis — Analyzer-Tiefen-Bias.** Drill auf 9 Stichproben
+der 18.05.-Auswertung zeigt: mind. 4/6 `missed_capture`-Befunde sind
+reiner SF-d17-vs-Engine-d8-Tiefenbias, **kein Engine-Defekt**. Vor
+Eval/Search-Triggern künftig Cross-Check mit Martunis eigener Tiefe
+machen, siehe [[feedback-analyzer-d17-bias]].
+
+---
+
 **Dynmat-Step3 (Bishop-Pair-Tapering Variante A) am 16.05.2026 ~22:23
 nach 1000-Partien-A/B ausgerollt.** A/B-Match
 `matches/baseline_vs_dynmat_step3`: Step3 nominell **+6.95 Elo ±18.06**
