@@ -3,17 +3,19 @@ use std::mem::size_of;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TtFlag {
+    /// Leerer Slot — die TT hat fuer diesen Schluessel keinen Eintrag.
     Empty,
-    #[allow(dead_code)]
+    /// Exakte Bewertung im Such-Window (alpha < score < beta).
     Exact,
-    #[allow(dead_code)]
+    /// Lower Bound (Fail-High: score >= beta). Der wahre Wert kann hoeher
+    /// liegen, ist aber mindestens `score`.
     Lower,
-    #[allow(dead_code)]
+    /// Upper Bound (Fail-Low: score <= alpha). Der wahre Wert kann
+    /// niedriger liegen, ist aber hoechstens `score`.
     Upper,
 }
 
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub struct TtEntry {
     pub key: u64,
     pub best_move: Option<ChessMove>,
@@ -35,8 +37,10 @@ impl Default for TtEntry {
 }
 
 /// Transposition Table — reservierter RAM-Bereich fuer bereits bewertete
-/// Stellungen. Phase 1: Grundgeruest; wird von der Suche erst gefuellt,
-/// sobald Alpha-Beta implementiert ist.
+/// Stellungen. Hash-Slot pro Schluessel ueber Modulo, einfache Replace-
+/// Always-Strategie (siehe `store`). Wird aktiv von Alpha-Beta + Quiescence
+/// in `search.rs` befuellt und in der Move-Ordering ueber den Hash-Move
+/// genutzt. Groesse via UCI-Option `Hash` (MB), Default in `config.rs`.
 pub struct TranspositionTable {
     entries: Vec<TtEntry>,
     size_mb: usize,
@@ -76,12 +80,6 @@ impl TranspositionTable {
         self.size_mb
     }
 
-    #[allow(dead_code)]
-    pub fn capacity(&self) -> usize {
-        self.entries.len()
-    }
-
-    #[allow(dead_code)]
     pub fn probe(&self, key: u64) -> Option<&TtEntry> {
         let idx = (key as usize) % self.entries.len();
         let e = &self.entries[idx];
@@ -92,7 +90,6 @@ impl TranspositionTable {
         }
     }
 
-    #[allow(dead_code)]
     pub fn store(
         &mut self,
         key: u64,

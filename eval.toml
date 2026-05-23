@@ -116,13 +116,9 @@ cf_file_bonus = 5
 phalanx_triple = 30
 phalanx_double = 15
 
-# Freibauer: kein gegnerischer Bauer auf eigener Linie oder Nachbarlinien
-# auf den Reihen zwischen dem Bauern und seinem Umwandlungsfeld
-# Finding: Konfigurationsdrift: Der aktuelle Loader liest `passed_rank_bonuses`,
-# nicht `passed_bonus`. Dieser Wert wirkt daher vermutlich nicht. Richtung:
-# rangabhaengig sehr niedrig auf Startreihen, stark steigend auf 6./7. Reihe;
-# blockierte Freibauern separat abschwaechen.
-passed_bonus = 300
+# Freibauer-Bonus pro Vormarsch-Rang wird vom Code aus den Defaults gelesen
+# (`pawn_passed_rank_bonuses = [5, 15, 30, 55, 100, 170]` in eval_config.rs).
+# Hier nicht gesetzt — bei Bedarf als `passed_rank_bonuses = [...]` ergaenzbar.
 
 [pieces]
 # Springer auf Reihe 1 oder 8 steht schlecht
@@ -314,3 +310,55 @@ rook_eg   = 5
 # ueberbelohnt werden. Nur erhoehen, wenn die Dame dauerhaft zu passiv bleibt.
 queen_mg  = 1
 queen_eg  = 2
+
+[endgame_guard]
+# Pawn-Endgame-Guard (23.05.2026, docs/pawn-endgame-guard.md). Drei klassische
+# Pawn-Endgame-Konzepte fuer einfache Endspiele:
+#   1. Opposition (direkt + diagonal): Bonus, wenn der eigene Koenig die
+#      Opposition haelt (gleiche Linie/Reihe/Diagonale, ungerade Anzahl
+#      freier Felder, Gegner am Zug). "Wer-zieht-verliert"-Konstellation.
+#   2. Key Squares: Bonus pro eigenem Freibauer, wenn der eigene Koenig
+#      auf einem der drei Schluesselfelder steht. Rang-abhaengig.
+#   3. Rook-Pawn-Edge: Daempfung des Passbauer-Optimismus, wenn unser
+#      einziger Frei-Bauer auf a/h steht und der gegnerische Koenig die
+#      Promo-Ecke bereits kontrolliert.
+#
+# Hartes NPM-Gate (npm_endgame_gate=700): beide Seiten muessen mit ihrem
+# Offizier-Material darunter liegen, sonst inaktiv. Zusaetzlich Phase-
+# Tapering analog king_passed_pawn_synergy (voller Effekt bei phase=0,
+# linear gegen 0 ab king_activity_phase_threshold=16).
+#
+# Defaults im Code sind alle 0 (Gate ausgenommen), d.h. ohne diese Sektion
+# verhaelt sich die Engine identisch zur Pre-Guard-Version.
+
+# Konsistent mit pawn_de_file_bonus=10. Klein, weil Opposition nur indirekt
+# zum Vorteil fuehrt — sie ist Vorbote eines Gewinn-Plans, nicht selbst
+# der Plan. Pro Halbzug-Wechsel kippt der Bonus zwischen +12 und -12;
+# Diff 24cp ist genug fuer Such-Signal, klein genug, dass der Term das
+# EG nicht dominiert.
+opposition_bonus = 12
+
+# Bonus, wenn unser Koenig auf einem Schluesselfeld eines eigenen
+# Freibauern steht. Index = Bauer-Rang aus eigener Sicht (1..8):
+#   Rang 2 (Index 1): 0   — Bauer auf Startreihe, KS auf Rang 4 sehr frueh
+#   Rang 3 (Index 2): 10  — beginnt zu zaehlen
+#   Rang 4 (Index 3): 18
+#   Rang 5 (Index 4): 28  — Uebergang
+#   Rang 6 (Index 5): 40  — klarer Gewinn-Indikator
+#   Rang 7 (Index 6): 30  — Bauer hat eh viel passed-rank-Bonus (170 cp)
+#   Rang 8 (Index 7): 0   — Bauer ist Dame
+# Groessenordnung ≈ 1/3 von pawn_passed_rank_bonuses an derselben Stufe.
+key_square_bonus_by_rank = [0, 0, 10, 18, 28, 40, 30, 0]
+
+# Reduziert den Passbauer-Bonus, wenn der eigene Frei-Bauer auf a/h steht
+# UND der gegnerische Koenig die Promo-Ecke kontrolliert (Chebyshev ≤ 1).
+# -60 cp: bei Bauer auf Rang 5 (Passbauer-Bonus +100 cp) bleibt 40 cp
+# Vorteil — der Bauer hat einen Materialwert, ist aber kein Gewinn-
+# Indikator mehr.
+rook_pawn_drawish_penalty = -60
+
+# Hardes NPM-Gate. Beide Seiten muessen mit Offizier-Material <= Gate
+# liegen, sonst ist der Term komplett inaktiv. 700 cp = bis 2 Leichtfiguren
+# (300+300) oder 1 Turm (500). Strict-Mittelspiel mit Tuermen (>=1000)
+# faellt sicher heraus.
+npm_endgame_gate = 700

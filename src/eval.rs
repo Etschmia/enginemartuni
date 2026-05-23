@@ -30,6 +30,7 @@ pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
 
     let king_act = king_activity_endgame(board, phase, p);
     let king_pass_syn = king_passed_pawn_synergy(board, phase, p);
+    let pawn_eg_guard = pawn_endgame_guard(board, phase, p);
 
     let (w_mob_mg, w_mob_eg) = mobility_score(board, Color::White, p);
     let (b_mob_mg, b_mob_eg) = mobility_score(board, Color::Black, p);
@@ -42,7 +43,7 @@ pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
     let b_trap_eg = rook_trapped_endgame_malus(board, Color::Black, p);
     let trap = taper(0, w_trap_eg - b_trap_eg, phase);
 
-    non_pst + taper(mg, eg, phase) + king_act + king_pass_syn + mob + trap
+    non_pst + taper(mg, eg, phase) + king_act + king_pass_syn + pawn_eg_guard + mob + trap
 }
 
 /// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
@@ -738,6 +739,324 @@ fn eval_chebyshev(a: Square, b: Square) -> i32 {
     df.max(dr)
 }
 
+// =========================================================================
+// Pawn-Endgame-Guard (23.05.2026)
+//
+// Ergaenzt die bestehenden Endspielterme (`king_activity_endgame`,
+// `king_passed_pawn_synergy`, `endgame::endgame_score`) um drei klassische
+// Pawn-Endgame-Konzepte:
+//   1. Opposition (direkt + diagonal): Bonus, wenn der eigene Koenig die
+//      Opposition gegen den gegnerischen haelt.
+//   2. Key Squares: Bonus pro eigenem Freibauer, wenn der eigene Koenig
+//      auf einem der drei Schluesselfelder dieses Bauern steht.
+//   3. Rook-Pawn-Edge: Daempfung des Passbauer-Optimismus bei a-/h-Bauer
+//      + gegnerischem Koenig in der Promo-Ecke.
+//
+// Konzept: docs/pawn-endgame-guard.md. Aktivierungsbedingung: NPM beider
+// Seiten ≤ `npm_endgame_gate` (hartes Gate), Phase unterhalb
+// `king_activity_phase_threshold`, Phase-Tapering analog
+// `king_passed_pawn_synergy`.
+// =========================================================================
+
+/// Top-Level-Aufruf in `evaluate()`. Liefert die Diff (Weiss - Schwarz)
+/// schon getapert in den Endspielpol.
+fn pawn_endgame_guard(board: &Board, phase: i32, p: &EvalParams) -> i32 {
+    if !is_simple_pawn_endgame(board, p) {
+        return 0;
+    }
+    if phase >= p.king_activity_phase_threshold {
+        return 0;
+    }
+    let w = side_pawn_endgame_guard(board, Color::White, p);
+    let b = side_pawn_endgame_guard(board, Color::Black, p);
+    let eg_weight = p.king_activity_phase_threshold - phase;
+    (w - b) * eg_weight / p.king_activity_phase_threshold
+}
+
+/// Hardes NPM-Gate. Misst nicht-Bauern-Material beider Seiten mit den
+/// statischen Anker-Werten (p.knight, p.bishop, p.rook, p.queen). Beide
+/// Seiten muessen unter dem Gate liegen, damit der Guard greift — sonst
+/// ist es kein einfaches Pawn-Endgame mehr.
+fn is_simple_pawn_endgame(board: &Board, p: &EvalParams) -> bool {
+    p.npm_endgame_gate > 0
+        && side_npm(board, Color::White, p) <= p.npm_endgame_gate
+        && side_npm(board, Color::Black, p) <= p.npm_endgame_gate
+}
+
+fn side_npm(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    let bb = *board.color_combined(us);
+    let n = (*board.pieces(Piece::Knight) & bb).popcnt() as i32;
+    let bp = (*board.pieces(Piece::Bishop) & bb).popcnt() as i32;
+    let r = (*board.pieces(Piece::Rook) & bb).popcnt() as i32;
+    let q = (*board.pieces(Piece::Queen) & bb).popcnt() as i32;
+    n * p.knight + bp * p.bishop + r * p.rook + q * p.queen
+}
+
+/// Aufaddierter Guard-Beitrag einer Seite (ohne Phase-Skalierung).
+fn side_pawn_endgame_guard(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    let mut score = 0;
+    score += opposition_bonus(board, us, p);
+    score += key_square_bonus(board, us, p);
+    score += rook_pawn_correction(board, us, p);
+    score
+}
+
+/// Opposition-Erkennung (direkt + diagonal) im ersten Wurf:
+///
+/// Gilt die Opposition, wenn
+///   - die beiden Koenige auf gleicher Datei, Reihe ODER Diagonale stehen,
+///   - die Anzahl freier Felder zwischen ihnen UNGERADE ist, und
+///   - der GEGNER am Zug ist.
+///
+/// Hinweis zur Konvention: in der klassischen Schach-Theorie heisst "die
+/// Opposition haben" = "der andere ist am Zug". Der Bonus geht also an die
+/// Seite, die NICHT am Zug ist (sofern die Geometrie passt).
+fn opposition_bonus(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    if p.opposition_bonus == 0 {
+        return 0;
+    }
+    // Wenn wir am Zug sind, haben wir die Opposition nicht.
+    if board.side_to_move() == us {
+        return 0;
+    }
+    let our_k = board.king_square(us);
+    let their_k = board.king_square(!us);
+    if !has_opposition_geometry(board, our_k, their_k) {
+        return 0;
+    }
+    p.opposition_bonus
+}
+
+/// Geometrische Pruefung: gleiche Linie/Reihe/Diagonale, ungerade Anzahl
+/// leerer Felder dazwischen. "Leer" heisst hier "keine Figur" — Bauern auf
+/// der Linie/Reihe zwischen den Koenigen brechen die Opposition.
+fn has_opposition_geometry(board: &Board, a: Square, b: Square) -> bool {
+    let af = a.get_file().to_index() as i32;
+    let ar = a.get_rank().to_index() as i32;
+    let bf = b.get_file().to_index() as i32;
+    let br = b.get_rank().to_index() as i32;
+
+    let df = bf - af;
+    let dr = br - ar;
+
+    // Schrittweite (-1, 0, +1) entlang File und Rank.
+    let (step_f, step_r) = if df == 0 && dr != 0 {
+        (0, dr.signum())
+    } else if dr == 0 && df != 0 {
+        (df.signum(), 0)
+    } else if df.abs() == dr.abs() && df != 0 {
+        (df.signum(), dr.signum())
+    } else {
+        return false; // weder Linie, Reihe noch Diagonale
+    };
+
+    // Anzahl Felder dazwischen = max(|df|,|dr|) - 1.
+    let between = df.abs().max(dr.abs()) - 1;
+    // Opposition braucht ungerade Anzahl freier Felder dazwischen.
+    if between % 2 == 0 {
+        return false;
+    }
+
+    // Pruefen, ob die Felder dazwischen wirklich leer sind.
+    let mut f = af + step_f;
+    let mut r = ar + step_r;
+    for _ in 0..between {
+        let sq = Square::make_square(rank_from_index(r), file_from_index(f));
+        if board.piece_on(sq).is_some() {
+            return false;
+        }
+        f += step_f;
+        r += step_r;
+    }
+    true
+}
+
+fn file_from_index(i: i32) -> File {
+    match i {
+        0 => File::A,
+        1 => File::B,
+        2 => File::C,
+        3 => File::D,
+        4 => File::E,
+        5 => File::F,
+        6 => File::G,
+        _ => File::H,
+    }
+}
+
+fn rank_from_index(i: i32) -> Rank {
+    match i {
+        0 => Rank::First,
+        1 => Rank::Second,
+        2 => Rank::Third,
+        3 => Rank::Fourth,
+        4 => Rank::Fifth,
+        5 => Rank::Sixth,
+        6 => Rank::Seventh,
+        _ => Rank::Eighth,
+    }
+}
+
+/// Pro eigenem Freibauer: wenn der eigene Koenig auf einem der drei
+/// Schluesselfelder steht, kassiere den rang-abhaengigen Bonus.
+///
+/// Schluesselfelder pro Bauer (aus Sicht des Bauern-Vorrueck-Rangs r,
+/// 1=Heimreihe, 8=Promo-Reihe):
+///   r ≤ 4  → drei Felder zwei Reihen vor dem Bauer (file-1, file, file+1)
+///   r == 5 → wir nehmen die drei Felder DIREKT vor dem Bauer (kanonisches
+///            Lehrbuch-Triplet). Das alternative Triplet zwei Reihen vor
+///            dem Bauer faellt mit dem Bauer auf Rang 7 fast zusammen und
+///            wird ueber `pawn_passed_rank_bonuses[5]` (=170 cp) bereits
+///            erfasst.
+///   r ≥ 6  → drei Felder direkt vor dem Bauer.
+///
+/// Bei Doppelbauern auf derselben Linie wird nur der weiter vorgerueckte
+/// Bauer ausgezaehlt — verhindert Doppelzaehlung.
+///
+/// Rook-Pawns (a-/h-File) bekommen KEINEN Key-Square-Bonus — die Promo-
+/// Ecke ist immer vom Verteidiger erreichbar; Sub-Konzept 3 uebernimmt.
+fn key_square_bonus(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    if p.key_square_bonus_by_rank.iter().all(|&x| x == 0) {
+        return 0;
+    }
+    let our_bb = *board.color_combined(us);
+    let our_pawns = *board.pieces(Piece::Pawn) & our_bb;
+    let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
+    let king_sq = board.king_square(us);
+    let king_f = king_sq.get_file().to_index() as i32;
+    let king_r = king_sq.get_rank().to_index() as i32;
+
+    let mut score = 0;
+    let mut visited_files: u8 = 0;
+    // Verarbeite Bauern in absteigender "Vorrueck-Reihenfolge", damit der
+    // weiter vorgerueckte Bauer pro Linie zuerst kommt; spaetere Bauern auf
+    // derselben Linie werden uebersprungen.
+    let mut pawns_sorted: Vec<Square> = our_pawns.into_iter().collect();
+    pawns_sorted.sort_by_key(|sq| {
+        // Weisser Bauer: hoeherer Rank = weiter vorgerueckt. Schwarz spiegelverkehrt.
+        let r = sq.get_rank().to_index() as i32;
+        match us {
+            Color::White => -r,
+            Color::Black => r,
+        }
+    });
+
+    for sq in pawns_sorted {
+        let file = sq.get_file();
+        let file_i = file.to_index() as i32;
+        let file_mask = 1u8 << file_i;
+        if visited_files & file_mask != 0 {
+            continue; // schon der weiter vorgerueckte Bauer abgehakt
+        }
+        visited_files |= file_mask;
+
+        // Rook-Pawn → kein Key-Square-Term hier (siehe Sub-Konzept 3).
+        if file == File::A || file == File::H {
+            continue;
+        }
+        if !is_passed(sq, us, their_pawns) {
+            continue;
+        }
+
+        let rank_i = sq.get_rank().to_index() as i32; // 0..7
+        // "Bauern-Rang aus eigener Sicht": Weiss = rank_i+1, Schwarz = 8-rank_i.
+        let rel_rank: i32 = match us {
+            Color::White => rank_i + 1,
+            Color::Black => 8 - rank_i,
+        };
+        if rel_rank < 2 || rel_rank > 7 {
+            continue; // unmoeglich (Index 0 oder 7 in der Bonus-Tabelle)
+        }
+        let bonus = p.key_square_bonus_by_rank[(rel_rank - 1) as usize];
+        if bonus == 0 {
+            continue;
+        }
+
+        // Schluesselfelder-Triplet bestimmen, in Vorruecker-Richtung
+        // gemessen (us=White → +rank, us=Black → -rank).
+        let dir: i32 = match us {
+            Color::White => 1,
+            Color::Black => -1,
+        };
+        let key_rank_i: i32 = if rel_rank <= 4 {
+            rank_i + 2 * dir
+        } else if rel_rank == 5 {
+            rank_i + dir
+        } else {
+            // rel_rank >= 6
+            rank_i + dir
+        };
+        if !(0..=7).contains(&key_rank_i) {
+            continue;
+        }
+
+        // Triplet: file-1, file, file+1 (Brett-File-Beschnitt).
+        let key_files: [i32; 3] = [file_i - 1, file_i, file_i + 1];
+        for kf in key_files {
+            if !(0..=7).contains(&kf) {
+                continue;
+            }
+            if king_f == kf && king_r == key_rank_i {
+                score += bonus;
+                break;
+            }
+        }
+    }
+    score
+}
+
+/// Wenn unser einziger Frei-Bauer ein Rook-Pawn (a- oder h-Bauer) ist
+/// UND der gegnerische Koenig die Promo-Ecke schon kontrolliert (Chebyshev
+/// ≤ 1) → Daempfung in Form einer fixen Strafe. Der Term ist als negative
+/// Konstante gedacht; er reduziert den ueberschaetzten Optimismus des
+/// Passbauer-Bonus, ohne den Materialwert des Bauern selbst anzutasten.
+fn rook_pawn_correction(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    if p.rook_pawn_drawish_penalty == 0 {
+        return 0;
+    }
+    let our_bb = *board.color_combined(us);
+    let our_pawns = *board.pieces(Piece::Pawn) & our_bb;
+    let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
+
+    // Nur, wenn wir GENAU einen Frei-Bauer haben und der auf a/h liegt.
+    let mut rook_pawn_sq: Option<Square> = None;
+    let mut other_passed = 0;
+    for sq in our_pawns {
+        if !is_passed(sq, us, their_pawns) {
+            continue;
+        }
+        let f = sq.get_file();
+        if f == File::A || f == File::H {
+            if rook_pawn_sq.is_some() {
+                // Mehrere Rook-Pawn-Freibauern → komplexer, kein Edge-Case
+                return 0;
+            }
+            rook_pawn_sq = Some(sq);
+        } else {
+            other_passed += 1;
+        }
+    }
+    let pawn_sq = match rook_pawn_sq {
+        Some(sq) => sq,
+        None => return 0,
+    };
+    if other_passed > 0 {
+        return 0;
+    }
+
+    // Promo-Ecke aus eigener Sicht: a8/h8 fuer Weiss, a1/h1 fuer Schwarz.
+    let promo_rank = match us {
+        Color::White => Rank::Eighth,
+        Color::Black => Rank::First,
+    };
+    let promo_corner = Square::make_square(promo_rank, pawn_sq.get_file());
+    let their_k = board.king_square(!us);
+    if eval_chebyshev(their_k, promo_corner) <= 1 {
+        return p.rook_pawn_drawish_penalty;
+    }
+    0
+}
+
 /// Bauernangriffe einer Seite als BitBoard. Weiße Bauern schlagen NE/NW
 /// (shift +9 / +7 mit File-Maske gegen Wrap), schwarze Bauern SE/SW.
 fn pawn_attacks_of(pawns: BitBoard, us: Color) -> BitBoard {
@@ -885,6 +1204,14 @@ pub struct EvalBreakdown {
     pub rook_trapped_tapered: i32,
     pub king_activity_eg: i32,
     pub king_passed_synergy: i32,
+    /// Diff (Weiss - Schwarz) des Pawn-Endgame-Guard, bereits phase-getapert.
+    /// Inaktiv (=0), wenn das NPM-Gate verletzt wird oder die Phase
+    /// >= `king_activity_phase_threshold` liegt.
+    pub pawn_endgame_guard: i32,
+    /// Per-Seite-Rohwerte des Guards (vor Phase-Tapering, vor Diff).
+    /// Nur fuer Debug-Ausgabe und Tests.
+    pub white_endgame_guard_raw: i32,
+    pub black_endgame_guard_raw: i32,
     pub total: i32,
 }
 
@@ -985,6 +1312,15 @@ pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
     bd.king_activity_eg = king_activity_endgame(board, bd.phase, p);
     bd.king_passed_synergy = king_passed_pawn_synergy(board, bd.phase, p);
 
+    // Pawn-Endgame-Guard: Roh-Beitraege immer berechnen (fuer Debug-
+    // Sichtbarkeit), die phasen-getaperte Diff aber nur, wenn das Gate
+    // und der Phase-Threshold das auch zulassen.
+    if is_simple_pawn_endgame(board, p) {
+        bd.white_endgame_guard_raw = side_pawn_endgame_guard(board, Color::White, p);
+        bd.black_endgame_guard_raw = side_pawn_endgame_guard(board, Color::Black, p);
+    }
+    bd.pawn_endgame_guard = pawn_endgame_guard(board, bd.phase, p);
+
     // Summe aller Per-Side-Terme (so wie evaluate_side sie addiert), als Differenz.
     let side_sum_white = bd.white.material
         + bd.white.pawn_bonus
@@ -1012,6 +1348,7 @@ pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
         + bd.pst_tapered
         + bd.king_activity_eg
         + bd.king_passed_synergy
+        + bd.pawn_endgame_guard
         + bd.mobility_tapered
         + bd.rook_trapped_tapered;
     bd
@@ -1067,6 +1404,13 @@ pub fn print_eval_breakdown(board: &Board, p: &EvalParams) {
         bd.white.rook_trapped_eg,
         bd.black.rook_trapped_eg,
     );
+    // Pawn-Endgame-Guard: Roh-Beitraege pro Seite (vor Phase-Skalierung).
+    // Der getaperte Diff steht weiter unten unter "abgeleitete Terme".
+    line(
+        "pawn_endgame_guard",
+        bd.white_endgame_guard_raw,
+        bd.black_endgame_guard_raw,
+    );
 
     println!("info string ----- abgeleitete Terme (Weiss-Sicht) -----");
     println!("info string pst_tapered          {:>6}", bd.pst_tapered);
@@ -1079,6 +1423,10 @@ pub fn print_eval_breakdown(board: &Board, p: &EvalParams) {
     println!(
         "info string king_passed_synergy  {:>6}",
         bd.king_passed_synergy
+    );
+    println!(
+        "info string pawn_eg_guard_taper  {:>6}",
+        bd.pawn_endgame_guard
     );
     println!("info string total                {:>6} cp", bd.total);
 
@@ -1583,5 +1931,162 @@ mod tests {
         let p = EvalParams::default();
         let m = rook_trapped_endgame_malus(&b, Color::Black, &p);
         assert_eq!(m, p.rook_trapped_endgame_penalty);
+    }
+
+    // -----------------------------------------------------------------
+    // Pawn-Endgame-Guard (23.05.2026)
+    //
+    // Tobias-Style: erst neutrale Defaults pruefen (Term muss 0 sein,
+    // damit ohne TOML-Override nichts driftet), dann jeden Sub-Term
+    // einzeln mit einer minimal-praeparierten Stellung.
+    // -----------------------------------------------------------------
+
+    fn p_guard_active() -> EvalParams {
+        // Werte wie eval.toml-Vorschlag, fuer Tests fix einkompiliert.
+        let mut p = EvalParams::default();
+        p.opposition_bonus = 12;
+        p.key_square_bonus_by_rank = [0, 0, 10, 18, 28, 40, 30, 0];
+        p.rook_pawn_drawish_penalty = -60;
+        p.npm_endgame_gate = 700;
+        p
+    }
+
+    #[test]
+    fn guard_defaults_are_neutral() {
+        // Mit Default-Params ist der Guard ueberall 0. Wichtig, damit
+        // baseline-Binaries ohne [endgame_guard]-Sektion identisch
+        // verhalten zur Pre-Feature-Version.
+        let b = Board::from_str("4k3/8/3K4/4P3/8/8/8/8 b - - 0 1").unwrap();
+        let p = EvalParams::default();
+        let score = pawn_endgame_guard(&b, game_phase(&b), &p);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn guard_gate_blocks_middlegame() {
+        // Mittelspiel mit Tuermen: NPM 1000 pro Seite > Gate 700.
+        let b = Board::from_str("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1")
+            .unwrap();
+        let p = p_guard_active();
+        let s = pawn_endgame_guard(&b, game_phase(&b), &p);
+        assert_eq!(s, 0, "guard must be inactive above NPM gate");
+    }
+
+    #[test]
+    fn opposition_direct_white_holds() {
+        // Ke6 vs Ke8 direkte Opposition, Schwarz am Zug → Weiss "hat die
+        // Opposition". Bonus geht an Weiss.
+        let b = Board::from_str("4k3/8/4K3/8/8/8/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        let w = opposition_bonus(&b, Color::White, &p);
+        let bl = opposition_bonus(&b, Color::Black, &p);
+        assert_eq!(w, p.opposition_bonus);
+        assert_eq!(bl, 0);
+    }
+
+    #[test]
+    fn opposition_only_for_side_not_to_move() {
+        // Gleiche Geometrie, jetzt aber Weiss am Zug → kein Bonus fuer Weiss.
+        // Schwarz haette die Opposition, kriegt sie auch.
+        let b = Board::from_str("4k3/8/4K3/8/8/8/8/8 w - - 0 1").unwrap();
+        let p = p_guard_active();
+        assert_eq!(opposition_bonus(&b, Color::White, &p), 0);
+        assert_eq!(opposition_bonus(&b, Color::Black, &p), p.opposition_bonus);
+    }
+
+    #[test]
+    fn opposition_diagonal() {
+        // Ke5 vs Kg7 (Diagonale, ein freies Feld dazwischen auf f6).
+        // Schwarz am Zug → Weiss hat diagonale Opposition.
+        let b = Board::from_str("8/6k1/8/4K3/8/8/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        assert_eq!(opposition_bonus(&b, Color::White, &p), p.opposition_bonus);
+    }
+
+    #[test]
+    fn opposition_blocked_by_pawn() {
+        // Ke4 vs Ke6, Bauer auf e5 dazwischen → keine Opposition.
+        let b = Board::from_str("8/8/4k3/4P3/4K3/8/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        assert_eq!(opposition_bonus(&b, Color::White, &p), 0);
+    }
+
+    #[test]
+    fn key_square_white_pawn_e5_king_d6() {
+        // Bauer e5 (Rang 5), Koenig d6 = Schluesselfeld (Rang 6,
+        // file e±1). Bonus = key_square_bonus_by_rank[rel_rank-1=4] = 28.
+        let b = Board::from_str("4k3/8/3K4/4P3/8/8/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        let bonus = key_square_bonus(&b, Color::White, &p);
+        assert_eq!(bonus, p.key_square_bonus_by_rank[4]);
+    }
+
+    #[test]
+    fn key_square_skipped_for_rook_pawn() {
+        // Rook-Pawn h5 + Koenig g6 — kein Key-Square-Bonus, Rook-Pawn-Korrektur
+        // uebernimmt diesen Fall.
+        let b = Board::from_str("4k3/8/6K1/7P/8/8/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        assert_eq!(key_square_bonus(&b, Color::White, &p), 0);
+    }
+
+    #[test]
+    fn key_square_doubled_pawns_count_only_advanced() {
+        // Bauern e5 + e3 (doppelter Bauer auf e-Linie), Koenig auf d6 —
+        // Schluesselfeld fuer e5. Es darf NUR einmal gezaehlt werden
+        // (nicht zusaetzlich der Key-Square-Pool von e3).
+        let b = Board::from_str("4k3/8/3K4/4P3/8/4P3/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        let bonus = key_square_bonus(&b, Color::White, &p);
+        assert_eq!(bonus, p.key_square_bonus_by_rank[4]);
+    }
+
+    #[test]
+    fn rook_pawn_correction_fires_in_promo_corner() {
+        // h5 + schwarzer K auf h8 (Chebyshev zum h8-Promo-Eck 0). Penalty
+        // greift, Wert negativ.
+        let b = Board::from_str("7k/8/6K1/7P/8/8/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        let corr = rook_pawn_correction(&b, Color::White, &p);
+        assert_eq!(corr, p.rook_pawn_drawish_penalty);
+    }
+
+    #[test]
+    fn rook_pawn_correction_skips_central_pawn() {
+        // e5 ist KEIN Rook-Pawn → Korrektur nicht aktiv.
+        let b = Board::from_str("4k3/8/3K4/4P3/8/8/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        assert_eq!(rook_pawn_correction(&b, Color::White, &p), 0);
+    }
+
+    #[test]
+    fn rook_pawn_correction_skips_when_other_pawn_passed() {
+        // h-Bauer + zentraler Frei-Bauer → Edge-Case ist nicht "einziger
+        // Frei-Bauer ist Rook-Pawn".
+        let b = Board::from_str("7k/8/6K1/4P2P/8/8/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        assert_eq!(rook_pawn_correction(&b, Color::White, &p), 0);
+    }
+
+    #[test]
+    fn guard_total_endgame_is_active() {
+        // Vereinte Sanity: Schluesselfeld d6 + e5 + Ke8 (Schwarz am Zug).
+        // pawn_endgame_guard sollte einen positiven, getaperten Wert
+        // fuer Weiss liefern (Phase=0 hier, voller Effekt).
+        let b = Board::from_str("4k3/8/3K4/4P3/8/8/8/8 b - - 0 1").unwrap();
+        let p = p_guard_active();
+        let phase = game_phase(&b);
+        assert!(phase < p.king_activity_phase_threshold);
+        let s = pawn_endgame_guard(&b, phase, &p);
+        assert!(s > 0, "expected positive guard score, got {s}");
+    }
+
+    #[test]
+    fn guard_phase_above_threshold_returns_zero() {
+        // Startpos hat phase=24 (>=threshold). NPM ist auch viel zu hoch,
+        // beides blockt den Guard.
+        let b = Board::default();
+        let p = p_guard_active();
+        assert_eq!(pawn_endgame_guard(&b, game_phase(&b), &p), 0);
     }
 }

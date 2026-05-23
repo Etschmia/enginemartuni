@@ -156,6 +156,46 @@ pub struct EvalParams {
     pub rook_eg_mobility: i32,
     pub queen_mg_mobility: i32,
     pub queen_eg_mobility: i32,
+
+    // ----------------------------------------------------------------------
+    // Pawn-Endgame-Guard (23.05.2026, Konzept in docs/pawn-endgame-guard.md)
+    //
+    // Drei Sub-Konzepte fuer einfache Endspiele mit wenig Offizier-Material:
+    //   - Opposition (direkt + diagonal): Bonus, wenn der eigene Koenig die
+    //     Opposition gegen den gegnerischen haelt (gleiche Linie/Reihe/Diagonale,
+    //     eine ungerade Anzahl freier Felder dazwischen, und der GEGNER ist
+    //     am Zug).
+    //   - Key Squares vor eigenen Freibauern: Bonus pro Freibauer, wenn der
+    //     eigene Koenig auf einem der drei Schluesselfelder dieses Bauern
+    //     steht. Bonus skaliert mit Bauern-Rang (per Spielerfarbe gespiegelt).
+    //   - Rook-Pawn-Edge: Korrektur, wenn der eigene Frei-Bauer auf a- oder
+    //     h-Linie steht UND der gegnerische Koenig die Promo-Ecke schon
+    //     erreicht oder einen Schritt entfernt ist.
+    //
+    // Aktivierung: hartes Gate ueber NPM beider Seiten (max. ein Officer-Pool
+    // pro Seite ≤ npm_endgame_gate). Im Mittelspiel komplett inaktiv.
+    // Zusaetzliches Phase-Tapering analog `king_passed_pawn_synergy`,
+    // damit kein Sprung an der Phase-Grenze entsteht.
+    //
+    // Defaults im Code sind verhaltensgleich (Boni alle 0, Korrektur 0).
+    // Erst eine Sektion `[endgame_guard]` in eval.toml aktiviert das Feature.
+    /// Bonus (cp), wenn die eigene Seite die Opposition haelt.
+    pub opposition_bonus: i32,
+    /// Bonus (cp) pro eigenem Freibauer, dessen Schluesselfeld vom eigenen
+    /// Koenig besetzt ist. Index = Bauer-Rang 1..8 aus eigener Sicht
+    /// (weisser Bauer auf Rang 5 → Index 4, schwarzer Bauer auf Rang 4
+    /// → Index 4 nach Spiegelung). Index 0 und 7 sind unmoeglich
+    /// (Bauer kann nicht auf Grund-/Umwandlungsreihe stehen).
+    pub key_square_bonus_by_rank: [i32; 8],
+    /// Strafe (cp), wenn der eigene Frei-Bauer ein Rook-Pawn (a/h) ist und
+    /// der gegnerische Koenig die Promo-Ecke kontrolliert. Negativer Wert
+    /// — wirkt korrigierend auf den vorhandenen Passbauer-Bonus.
+    pub rook_pawn_drawish_penalty: i32,
+    /// NPM-Hardgate: der Pawn-Endgame-Guard wird nur ausgewertet, wenn das
+    /// Offizier-Material BEIDER Seiten ≤ Gate ist (gemessen ohne Koenig,
+    /// nach den statischen Anker-Werten p.knight/bishop/rook/queen).
+    /// 700 cp = max. 2 Leichtfiguren oder 1 Turm pro Seite.
+    pub npm_endgame_gate: i32,
 }
 
 pub const DEFAULT_SAFETY_TABLE: [i32; 100] = [
@@ -269,6 +309,16 @@ impl Default for EvalParams {
             rook_eg_mobility: 5,
             queen_mg_mobility: 1,
             queen_eg_mobility: 2,
+
+            // Pawn-Endgame-Guard: alle Boni 0 = verhaltensgleich zur alten
+            // Eval, solange `[endgame_guard]` in eval.toml fehlt. Das Gate
+            // hat einen sinnvollen Default (700 cp), damit es bei einem
+            // partiellen Override (z.B. nur opposition_bonus gesetzt) nicht
+            // versehentlich auf 0 steht und den Term komplett blockiert.
+            opposition_bonus: 0,
+            key_square_bonus_by_rank: [0, 0, 0, 0, 0, 0, 0, 0],
+            rook_pawn_drawish_penalty: 0,
+            npm_endgame_gate: 700,
         }
     }
 }
@@ -442,6 +492,39 @@ impl EvalParams {
         p.rook_eg_mobility = i(&mob, "rook_eg", p.rook_eg_mobility);
         p.queen_mg_mobility = i(&mob, "queen_mg", p.queen_mg_mobility);
         p.queen_eg_mobility = i(&mob, "queen_eg", p.queen_eg_mobility);
+
+        // [endgame_guard] (23.05.2026, Pawn-Endgame-Guard). Optional; bei
+        // fehlender Sektion bleiben die Boni auf 0 (Default in EvalParams),
+        // das Feature ist dann neutral.
+        let eg_guard = section(v, "endgame_guard");
+        p.opposition_bonus = i(&eg_guard, "opposition_bonus", p.opposition_bonus);
+        p.rook_pawn_drawish_penalty = i(
+            &eg_guard,
+            "rook_pawn_drawish_penalty",
+            p.rook_pawn_drawish_penalty,
+        );
+        p.npm_endgame_gate = i(&eg_guard, "npm_endgame_gate", p.npm_endgame_gate);
+        if let Some(arr) = eg_guard
+            .and_then(|s| s.get("key_square_bonus_by_rank"))
+            .and_then(|v| v.as_array())
+        {
+            let parsed: Vec<i32> = arr
+                .iter()
+                .filter_map(|v| v.as_integer().map(|x| x as i32))
+                .collect();
+            // Genau 8 Eintraege erwartet (Index per Bauer-Rang 1..8).
+            if parsed.len() == 8 {
+                for (i, val) in parsed.into_iter().enumerate() {
+                    p.key_square_bonus_by_rank[i] = val;
+                }
+            } else {
+                println!(
+                    "info string eval: [endgame_guard].key_square_bonus_by_rank \
+                     muss 8 Eintraege haben (gefunden {}), ignoriert",
+                    parsed.len()
+                );
+            }
+        }
 
         p
     }

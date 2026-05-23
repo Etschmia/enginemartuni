@@ -10,6 +10,36 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**23.05.2026 15:33 — Pawn-Endgame-Guard ausgerollt, tt.rs aufgeräumt.**
+Drei Sub-Konzepte (Opposition direkt+diagonal, Key Squares per Rang,
+Rook-Pawn-Edge) hinter hartem NPM-Gate ≤ 700 cp / Phase-Tapering.
+A/B-Match (1000 Partien 5+0.05 UHO): **-2.43 ±15.94 Elo für Guard**,
+LOS 38.2 %, LLR -0.14 (SPRT nicht terminiert). Pgn-Drilldown: nur
+18 % der Spiele enden im Term-aktiven Bereich (NPM ≤ 700), dort
+50.5 % Score — Selfplay-Spiegelstil neutralisiert die enge
+Subgruppe. Trotzdem ausgerollt analog Step 2 v2 / Step 3
+([[feedback-ab-vs-lichess-signal]]): Bot-Mix auf Lichess hat andere
+EG-Dichte, gerade fuer die KNP-Cluster aus
+[[project-stickshark99-deepdive-2026-05-23]] (`MH3BeAfV` ply 91 wird
+mit Guard zu Kc4 statt Kd4 — direkte Bestätigung der Hebel-Mechanik).
+Lookback-Anker 23.05.2026: **Blitz 2066 / Rapid 2123**. KPIs:
+stickshark99 B/P 2.16 → ≤ 1.5, `positional_collapse` im Endspiel
+stabil/sinkend, kein Anstieg `hangs_pawn`/`exposed_king`.
+Konzept-Doku: [pawn-endgame-guard.md](pawn-endgame-guard.md),
+Implementierung: [[project-pawn-endgame-guard]],
+Match: `matches/baseline_vs_pawn_eg_guard/`.
+
+**Parallel-Aufräumen 23.05.2026:** Audit über bekannte tote Stellen
+gefahren. Aktionen: `tt.rs` Phase-1-Doc-Kommentar neu gefasst,
+8 `#[allow(dead_code)]`-Annotations entfernt (TtFlag/TtEntry/probe/
+store waren lange aktiv), `capacity()` als tatsächlich tot entfernt;
+`passed_bonus = 300` aus `eval.toml [pawns]` gelöscht (Konfigurations-
+Drift, Loader las den Key nie). Build clean, 79/79 Tests grün.
+Stehende Audit-Punkte (Tobias-Entscheidung pendend): `bishop_pair_each`
+als Anker behalten oder weg, `pub fn taper` / `pub fn evaluate_breakdown`
+auf privat reduzieren, `is_passed_simple` vs `is_passed` konsolidieren
+(letzteres steht schon unten in „Offene Themen").
+
 **20.05.2026 21:15 — Step-3-Lookback bestätigt, neuer Engine-Befund.**
 291 Partien post-Rollout: Lichess Blitz **2039 → 2080** (+41), Rapid
 **2100 → 2142** (+42). Blunder/Partie 1.39 → 1.32, keine
@@ -165,9 +195,12 @@ Punkte 2/3 unten).
 - **Dynamischer Bishop-Pair-Bonus** — Bonus skaliert mit Brett-Offenheit
   (umgekehrt proportional zur Bauernanzahl). Aktuell statischer Fixwert
   `bishop_pair_each`.
-- **Pawn-Endgame-Guard** — Opposition in K+P-vs-K plus Square-of-the-Pawn,
-  als ergänzendes Wissen zum bereits vorhandenen `kpk_score` in
-  [endgame.rs](../src/endgame.rs).
+- **Pawn-Endgame-Guard** — Opposition, Key Squares und Rook-Pawn-Edge als
+  ergänzendes Wissen zum bereits vorhandenen `kpk_score` in
+  [endgame.rs](../src/endgame.rs). Konzept (Variante B, additiver Eval-
+  Term in `eval.rs`) liegt in
+  [pawn-endgame-guard.md](pawn-endgame-guard.md) — 23.05.2026 ausgelöst
+  durch den stickshark99-Deep-Dive (KNP-Endspiel-Drift).
 - **Tapering für Passbauern und isolierte Bauern** — Passbauer-Bonus
   per Rang ist da (`pawn_passed_rank_bonuses`), expliziter MG/EG-Split
   fehlt; isolierte Bauern sind phasenflach mit −20 cp (siehe
