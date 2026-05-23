@@ -21,5 +21,8 @@ docs/human-training-concept.md
 docs/lichess-community-blog.md
 docs/post-tobias-*.md
 
+# cron konfigurationsdatei
+tools/analyze_cron.config.json
+
 # A/B-Test-Output (lokal, kann gross werden)
 matches/
