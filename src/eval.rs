@@ -330,6 +330,18 @@ fn king_danger(board: &Board, us: Color, zone: BitBoard, p: &EvalParams) -> i32 
 /// Bewertet den Bauernschild drei Linien breit vor dem Koenig.
 /// Zentrum (d/e) auf Grundreihe → exposed_center_penalty.
 /// Koenig nicht auf Grundreihe → 0 (z.B. aktiver Endspielkoenig).
+///
+/// Shield-Bonus nur fuer Rochade-Endfelder plus den ueblichen
+/// Post-Rochade-Sicherheitszug:
+///   - g (file 6, kurze Rochade) oder h (file 7, Kh1 nach OO)
+///   - c (file 2, lange Rochade) oder b (file 1, Kb1 nach OOO)
+/// Auf f- oder a-Linie steht der Koenig typischerweise nur nach
+/// erzwungenem Schach oder ohne Rochade — kein Bonus und keine Strafe
+/// (return 0).
+/// Historischer Hintergrund: bis 24.05.2026 wurde jeder Koenig auf
+/// Grundreihe abseits d/e wie ein rochierter Koenig bewertet — sxphia-
+/// Patzer 9...Nxc4 (Bz0YIF49) trat auf, weil Martuni dem Kf8-nach-Bb5+
+/// einen +30cp Shield-Bonus gab.
 fn pawn_shield_score(board: &Board, us: Color, king_sq: Square, p: &EvalParams) -> i32 {
     let king_file = king_sq.get_file().to_index() as i32;
     let king_rank = king_sq.get_rank().to_index() as i32;
@@ -346,7 +358,17 @@ fn pawn_shield_score(board: &Board, us: Color, king_sq: Square, p: &EvalParams) 
         return p.ks_exposed_center_penalty;
     }
 
-    let (file_lo, file_hi) = if king_file <= 2 { (0, 2) } else { (5, 7) };
+    // Shield-Bonus nur fuer Rochade-Endfelder plus den ueblichen
+    // Post-Rochade-Sicherheitszug:
+    //   file 2 (c) = lang rochiert / file 1 (b) = Kb1 nach OOO
+    //   file 6 (g) = kurz rochiert / file 7 (h) = Kh1 nach OO
+    // Auf der f-Linie oder a-Linie steht der Koenig typischerweise nur
+    // nach erzwungenem Schach (verlorene Rochaderechte) — kein Bonus.
+    let (file_lo, file_hi) = match king_file {
+        1 | 2 => (0, 2),
+        6 | 7 => (5, 7),
+        _ => return 0,
+    };
     let (r1, r2) = match us {
         Color::White => (1, 2),
         Color::Black => (6, 5),
