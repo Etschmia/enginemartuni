@@ -323,7 +323,7 @@ queen_eg  = 2
 #      einziger Frei-Bauer auf a/h steht und der gegnerische Koenig die
 #      Promo-Ecke bereits kontrolliert.
 #
-# Hartes NPM-Gate (npm_endgame_gate=700): beide Seiten muessen mit ihrem
+# Hartes NPM-Gate (npm_endgame_gate=300): beide Seiten muessen mit ihrem
 # Offizier-Material darunter liegen, sonst inaktiv. Zusaetzlich Phase-
 # Tapering analog king_passed_pawn_synergy (voller Effekt bei phase=0,
 # linear gegen 0 ab king_activity_phase_threshold=16).
@@ -358,7 +358,16 @@ key_square_bonus_by_rank = [0, 0, 10, 18, 28, 40, 30, 0]
 rook_pawn_drawish_penalty = -60
 
 # Hardes NPM-Gate. Beide Seiten muessen mit Offizier-Material <= Gate
-# liegen, sonst ist der Term komplett inaktiv. 700 cp = bis 2 Leichtfiguren
-# (300+300) oder 1 Turm (500). Strict-Mittelspiel mit Tuermen (>=1000)
-# faellt sicher heraus.
-npm_endgame_gate = 700
+# liegen, sonst ist der Term komplett inaktiv. 300 cp = bis 1 Leichtfigur
+# (N oder B) pro Seite. Klassische Bauernendspiel-Heuristiken (Opposition,
+# Key Squares, Rook-Pawn-Edge) sollen nur dort wirken, wo das Bauernspiel
+# das Endspiel dominiert — KR-vs-KR oder K+2 Leichte verfaelschen sie.
+#
+# 25.05.2026: von 700 auf 300 verschaerft. Begruendung: Match-Analyse vom
+# 24.05. zeigte, dass der Guard bei 700er-Gate in 2180 Halbzuegen aktiv war,
+# davon nur 65 (3%) echtes K+P. Der Rest (931 Plies KR-vs-KR usw.) lag
+# ausserhalb des konzeptionellen Anwendungsbereichs der Heuristiken und
+# erklaert plausibel die leicht negative A/B-Drift von -2.43 Elo.
+# Effekt auf Lichess wird ueber Lookback-Statistik nachgemessen, weil reine
+# Bauernendspiele selten sind (7 von 91 in der 24.05.-Stichprobe).
+npm_endgame_gate = 300
