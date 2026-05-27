@@ -118,7 +118,9 @@ phalanx_double = 15
 
 # Freibauer-Bonus pro Vormarsch-Rang wird vom Code aus den Defaults gelesen
 # (`pawn_passed_rank_bonuses = [5, 15, 30, 55, 100, 170]` in eval_config.rs).
-# Hier nicht gesetzt — bei Bedarf als `passed_rank_bonuses = [...]` ergaenzbar.
+# A/B-Test 27.05. laeuft: Variante [5,15,35,70,150,300] (obere Stufen
+# angehoben wegen pQ8INwpS-Befund: 7th-rank 170cp zu niedrig).
+# Bei positivem Signal hier als `passed_rank_bonuses = [...]` einsetzen.
 
 [pieces]
 # Springer auf Reihe 1 oder 8 steht schlecht
@@ -363,11 +365,9 @@ rook_pawn_drawish_penalty = -60
 # Key Squares, Rook-Pawn-Edge) sollen nur dort wirken, wo das Bauernspiel
 # das Endspiel dominiert — KR-vs-KR oder K+2 Leichte verfaelschen sie.
 #
-# 25.05.2026: von 700 auf 300 verschaerft. Begruendung: Match-Analyse vom
-# 24.05. zeigte, dass der Guard bei 700er-Gate in 2180 Halbzuegen aktiv war,
-# davon nur 65 (3%) echtes K+P. Der Rest (931 Plies KR-vs-KR usw.) lag
-# ausserhalb des konzeptionellen Anwendungsbereichs der Heuristiken und
-# erklaert plausibel die leicht negative A/B-Drift von -2.43 Elo.
-# Effekt auf Lichess wird ueber Lookback-Statistik nachgemessen, weil reine
-# Bauernendspiele selten sind (7 von 91 in der 24.05.-Stichprobe).
-npm_endgame_gate = 300
+# 27.05.2026: zurueck auf 700. Das 300er-Gate (25.05.) war A/B-negativ
+# (-2.43 Elo) und korreliert mit einer Rapid-Regression von -54 Elo
+# (Anker 24.05. 2126 → 27.05. 2072). Rapid-Partien haben hoehere
+# Endspiel-Dichte; bei 300er-Gate lagen zu viele relevante KN/KB-
+# Endspiele ausserhalb des Guards.
+npm_endgame_gate = 700
