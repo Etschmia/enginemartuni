@@ -116,9 +116,15 @@ cf_file_bonus = 5
 phalanx_triple = 30
 phalanx_double = 15
 
-# Freibauer-Bonus pro Vormarsch-Rang (Default: [5, 15, 30, 55, 100, 170]).
-# A/B 27.05.: +20.17 Elo ±17.69, LOS 98.75 % (1000 Partien).
-passed_rank_bonuses = [5, 15, 35, 70, 150, 300]
+# Freibauer-Bonus pro Vormarsch-Rang.
+# KORREKTUR 29.05.: Der A/B 27.05. (gate700_vs_passed_pawn_v1, 1000 Partien)
+# wurde fehl-attribuiert. fastchess: "Results of Baseline vs PassedPawnV1 …
+# Elo: +20.17 ±17.69, LOS 98.75 %, Wins 463 / Losses 405" = +20 Elo fuer
+# die ALTEN Werte [5,15,30,55,100,170] (Baseline), nicht fuer den Raise
+# [5,15,35,70,150,300] (PassedPawnV1). Der Raise ist ~-20 Elo => zurueck
+# auf den bewaehrten Default. (pQ8INwpS-7th-rank-Motivation bleibt offen
+# fuer einen milderen, sauber getesteten Bump.)
+passed_rank_bonuses = [5, 15, 30, 55, 100, 170]
 
 [pieces]
 # Springer auf Reihe 1 oder 8 steht schlecht
