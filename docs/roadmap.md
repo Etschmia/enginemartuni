@@ -10,6 +10,33 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**29.05.2026 — Freibauer-Regression entdeckt + revertiert (9bf3d11).**
+Auswertung `analyse-29.05.2026.json` (129 Partien, 205 Blunders,
+B/P **1.589** — Regression ggü. 1.32 vom 20.05.). Rating-Abfall seit
+23.05.-Anker: Blitz 2066→**2040**, Rapid 2123→**2083**. Ursache
+gefunden: Commit `da625d4` „Freibauer-Bonus angehoben
+[5,15,35,70,150,300]" hat den **A/B-Verlierer** committet. fastchess
+(`matches/gate700_vs_passed_pawn_v1`, 1000 Partien): *„Results of
+Baseline vs PassedPawnV1 … Elo: 20.17 ±17.69, LOS 98.75 %, Wins 463 /
+Losses 405"* → die **+20 Elo gehören Baseline** (alte Werte
+[5,15,30,55,100,170]), nicht dem Raise. Belegt über `variant/eval.toml`
+(neue Werte) vs `baseline/eval.toml` (Key fehlt → Code-Default).
+**Revert `9bf3d11`** zurück auf [5,15,30,55,100,170], Bot 13:43 neu
+gestartet (eval.toml ist Laufzeit-Config, kein Rebuild nötig).
+Erwartete ~+20-Elo-Erholung — Lookback-Anker **Blitz 2040 / Rapid 2083
+(pre-revert)**. Methodik-Lehre: vor dem Committen eines A/B-„Siegers"
+prüfen, welcher Engine das +Elo gehört (Win-Count vs variant-eval.toml).
+pQ8INwpS-7th-rank-Motivation (170 cp evtl. zu niedrig) bleibt offen für
+einen *milderen*, sauber getesteten Bump.
+
+**Blunder-Cluster 29.05. (nächster Hebel = SEE):** 38 hängende Figuren
+(Springer 16, Läufer 14, Turm 6, Dame 2) plus Muster „eigener Schlagzug
+verliert Material" (`Nxf7`/`Nxe5`/`Bxe4`/`Nxd5`, jeweils `hangs_* +
+trade_down`). 63 echte Selbst-Delusionen (Martuni-Eval rosig, Realität
+bricht ein, kein d17-Bias). → **SEE im Capture-Move-Ordering /
+Quiescence** als nächstes Projekt freigegeben (siehe [see.md](see.md)).
+Entschärfungen halten: stickshark99 2.16→1.20, sxphia 1.42→1.25.
+
 **23.05.2026 15:33 — Pawn-Endgame-Guard ausgerollt, tt.rs aufgeräumt.**
 Drei Sub-Konzepte (Opposition direkt+diagonal, Key Squares per Rang,
 Rook-Pawn-Edge) hinter hartem NPM-Gate ≤ 700 cp / Phase-Tapering.
