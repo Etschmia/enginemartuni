@@ -33,9 +33,16 @@ einen *milderen*, sauber getesteten Bump.
 (Springer 16, Läufer 14, Turm 6, Dame 2) plus Muster „eigener Schlagzug
 verliert Material" (`Nxf7`/`Nxe5`/`Bxe4`/`Nxd5`, jeweils `hangs_* +
 trade_down`). 63 echte Selbst-Delusionen (Martuni-Eval rosig, Realität
-bricht ein, kein d17-Bias). → **SEE im Capture-Move-Ordering /
-Quiescence** als nächstes Projekt freigegeben (siehe [see.md](see.md)).
-Entschärfungen halten: stickshark99 2.16→1.20, sxphia 1.42→1.25.
+bricht ein, kein d17-Bias). Befund: SEE wirkte überall *außer* in der
+Hauptsuche — verlierende Captures (SEE<0) wurden dort voll durchsucht.
+**Konservatives SEE-Pruning in `alpha_beta` ausgerollt** (Commit
+`765e727`, Bot 16:48 neu gestartet): `!is_pv && !in_check &&
+!child_in_check && depth<=2 && move_idx>0 && see<0 → continue`, nutzt
+gecachten `sm.see_val` (gratis). A/B `matches/baseline_vs_see_prune_v1/`:
+**+12.17 Elo ±18.39, LOS 90.29 %** (1000 Partien), Detail in
+[see.md](see.md). Lichess-Lookback entscheidet; Rollback =
+`git revert 765e727`. Entschärfungen halten: stickshark99 2.16→1.20,
+sxphia 1.42→1.25.
 
 **23.05.2026 15:33 — Pawn-Endgame-Guard ausgerollt, tt.rs aufgeräumt.**
 Drei Sub-Konzepte (Opposition direkt+diagonal, Key Squares per Rang,

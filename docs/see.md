@@ -729,3 +729,53 @@ Noch offen — geführt in `roadmap.md`:
 - **Outposts / schwache Felder** — Springer auf gedeckten Zentralfeldern,
   die nicht durch gegnerische Bauern vertrieben werden können.
 - **Bishop-Trap-Detection**.
+
+---
+
+## SEE-Pruning in der Hauptsuche (2026-05-29)
+
+Bis hierher wirkte SEE in **Quiescence**, **Move-Ordering** und
+**Extensions/LMR** — aber **nicht in der Hauptsuche** (`alpha_beta`). Dort
+wurden verlierende Captures nur hinten einsortiert und trotzdem voll
+durchsucht.
+
+**Befund (`analyse-29.05.2026.json`):** Martuni *wählt* Minor-für-Bauer-Opfer
+aktiv — `Nxf7`, `Nxe5`, `Bxe4`, alle mit SEE = −200. Mit der echten Engine
+reproduziert: die Eval *nach* dem Opfer überschätzt den entstehenden Angriff
+um 270–340 cp, und der Wert **oszilliert** mit der Tiefe (Nxf7: +10 → −104 →
++67). Klassische Signatur eines spekulativen Angriffs, den der Horizont bei
+jeder neuen Tiefe neu „belohnt" — tiefere Suche allein heilt es nicht.
+
+**Fix (konservativ):** In `alpha_beta` werden verlierende Captures nahe den
+Blättern übersprungen. Da `sm.see_val` aus dem Move-Ordering bereits gecacht
+ist, kostet das Pruning praktisch nichts.
+
+```rust
+if !is_pv && !in_check && !child_in_check
+    && depth <= 2 && move_idx > 0 && best_score > -MATE_THRESHOLD {
+    if let Some(see) = sm.see_val {
+        if see < 0 { continue; }   // verlierenden Capture skippen
+    }
+}
+```
+
+Mechanik: nahe den Blättern kollabieren die *Folge*-Opfer, auf denen die
+illusorische Kompensation aufbaut → der zurückgerechnete Wert des
+Wurzel-Opfers fällt auf seinen echten (negativen) Materialwert.
+
+**Spot-Check:** 1/3 reproduzierte Fälle direkt behoben (Nxe5 → e3e4), Knoten
+reduziert (Nxf7 d8: 13.5M → 10.2M), 79/79 Tests grün. Die anderen zwei
+(Nxf7, Bxe4) beziehen ihre Pseudo-Kompensation aus Linien tiefer als
+depth ≤ 2 — erwartbar bei der konservativen Stufe.
+
+**A/B** (`matches/baseline_vs_see_prune_v1/`, SeePruneV1 vs Baseline, 5+0.05,
+UHO, 1000 Partien): **+12.17 Elo ±18.39, LOS 90.29 %**, 51.75 %,
+Ptnml [70,58,218,75,79]. CI deckt knapp die Null (Selfplay-typisch für
+Such-/Eval-Hebel), Signal aber stärker als die zuletzt ausgerollten Hebel
+(Shield-Fix +8.69/LOS 85 %, Step3 +6.95/LOS 77.5 %). **Ausgerollt 29.05.**
+(Commit `765e727`), Bot 16:48 neu gestartet. Lichess-Lookback entscheidet
+endgültig; Rollback = `git revert 765e727` + Rebuild.
+
+**Offen (schärfere Stufen, falls Lookback gut):** depth-skalierte Schwelle
+bis depth ≤ 3 (Variante „Moderat"), oder SEE-Pruning auch für die noch
+ungelösten tiefen Opfer (Nxf7/Bxe4) — beides separat A/B-testen.
