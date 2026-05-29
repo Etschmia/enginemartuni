@@ -589,6 +589,44 @@ fn alpha_beta(
         // Phase-Schwelle 16 deckt sich mit `king_activity_phase_threshold` aus
         // der Eval — derselbe Endspiel-Begriff in Suche und Bewertung.
         let child_in_check = nb.checkers().popcnt() > 0;
+
+        // --- SEE-Pruning in der Hauptsuche (konservativ, 29.05.2026) --------
+        // Befund analyse-29.05.2026: Martuni spielt Minor-fuer-Bauer-Opfer
+        // (Nxf7, Nxe5, Bxe4 — alle SEE = -200), weil ihre Eval *nach* dem
+        // Opfer einen spekulativen Angriff um ~270-340 cp ueberschaetzt
+        // (Tiefen-Oszillation +10 -> -104 -> +67). Die Quiescence prunt
+        // SEE<0 schon laenger, die Hauptsuche durchsuchte verlierende
+        // Captures aber voll und liess sich so vom ueberbewerteten Blatt
+        // taeuschen. Hier schneiden wir sie nahe den Blaettern weg: damit
+        // kollabieren die Folge-Opfer, auf denen die Pseudo-Kompensation
+        // aufbaut, und der zurueckgerechnete Wert des Wurzel-Opfers faellt
+        // auf seinen echten (negativen) Materialwert.
+        //
+        // Konservative Gates (Risiko, ein echtes tiefes Opfer zu uebersehen,
+        // bewusst minimal gehalten):
+        //   - !is_pv          : die Hauptvariante nie beschneiden
+        //   - !in_check       : stehen wir selbst im Schach, kein Pruning
+        //   - !child_in_check : Schach-gebende Captures sind taktisch erzwingend
+        //   - depth <= 2      : nur ganz nahe den Blaettern
+        //   - move_idx > 0    : den bestgeordneten Zug nie ueberspringen
+        //   - best_score > -MATE_THRESHOLD : nicht in Matt-Verzweiflung prunen
+        //   - sm.see_val < 0  : nur klar materialverlierende Captures
+        // sm.see_val ist aus dem Move-Ordering bereits gecacht -> keine
+        // zusaetzlichen SEE-Aufrufe, das Pruning ist praktisch kostenlos.
+        if !is_pv
+            && !in_check
+            && !child_in_check
+            && depth <= 2
+            && move_idx > 0
+            && best_score > -MATE_THRESHOLD
+        {
+            if let Some(see) = sm.see_val {
+                if see < 0 {
+                    continue;
+                }
+            }
+        }
+
         let other_cand = !child_in_check && is_candidate_move(board, mv, &nb, sm.see_val);
         let check_ext = if child_in_check {
             if crate::eval::game_phase(&nb) < 16 {
