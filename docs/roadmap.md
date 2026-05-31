@@ -10,6 +10,71 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**31.05.2026 — Auswertung 01.06., Lookback grün, SEE-Follow-up als Eval-Problem entlarvt.**
+Auswertung `analyse-01.06.2026.json` (173 Partien, 266 Blunders, **B/P 1.54**
+— Trend runter: 1.74 @27.05. → 1.589 @29.05. → 1.54). Verteilung: Mittelspiel
+172 / Endspiel 79 / Eröffnung 15; 18 Mate-Blunder; 45× `hangs_*`. Achtung:
+gemeinsames Lookback-Fenster für **Freibauer-Revert (9bf3d11) UND SEE-Pruning
+(765e727)** ab Anker Blitz 2040 / Rapid 2083 — B/P-Verbesserung nicht einem
+Einzel-Change zuschreiben.
+
+- **Rating-Gate grün:** Lichess 31.05. **Blitz 2101 (+61)** / **Rapid 2118
+  (+35)** / Bullet 2135, beide nicht-provisorisch. Das gemeinsame Fenster ist
+  klar positiv (keine Regression).
+- **King-Safety-Lead verworfen:** Roh sahen 47 % der echten Blunder „blind"
+  (Martuni-Eval >150 cp zu rosig), Top-Motive positional_collapse/exposed_king.
+  Verifikation der Top-8-Cluster bei **SF d23–26** zeigt: kontaminiert (nur 3/8
+  echtes Mittelspiel) und die 3 echten Fälle bestätigen die Eval-Blindheit
+  **nicht** (Martuni-Eval real in Ordnung). Klassischer d17-Snapshot-Trap →
+  King-Safety ist aus diesem Batch **kein** validierter Hebel.
+- **SEE-Follow-up (depth ≤ 3) empirisch erledigt:** Die in [see.md](see.md)
+  skizzierte schärfere Stufe wurde reproduktions-getestet, bevor ein A/B läuft.
+  Ergebnis: depth ≤ 3 (tiefenskaliert −100 @d3) **und** depth ≤ 4 flach
+  **kippen Nxf7/Bxe4 NICHT** — der Nxf7-Eval ist invariant bei −25 cp gegen die
+  Pruning-Tiefe. Die Kompensation wird nicht von verlierenden Captures getragen
+  → **kein Such-Pruning-Problem.** Committed depth ≤ 2 (765e727) bleibt
+  unverändert. (Methodik-Lehre: zeitbasiert testen — `go movetime` + stdin via
+  `sleep` offen halten; `go depth N` + sofort `quit` bricht die Suche bei
+  depth ~6 ab. Gilt auch für Stockfish-Pipes.)
+- **Root-Cause-Diagnose (UCI `eval`-Breakdown + python-chess):** Die zwei Opfer
+  sind **zwei verschiedene Eval-Baustellen** mit gleichem Symptom (~290 cp zu
+  optimistisch beim Tausch Material-für-Kompensation):
+  - **Nxf7** = **Material-Imbalance.** Forcierte Linie Nxf7 Rxf7 Bxf7+ Qxf7 →
+    Weiß gibt Springer+Läufer für Turm+Bauer. End-Blatt: Martuni statisch
+    **−35** vs SF **−327**; `material`-Diff nur **−15** → Martuni bewertet
+    R+P ≈ N+B, das Wissen „zwei aktive Leichtfiguren > R+P im MG" fehlt.
+  - **Bxe4** = **überbewertete Freibauer/PST-Kompensation.** Linie Bxe4 Qxe4 …
+    d5×c6 …; Illusions-Blatt: Martuni **−67** vs SF **−360**; `material`
+    ehrlich −223, aber `pawn_bonus`-Diff **+120** + `pst_eg`-Diff **+140**
+    (vorgeschobener c6-Passer) erkaufen die fehlende Leichtfigur scheinbar zurück.
+- **Maßnahme (a) umgesetzt — Imbalance-Term „2 Leichtfiguren vs Turm(+Bauer)".**
+  Neuer Eval-Term in `eval::material_imbalance` (Hook in `evaluate()` + im
+  `eval`-Breakdown sichtbar): löst nur beim klassischen Muster aus (eine Seite
+  ≥ 2 Leichtfiguren mehr UND ≥ 1 Turm weniger), Bonus für die Minor-Mehrheits-
+  Seite, phase-getapert. Parameter in `eval.toml [imbalance]`
+  (`two_minors_mg`/`two_minors_eg`), **Code-Default 0** → ohne die Sektion
+  verhaltensgleich zur Vorversion (sauberer Toggle, Rollback ohne altes Binary).
+  - **Smoke-Befund (wichtig):** Der Term repariert die *Bewertung* (Nxf7-End-
+    Blatt: alt −35 / mit Term −115, näher an SF −327), **kippt die Zugwahl bei
+    vernünftigen Werten aber NICHT** — die Suche entkommt per Damentausch ins
+    Endspiel und weicht in die zweite, noch ungedämpfte Baustelle aus
+    (Freibauer/PST-Überbewertung, der Bxe4-Bug). Nxf7 kippt erst bei flat ~150
+    (global riskant, Overfit auf eine Stellung). Lehre: die zwei Eval-Lücken
+    sind in der Suche verschränkt; ein Einzel-Term ist nur ein Teilfix.
+  - **Rollout-Entscheidung (Tobias):** **flat MG 80 / EG 80** ausgerollt — macht
+    die Eval ehrlich ohne Overfit; kein fastchess-A/B, sondern **> 300 Lichess-
+    Partien als Richter**. Lookback-Anker = **Blitz 2101 / Rapid 2118 (31.05.)**.
+    Build clean, 79/79 Tests grün, Backup-Binary
+    `target/release/martuni.imbalance_8080_20260531`. **Rollback** = `[imbalance]`
+    in eval.toml auf 0 (oder Sektion löschen) + Bot-Neustart, kein Rebuild nötig.
+    Aktivierung: `cargo build --release` (erledigt) + Bot-Neustart (lädt neues
+    Binary + eval.toml neu). KPI: Nxf7/Bxe4-artige `trade_down`+`hangs_*`-Cluster
+    sinkend, kein Rating-Einbruch vs Anker.
+- **Offen:** (b) Freibauer/PST-Kompensation gegen Material-Defizit dämpfen
+  (Bxe4-Bug) — wegen der Verschränkung evtl. nötig, damit (a) den Zug auch
+  wirklich kippt. simpleEval (B/P 2.85 / nur 7 Partien) nach ≥ 15 Partien
+  re-checken. Diagnose-Detail: [see.md](see.md) Root-Cause-Abschnitt.
+
 **29.05.2026 — Freibauer-Regression entdeckt + revertiert (9bf3d11).**
 Auswertung `analyse-29.05.2026.json` (129 Partien, 205 Blunders,
 B/P **1.589** — Regression ggü. 1.32 vom 20.05.). Rating-Abfall seit

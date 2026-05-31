@@ -94,6 +94,24 @@ bishop_pair_mg = 30
 bishop_pair_eg = 50
 bp_open_scale  = 2
 
+[imbalance]
+# Material-Ungleichgewicht "2 Leichtfiguren vs Turm(+Bauer)" (Diagnose 31.05.2026,
+# docs/see.md Root-Cause-Abschnitt). Befund: Martuni bewertete Turm+Bauer ≈
+# Springer+Laeufer (material-Diff nur ~15 cp) und ging deshalb willentlich
+# Opfer wie Nxf7 Rxf7 Bxf7+ Qxf7 ein, die in einer -300-Stellung enden (SF d26),
+# die Martuni statisch als ~ausgeglichen sah. Reines Stueckwert-Zaehlen erfasst
+# nicht, dass zwei aktive Leichtfiguren im Mittelspiel mehr wiegen als R+P.
+#
+# Wirkung (eval::material_imbalance): loest nur beim klassischen Muster aus —
+# eine Seite hat >= 2 Leichtfiguren mehr UND >= 1 Turm weniger. Bonus geht an
+# die Leichtfiguren-Mehrheits-Seite, phase-getapert (MG > EG: zwei Minor mit
+# Damen am Brett gefaehrlicher). Zum Kippen der Zugwahl genuegen ~30-50 cp;
+# 80 cp korrigiert spuerbar, ohne die vollen ~290 cp zu uebernehmen (Bishop-Pair
+# und Mobility fangen einen Teil schon). Validierung ueber >300 Lichess-Partien
+# (kein fastchess-A/B). Defaults im Code 0/0 → ohne diese Sektion inaktiv.
+two_minors_mg = 80
+two_minors_eg = 80
+
 [pawns]
 # Isolani: Bauer ohne eigene Bauern auf benachbarten Linien
 # Finding: -20 ist ein flacher Malus. Im Endspiel sind isolierte Bauern oft

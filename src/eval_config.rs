@@ -84,6 +84,15 @@ pub struct EvalParams {
     /// Logik, die `total_pawn_count` als Brett-Offenheits-Maesszahl nutzt.
     /// Default 0 = keine Offenheits-Modulation.
     pub bp_open_scale: i32,
+    /// Material-Ungleichgewicht "2 Leichtfiguren vs Turm(+Bauer)" (Diagnose
+    /// 31.05.2026: Martuni bewertete Turm+Bauer ≈ Springer+Laeufer und lief so
+    /// willentlich in -300-Stellungen, z.B. nach Nxf7 Rxf7 Bxf7+ Qxf7). Bonus
+    /// fuer die Minor-Mehrheits-Seite, phase-getapert (MG > EG, da zwei
+    /// Leichtfiguren mit Damen am Brett gefaehrlicher sind). Default 0 = inaktiv
+    /// (reproduziert altes Verhalten); wirksame Werte in eval.toml `[imbalance]`.
+    /// Siehe `eval::material_imbalance`.
+    pub imbalance_two_minors_mg: i32,
+    pub imbalance_two_minors_eg: i32,
     pub connected_rooks_pair: i32,
     /// Turm auf vollständig offener Linie (keine eigenen und keine gegnerischen Bauern)
     pub rook_open_file_bonus: i32,
@@ -248,6 +257,8 @@ impl Default for EvalParams {
             bishop_pair_mg: 30,
             bishop_pair_eg: 30,
             bp_open_scale: 0,
+            imbalance_two_minors_mg: 0,
+            imbalance_two_minors_eg: 0,
             connected_rooks_pair: 150,
             rook_open_file_bonus: 30,
             rook_semiopen_file_bonus: 15,
@@ -377,6 +388,11 @@ impl EvalParams {
         p.bishop_pair_mg = i(&dyn_mat, "bishop_pair_mg", p.bishop_pair_mg);
         p.bishop_pair_eg = i(&dyn_mat, "bishop_pair_eg", p.bishop_pair_eg);
         p.bp_open_scale = i(&dyn_mat, "bp_open_scale", p.bp_open_scale);
+
+        // [imbalance] — "2 Leichtfiguren vs Turm(+Bauer)"-Bonus (Diagnose 31.05.2026).
+        let imb = section(v, "imbalance");
+        p.imbalance_two_minors_mg = i(&imb, "two_minors_mg", p.imbalance_two_minors_mg);
+        p.imbalance_two_minors_eg = i(&imb, "two_minors_eg", p.imbalance_two_minors_eg);
 
         let pw = section(v, "pawns");
         p.pawn_isolated_penalty = i(&pw, "isolated_penalty", p.pawn_isolated_penalty);

@@ -44,6 +44,7 @@ pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
     let trap = taper(0, w_trap_eg - b_trap_eg, phase);
 
     non_pst + taper(mg, eg, phase) + king_act + king_pass_syn + pawn_eg_guard + mob + trap
+        + material_imbalance(board, phase, p)
 }
 
 /// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
@@ -62,6 +63,37 @@ pub fn game_phase(board: &Board) -> i32 {
     let rooks = board.pieces(Piece::Rook).popcnt() as i32;
     let queens = board.pieces(Piece::Queen).popcnt() as i32;
     (knights + bishops + 2 * rooks + 4 * queens).min(MAX_PHASE)
+}
+
+/// Material-Ungleichgewicht: zwei Leichtfiguren wiegen im Mittelspiel mehr als
+/// Turm+Bauer — Wissen, das die reine Stueckwert-Summe nicht erfasst (Diagnose
+/// 31.05.2026: Martuni bewertete Turm+Bauer ≈ Springer+Laeufer und lief so
+/// willentlich in -300-Stellungen, z.B. nach Nxf7 Rxf7 Bxf7+ Qxf7). Loest nur
+/// beim klassischen "2 Leichtfiguren vs Turm(+Bauer)"-Muster aus: eine Seite hat
+/// >= 2 Leichtfiguren mehr UND >= 1 Turm weniger. Der Bonus geht an die
+/// Leichtfiguren-Mehrheits-Seite, phase-getapert (MG > EG, da zwei Leichtfiguren
+/// mit Damen am Brett gefaehrlicher sind). Rueckgabe in Weiss-Sicht (positiv =
+/// gut fuer Weiss). Code-Default der Parameter = 0 → Term inaktiv.
+fn material_imbalance(board: &Board, phase: i32, p: &EvalParams) -> i32 {
+    let white = *board.color_combined(Color::White);
+    let black = *board.color_combined(Color::Black);
+    let knights = *board.pieces(Piece::Knight);
+    let bishops = *board.pieces(Piece::Bishop);
+    let rooks = *board.pieces(Piece::Rook);
+
+    let w_minor = ((knights & white).popcnt() + (bishops & white).popcnt()) as i32;
+    let b_minor = ((knights & black).popcnt() + (bishops & black).popcnt()) as i32;
+    let minor_diff = w_minor - b_minor;
+    let rook_diff = (rooks & white).popcnt() as i32 - (rooks & black).popcnt() as i32;
+
+    let bonus = taper(p.imbalance_two_minors_mg, p.imbalance_two_minors_eg, phase);
+    if minor_diff >= 2 && rook_diff <= -1 {
+        bonus // Weiss hat die Leichtfiguren-Mehrheit gegen Turm(+Bauer)
+    } else if minor_diff <= -2 && rook_diff >= 1 {
+        -bonus // Schwarz hat die Leichtfiguren-Mehrheit gegen Turm(+Bauer)
+    } else {
+        0
+    }
 }
 
 /// Akkumuliert den PST-Beitrag einer Seite in (mg, eg).
@@ -1234,6 +1266,8 @@ pub struct EvalBreakdown {
     /// Nur fuer Debug-Ausgabe und Tests.
     pub white_endgame_guard_raw: i32,
     pub black_endgame_guard_raw: i32,
+    /// Material-Imbalance-Term (Weiss-Sicht, phase-getapert). Siehe `material_imbalance`.
+    pub imbalance: i32,
     pub total: i32,
 }
 
@@ -1342,6 +1376,7 @@ pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
         bd.black_endgame_guard_raw = side_pawn_endgame_guard(board, Color::Black, p);
     }
     bd.pawn_endgame_guard = pawn_endgame_guard(board, bd.phase, p);
+    bd.imbalance = material_imbalance(board, bd.phase, p);
 
     // Summe aller Per-Side-Terme (so wie evaluate_side sie addiert), als Differenz.
     let side_sum_white = bd.white.material
@@ -1372,7 +1407,8 @@ pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
         + bd.king_passed_synergy
         + bd.pawn_endgame_guard
         + bd.mobility_tapered
-        + bd.rook_trapped_tapered;
+        + bd.rook_trapped_tapered
+        + bd.imbalance;
     bd
 }
 
@@ -1450,6 +1486,7 @@ pub fn print_eval_breakdown(board: &Board, p: &EvalParams) {
         "info string pawn_eg_guard_taper  {:>6}",
         bd.pawn_endgame_guard
     );
+    println!("info string imbalance            {:>6}", bd.imbalance);
     println!("info string total                {:>6} cp", bd.total);
 
     // Sanity: muss mit evaluate() uebereinstimmen.
