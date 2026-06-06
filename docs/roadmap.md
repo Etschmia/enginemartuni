@@ -10,6 +10,261 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**06.06.2026 (spät) — Beide Hebel abgearbeitet: Damping-Term gebaut & A/B-startklar; simpleEval-Hotspot entfällt.**
+- **simpleEval-Deep-Dive → kein Hebel, Hotspot entfällt.** B/P-Verlauf 2.85 (7P) → 2.08 (13P) →
+  **1.93 (14P, 06.06.)**, jetzt Mittelfeld (dumbotai/Chess960/Epimetheus/Boosted_Maia liegen drüber).
+  27 Blunder: 24 MG, 18 motivlos — die bekannte **diffuse motivlose MG-Drop-Signatur** (Cluster ruht
+  seit 05.06.). SF-d26-Spotcheck (Be3, Martuni +440): SF +356 — beide einig „Weiß gewinnt klar" →
+  161cp-„Blunder" ist d17-Rauschen ([[feedback-analyzer-d17-bias]]). Kein simpleEval-spezifischer Fix.
+- **Freibauer/PST-Damping (Bxe4) → Term implementiert, A/B-startklar (NICHT gestartet).** Diagnose mit
+  Produktion+SF17.1 frisch reproduziert: Blatt `…2R1K3 w` Martuni **−67** vs SF **−368** (Material
+  ehrlich −223, aber `pawn_bonus +120` + `pst_eg +140` polstern); Wurzel spielt **d3e4 (Bxe4)**,
+  SF-Best **d3e2 (Be2)** −118. **Neuer Term `eval::material_deficit_damping`** (eval.rs/eval_config.rs):
+  liegt eine Seite statisch ≥ `deficit_threshold` cp zurück, werden ihr Freibauer-Vormarschbonus
+  (`passed_pct` %) + positiver PST-eg-Überschuss (`pst_eg_pct` %) gekürzt. Integration **exakt wie
+  `material_imbalance`** (eigene Funktion + Breakdown-Zeile, Konsistenz-Check grün), `evaluate_side`/
+  `pawn_bonus` unangetastet. Code-Default 100/100 → **verhaltensgleich**. 82 Tests grün (1 neuer).
+  - **Smoke (eval.toml `[damping]` 50/50 ab 200):** Blatt −67 → **−127** (damping −60, korrekte
+    Richtung); Default-Build identisch −67; A/B-Isolation bestätigt (baseline `imbalance_8080`
+    ignoriert `[damping]` → −67, Variante wertet → −127). **ABER: Wurzel kippt NICHT** auf Be2 —
+    selbst bei voller Entfernung (0/0) nur −187 (vs SF −368). Die ~300cp-Optimismus stecken nicht nur
+    in Freibauer+PST; ~180cp bleiben (Mobilität/Turmlinien/Materialbewertung). → **partieller
+    Eval-Ehrlichkeits-Fix, kein Zug-Kipper** (wie schon beim Imbalance-Term). Wirkung ist **global**
+    (jede Seite ≥200cp hinten), breiter als der enge Imbalance-Trigger → A/B misst Netto-Effekt.
+  - **A/B GELAUFEN (1000 Partien, 1h46, sauber):** „Results of **baseline** vs passerdamp" →
+    **passerdamp −2.08 Elo ±16.21, LOS 59.96 %** (Münzwurf), Punkte baseline 503.0 / passerdamp 497.0
+    (50.30 / 49.70 %), W/L/D 415/409/176, Pentanomial [50,72,258,62,58], SPRT [0,10] unentschieden
+    (LLR −0.18, leicht Richtung H0). Attribution per PGN-Zählung gegengeprüft (passerdamp 497.0,
+    −6 Punkte) [[feedback-ab-attribution-check]]. **Verdikt: FLAT** — kein klarer Verlierer wie der
+    Outpost (−10.77/LOS 89 %), aber auch **kein Gewinn**. Halbzeit war baseline +18 → 2. Hälfte
+    aufgeholt. **Schwächerer Rollout-Kandidat als der Imbalance-Term**: der war flat im Selfplay, FIXTE
+    aber sein Eval-Ziel (Nxf7-Blatt) bei engem Trigger → Lichess Rapid +80; der Damping-Term ist flat,
+    **fixt sein Ziel NICHT** (Bxe4 unkippbar) und wirkt **global**. **Rollout/dormant/re-tune =
+    Tobias-Entscheid** (06.06.). Live-Bot war nie betroffen (md5 `0e25cb5b…` unverändert).
+  - **ROLLOUT 06.06. (Tobias): Damping LIVE, Lichess-Validierung.** `passerdamp_5050` →
+    `target/release/martuni` (md5 `ca01a829…`), `eval.toml [damping]` 50/50, Bot-Neustart 21:14
+    (active, „Welcome Martuni / connected", Bot war idle → keine Partie betroffen; Restart bricht
+    ohnehin keine laufende Partie ab, max. ~1 s). **Anker fürs Protokoll: 06.06. Blitz 2108 /
+    Rapid 2161.** Re-Check nach >300 Partien gegen die Anker; bei Einbruch Rollback =
+    `eval.toml [damping]` 100/100 + Neustart (kein Rebuild) ODER Binary zurück auf imbalance_8080.
+    Code noch UNCOMMITTED (Backup `martuni.imbalance_8080_20260531` bleibt). KPI: kein
+    Rating-Einbruch; Idealfall Verbesserung wie beim Imbalance-Term (flat-A/B → Rapid +80).
+
+**06.06.2026 (Abend) — Outpost-A/B VERWORFEN, zwei Hebel parallel angesetzt (Freibauer-PST-Damping + simpleEval-Deep-Dive).**
+- **A/B-Ergebnis (1000 Partien, sauber beendet):** „Results of **baseline** vs outpost" →
+  **outpost −10.77 Elo ±17.33**, LOS **88.89 % ZUGUNSTEN baseline**, Punkte baseline 515.5 (51.55 %),
+  W/L/D 432/401/167, Pentanomial [57,64,243,63,73] (WW 73 > LL 57 für baseline), PairsRatio 1.12,
+  SPRT [0,10] unentschieden (LLR 0.70). Attribution gegengeprüft gegen `run.sh`/`config.json`
+  (baseline=`imbalance_8080` ignoriert die Sektion, outpost=`outpost_2515` wertet 25/15),
+  [[feedback-ab-attribution-check]]. **Der Term ist hier der Verlierer.** CI deckt die Null, aber
+  Richtung klar negativ — deckt sich mit dem früheren negativen Outpost-Gate (05.06.).
+- **Kein Rollout.** `eval.toml [outpost]` zurück auf **0/0** (Term dormant, Code bleibt im Tree,
+  verhaltensgleich). Live-Bot war nie betroffen (`target/release/martuni` == `imbalance_8080`,
+  md5 `0e25cb5b…`). Backup `martuni.outpost_2515_20260606` bleibt liegen.
+- **Nächste Hebel — Tobias-Entscheid: BEIDE parallel umsetzen, getrennt trackbar:**
+  1. **Freibauer/PST-Damping (Bxe4-Bug)** — vertagter Präzisionsfix (Punkt b): Freibauer/PST-
+     Kompensation gegen Material-Defizit dämpfen. Seltenes, *klar identifizierbares* Muster.
+  2. **simpleEval-Deep-Dive** — Sparring-Hotspot-Engine, Cluster-Diagnose ab ≥15 Partien.
+  Begründung der Parallelität: die beiden Fixes überschneiden sich mit sehr hoher Wahrscheinlichkeit
+  null (seltenes Freibauer/Material-Muster vs. was-auch-immer der simpleEval-Fix wird) → trotz
+  gleichzeitiger Umsetzung getrennt attribuierbar.
+
+**06.06.2026 — Outpost-Standalone-A/B gestartet (Hebel 1 von 3 gewählt).** Nach Wiedereinstieg
+„wo waren wir?" hat Tobias den Outpost-Term als nächsten Schritt gewählt (billigster *positiver*
+Versuch, unabhängig vom ruhenden Cluster).
+- **Entflechtung zuerst:** Die verworfene King-Gefahr-Änderung lag noch uncommitted in `search.rs`
+  und war **nicht** dormant (kein Flag → beim Bauen aktiv) → hätte den Outpost-Build kontaminiert.
+  `src/search.rs` auf HEAD revertiert; der Change als Patch `experiments/kingdanger_search_20260605.patch`
+  gesichert (rekonstruierbar, nicht verloren). Binary-Backup `martuni.kingdanger_20260605` bleibt.
+- **Variante gebaut + verifiziert:** `eval.toml [outpost]` 0/0 → **25/15** gesetzt. Outpost-Unit-Tests
+  grün, Release gebaut. Smoke: Variante feuert auf Test-Outpost (Sd5/c4, schwarze c/e-Bauern fehlen)
+  `knight_outpost=15` (EG-Phase); **Baseline `imbalance_8080` kennt die `[outpost]`-Sektion nicht**
+  → ignoriert 25/15 → einziger Engine-Unterschied ist der Outpost-Term. Variante gesichert als
+  `martuni.outpost_2515_20260606`, `target/release/martuni` wieder auf Produktion (md5 == imbalance_8080)
+  → **Live-Bot unverändert**.
+- **A/B läuft (`matches/baseline_vs_outpost/run.sh`):** SPRT [0,10], 1000 Partien, 5+0.05, UHO,
+  conc=2, ~1h45, detached via nohup (PID-Start 06.06.). Invertiertes Design ggü. kingdanger: beide
+  Engines lesen dieselbe Projekt-Root-`eval.toml` mit 25/15; nur die Variante wertet sie.
+  **eval.toml bis Match-Ende NICHT anfassen** (wird beim Engine-Start gelesen). Danach Lichess-Lookback.
+- **Challenge-Cron** weiterhin pausiert (auskommentiert) — nach dem Match ggf. wieder aktivieren.
+
+**05.06.2026 — King-Gefahr-Suchänderung implementiert (NMP+LMR), Smoke grün, A/B bereit (noch nicht gestartet).**
+Tobias-Entscheid nach der diffusen Cluster-Diagnose: **Such-Seite** (höhere ROI als diffuse
+Eval-Features; Daten zeigen, dass selbst Partie-Tiefe die Angriffe verpasst). Umfang: NMP + LMR.
+- **Umsetzung (`src/search.rs`):** neuer Helfer `king_in_danger(board, side)` — ≥ 2 distinkte
+  gegnerische Offiziere auf die 3×3-Königszone (spiegelt `eval::king_danger`, Short-circuit bei 2).
+  Pro Knoten einmal als `our_king_danger` berechnet, **gegated mit `!in_check && depth >= 3`**
+  (verhaltensgleich, da NMP/LMR beide depth ≥ 3 verlangen → kein Overhead an flachen Knoten).
+  Wirkt als Zusatzbedingung `&& !our_king_danger` in der NMP-Bedingung UND in LMR-`can_reduce`:
+  unter Königsangriff **weniger Pruning, nie mehr**. Heftig kommentiert (Lernhilfe).
+- **Smoke (05.06.):** Build clean, **81/81 Tests grün**. Quiet-Stellungen (3 Trials): NEW == OLD,
+  Tiefe 7, NPS gleich (Depth-Gate eliminiert Overhead). King-Danger-Stellung: feuert (OLD d6 /
+  NEW d5 bei gleicher Zeit — weniger Pruning, ~1 Ply flacher, defensiverer Zug Rd1 statt Bc2).
+  Tradeoff lokalisiert auf Königsangriff-Knoten, Null-Kosten anderswo.
+- **A/B bereit (Pflicht vor Rollout — Such-Änderungen historisch heikel):** Skript
+  `matches/baseline_vs_kingdanger/run.sh` (SPRT [0,10], 1000 Partien, 5+0.05, UHO, conc=2,
+  ~1h45). baseline = `martuni.imbalance_8080_20260531`, variant = `martuni.kingdanger_20260605`.
+  Beide dieselbe eval.toml (Outpost dormant → isoliert die Such-Änderung). **Noch NICHT gestartet**
+  — läuft auf der Live-Bot-Maschine, Tobias entscheidet Start. Danach Lichess-Lookback.
+- **Bot unverändert / Sicherheit:** `target/release/martuni` wurde nach dem Build wieder auf die
+  Produktion (`martuni.imbalance_8080_20260531`) zurückgesetzt — ein Bot-Neustart lädt also die
+  geprüfte Version, NICHT die ungetestete King-Gefahr-Änderung. **Rollout NACH grünem A/B+Lichess:**
+  `cp target/release/martuni.kingdanger_20260605 target/release/martuni` + Bot-Neustart.
+- **A/B-ERGEBNIS 05.06. (1000 Partien): King-Gefahr VERLIERT — verworfen.** „Results of **baseline**
+  vs kingdanger": **Elo +28.90 ±17.30 für baseline** (Produktion), kingdanger 45.85 % / 458-375-167,
+  LLR 2.55, CI schließt 0 aus → signifikant. Attribution gegengeprüft per PGN-Punktezählung
+  (baseline 541.5 vs kingdanger 458.5), [[feedback-ab-attribution-check]]-Lehre beachtet.
+  **Diagnose des Fehlschlags:** der `king_in_danger`-Trigger (≥2 Angreifer auf die Zone) feuert im
+  normalen Mittelspiel viel öfter als *echte* Angriffe → NMP/LMR breit aus → Tiefenverlust überall
+  kostet mehr als das Erkennen seltener Angriffe bringt. **Kein Rollout**, Bot war nie betroffen
+  (`target/release/martuni` = Produktion). King-Gefahr-Code bleibt als dokumentiertes Negativ-
+  Experiment im Tree (dormant, da depth-gegated + nur bei ≥2 Angreifern). Bestätigt: auch die
+  Such-Seite hat im diffusen Cluster keinen leichten Gewinn.
+- **Option 4 — Selektions-Bias gemessen (05.06., `tools/selection_bias.py`):** 60 zufällige
+  Martuni-MG-Züge mit `%eval`, SF d26 before+after. **Nicht-Blunder-Gap median +97 cp** (mean +88,
+  Perzentile 10/25/50/75/90 = −98/−12/+97/+203/+288), MG-Blunderrate 5/60 (8 %). Cluster-Blunder
+  hatten +250 → **cluster-spezifischer Extra-Optimismus ~+153 cp über dem Baseline**.
+  - **Befund:** Der +97-Baseline ist größtenteils **inhärent** (Optimizer's Curse — gemessen wird
+    Martunis Eval genau des selbst-gewählten, höchstbewerteten Zuges → systematisch optimistischer
+    als neutraler Tiefen-Eval; plus Tiefen-/Stärke-Abstand flache Blitz-Suche vs SF d26), **kein
+    fixbarer Bug**. Die +153 obendrauf bei Blundern sind der echte cluster-spezifische Anteil.
+  - **Schluss:** ~40 % des scheinbaren +250-Cluster-Gaps war inhärentes Mess-Bias. Der echte Rest
+    ist diffus und ohne sauberen Hebel (Mobility/King-Safety/Outpost ausgeschlossen, Such-King-Gefahr
+    A/B-verloren). **→ Motivlosen Cluster ruhen lassen** (Roadmap-Option 3); kein weiteres Feature
+    blind darauf bauen. Nächste Hebel: simpleEval-Deep-Dive (≥15 Partien) oder vertagtes
+    Freibauer/PST-Damping. Outpost-Term bleibt dormant als eigenständiger A/B-Kandidat.
+
+**05.06.2026 — Cluster statistisch ausgezählt (222 MG-motivlose): diffus, KEIN Ein-Feature-Fix.**
+Größere Stichprobe (Tobias-Entscheid „erst messen"): alle 222 MG-motivlosen Stellungen bei SF
+verifiziert + aktionables Motiv ausgezählt (`tools/classify_cluster.py` / `classify_report.py`).
+- **Cluster real:** 82 % überleben (181/222), davon 172 echt positionell, 9 Tiefen-Taktik (Suche).
+  Median Optimismus-Gap **+250 cp** (109/146 > 150 cp) — robust über alle Buckets.
+- **Kein dominantes Motiv** (Prioritäts-Klassifikation der 172): `other_passive` 40 % /
+  `pawn_break` 23 % / `king_danger` 21 % / `greedy_passive` 16 %. Höchste Gaps (= Eval am
+  falschesten): **king_danger 346 cp**, **greedy_passive 343 cp**; `pawn_break` nur 149 cp.
+  SF-Bestzug: 62 % Figurenzug, 30 % Bauernhebel, 8 % Königszug.
+- **King-Safety-Vorabcheck (Lehre aus Outpost):** In den 42 king_danger-Stellungen feuert
+  Martunis bestehender king_safety **median nur −10 cp** (14/42 sehen GAR KEINE Gefahr) —
+  er unterfeuert real. ABER: selbst ein korrekt feuernder Term (typ. 20–80 cp) schließt keinen
+  346-cp-Gap; der Rest ist gegnerischer Angriff, der über Taktik landet (= Such-Seite).
+- **Schlussfolgerung:** Die motivlosen Drops sind **kein einzelner adressierbarer Hotspot**,
+  sondern der diffuse Long-Tail von „Eval ~250 cp zu optimistisch in ruhigen Stellungen" —
+  Mischung aus Selektions-Bias (per Definition Martunis Eval-Fehlmomente), echten verteilten
+  Positionswissens-Lücken UND Such-/Horizon-Anteil. Kein eval-Feature deckt > 40 %, und die
+  größten Slices haben Gaps, die ein statischer Term nicht schließt.
+- **Optionen (Tobias entscheidet):** (1) **Such-Seite King-Gefahr** (Extensions / weniger LMR
+  wenn eigener König angegriffen) — die Daten stützen, dass selbst Partie-Tiefe die Angriffe
+  verpasst → evtl. höhere ROI als Eval; (2) **King-Safety strukturell nachschärfen** (unterfeuert
+  belegt) + Outpost-Term standalone A/B — kleine, sichere Eval-Gewinne, aber je < 21 % Coverage;
+  (3) Cluster als „kein klarer Hebel" akzeptieren und zu anderem Roadmap-Punkt wechseln.
+
+**05.06.2026 — Knight-Outpost-Term implementiert (Code-Default 0), ABER Diagnose-Gate negativ für den Cluster.**
+Tobias wählte für die motivlosen Drops die Eval-Seite → Aktivität/Outposts → „Springer, flach,
+gedeckt". Umgesetzt mit dem etablierten sicheren Muster: `eval::is_knight_outpost` (Springer
+4.–6. Reihe, bauern-gedeckt, kein gegn. Bauern-Angriff möglich = „Loch"), phase-getapert, Hook in
+`evaluate_side` + Breakdown (`knight_outpost`-Zeile), Parameter `eval.toml [outpost]`
+(`knight_mg`/`knight_eg`), **Code-Default 0 → verhaltensgleich**. Build clean, **81/81 Tests grün**
+(2 neue). `eval.toml` trägt die Sektion mit 0/0 (inaktiv) — kein Live-Effekt bis Rollout-Entscheid.
+- **Gate-Ergebnis (negativ):** Auf den 35 Diagnose-Stellungen feuert der Term **nur in 1/35**
+  (beim Gegner), Optimismus-Gap **unverändert +309 → +308 cp** (`tools/outpost_probe.py`).
+  → **Outposts kommen in diesem Cluster praktisch nicht vor**; der Term repariert die motivlosen
+  Drops NICHT. Der Term selbst ist korrekt und sinnvoll — aber als **eigenständiger
+  Eval-Verbesserungs-Kandidat** zu sehen, nicht als Cluster-Fix.
+- **Prozess-Lehre:** Feature-Prävalenz im Ziel-Cluster VOR dem Bauen prüfen (hätte den
+  Fehlschuss gespart). Die 6 qualitativen Survivors zeigen als wiederkehrendes Eval-Motiv eher
+  **Schwerfiguren-Passivität + verpasste Bauernhebel (…f5/…g5) + zugige eigene Königsstellung**,
+  NICHT Springer-Outposts.
+- **Status Outpost-Term:** implementiert, dormant (0/0), getestet → **bereit für eigenständigen
+  A/B**, falls gewünscht; ODER shelven. Cluster-Fix offen (Richtung: Schwerfiguren-Aktivität /
+  Bauernhebel-Bewusstsein — vor dem Bauen erst größere Stichprobe statistisch auszählen).
+
+**05.06.2026 — Lookback Imbalance-Term (80/80) grün: Gate passed, B/P flat, Zielmuster aber selten.**
+Auswertung `analyse-04.06.2026.json` (**382 Partien, 589 Blunders, B/P 1.542**
+— flat ggü. 1.54 @01.06.; Trendserie 1.74 → 1.589 → 1.54 → 1.542 stabilisiert).
+Verteilung: Mittelspiel 411 (1.076/P) / Endspiel 147 (0.385/P) / Eröffnung 31
+(0.081/P). Das gesamte Fenster lief **mit aktivem Imbalance-Term** — laufendes
+`target/release/martuni` ist per Hardlink identisch mit dem Backup
+`martuni.imbalance_8080_20260531`, `eval.toml [imbalance]` = 80/80.
+
+- **Rating-Gate grün (KPI „kein Rating-Einbruch vs Anker" erfüllt):** Anker 31.05.
+  Blitz 2101 / Rapid 2118 / Bullet 2135. Live-Stand 05.06. (Lichess-API, alle
+  nicht-provisorisch): **Blitz 2095 (−6, Rauschen)**, **Rapid 2198 (+80, klar
+  positiv)**, Bullet 2094 (−41). Kein Einbruch in Blitz/Rapid, Rapid deutlich hoch.
+- **Zielmuster (Nxf7/Bxe4 „2 Leichtfiguren vs Turm+Bauer") kam live kaum vor:**
+  Die Imbalance-Signatur (eine Seite ≥2 Minor mehr UND ≥1 Turm weniger) tritt in
+  nur **26/589** Blunder-Stellungen auf, davon genau **1** mit `trade_down`-Motiv.
+  Die `trade_down`-Blunder (27, 0.071/P) sind **nicht** das Imbalance-Muster,
+  sondern schlichte Hänger (`hangs_bishop/knight/queen`) + Dame-ins-Matt — gleiche
+  Minor-Zahl auf beiden Seiten. → Der Term ist als **harmlos + eval-ehrlich**
+  validiert (Gate passed), aber die Live-Daten konnten die anvisierte Pathologie
+  kaum exerzieren. Bestätigt die 31.05.-Prognose: „ein Einzel-Term ist nur ein
+  Teilfix; die zwei Eval-Lücken sind in der Suche verschränkt".
+- **`hangs_*` leicht runter** (92, 0.241/P vs 0.260/P @01.06.), `allows_mate`
+  stabil (42, 0.110/P — wie 0.109 @09.05., keine Regression). Auf den 26
+  Signatur-Stellungen ist Martuni weiterhin median ~220 cp zu optimistisch
+  (13/22 >150 cp), aber **d17-Snapshot-Trap-Vorbehalt** gilt (Analyzer-Tiefe,
+  heterogene Stichprobe, nur 1 `trade_down`) → kein Deep-Dive-würdiger Cluster.
+- **Strukturprofil unverändert:** 295/589 (50 %) **ohne Motiv** (leise positionelle
+  Drops); `missed_capture` 70 (median loss nur 244 cp, alle Captures) — konsistent
+  mit Analyzer-d17-Bias, **nicht** als real validiert; `positional_collapse` 68 /
+  `exposed_king` 33 großteils in bereits verlorenen Stellungen; Endspiel-Matt-Klasse
+  29 (KP/Q-Endspiel-Tiefentaktik, Such- nicht Eval-Problem).
+- **Hotspots:** stickshark99 (58 Partien, B/P 1.71 — großes Sample, persistent),
+  AetherBot (53, 1.62 — stabil ggü. 1.65 @23.05.), EpimetheusBot (22, 1.91 —
+  hat bereits Buch-Patches), Boosted_Maia_1900 (14, 2.14 — neuer, beobachten).
+  **simpleEval** (Re-Check-Ziel der Roadmap): 13 Partien, **B/P 2.08** (von 2.85
+  / 7 Partien runter, Trend↓), Schwelle ≥15 Partien fast erreicht — weiter tracken.
+- **Empfehlung/offen:** Imbalance-Term **behalten** (Gate grün, kein Risiko).
+  Freibauer/PST-Damping (Bxe4-Bug, b) wird **auf später vertagt** (Tobias 05.06.):
+  Imbalance-Muster live selten, kein Passer-Cluster sichtbar → geringe Dringlichkeit.
+  **Gewählter Hebel: die 50 % motivlosen positionellen Drops** (siehe Diagnose unten).
+
+**05.06.2026 — Diagnose „motivlose Drops": echter Eval-Optimismus-Cluster, kein d17-Noise.**
+Die 295/589 motivlosen Blunder (kein taktisches Motiv, alle loss 150–296 cp — per
+Konstruktion der ruhige Rest-Bucket unterhalb der `positional_collapse`-Schwelle 300)
+tief verifiziert: Stichprobe 50 (geschichtet Phase × Verlust) bei **SF movetime 2.0 s
+(~d26)** statt der Analyzer-0.3 s, `before+after` neu bewertet (`tools/verify_nomotif.py`).
+- **Cluster ist real, kein Snapshot-Noise:** **78 % überleben** (deep_loss ≥ 150),
+  nur 10 % verpuffen. **Phasenabhängig:** Mittelspiel **90 %** real (median deep_loss
+  198), Endspiel nur **36 %** (median 50 — der Endspiel-Anteil ist 0.3-s-Noise, da SF
+  flach im EG schwach; **Endspiel-Motivlos depriorisieren**).
+- **Zwei Hebel in den Survivors:** ~10 % **Tiefen-Taktik/Matt** (Martuni + flacher
+  Analyzer übersehen erzwungenes Matt → `search.rs` Extensions/Tiefe, kleinerer
+  Cluster); ~90 % **echte positionelle Drops** (150–500 cp) → Eval.
+- **Root-Cause (Eval-Breakdown-Aggregat über 35 positionelle Survivors,
+  `tools/eval_breakdown_agg.py`):** Martunis Eval ist **konsistent ~300 cp zu
+  optimistisch** — Game-Depth-`%eval` median **+283 cp** zu rosig (24/27 >150 cp),
+  statische Eval **+309 cp** (Martuni Ø +134 vs d26 Ø −175). Attribution: Optimismus
+  dominiert von **`material` (+62.5 cp Mover-Sicht)** in objektiv verlorenen Stellungen,
+  während die **dynamischen/positionellen Terme zu dünn** sind: `mobility_mg` **+0.3**,
+  `mobility_eg` +3.7, `king_safety` +5.7. SF sieht ~300 cp Kompensation/Dynamik, für die
+  Martunis Eval **keinen ausreichenden Term hat**.
+- **Befund:** Dieselbe Familie wie Nxf7/Bxe4 (Material > Kompensation), aber **allgemein**
+  statt schmales Imbalance-Muster. Strukturell: Eval ist bewusst materialistisch mit
+  gedeckelter Safe-Mobility (Summe ~100–120 cp) und **fehlendem Positionswissen**
+  (rückständige Bauern / schwache Felder / Outposts laut [blunder-analyse.md](blunder-analyse.md)
+  Z.137 nicht vorhanden). Passt zum simpleEval-Hotspot (Engine-Gegner bestrafen Materialismus).
+- **Probe-Ergebnis 05.06. — beide vorhandenen Gewichts-Hebel ausgeschlossen.** Tobias wählte
+  „Mobility-Probe zuerst". Zerstörungsfrei getestet (Test-`eval.toml` in Temp-CWD,
+  `tools/mobility_probe.py` / `tools/ksafe_probe.py`), Gate = Optimismus-Gap auf den 35
+  Diagnose-Stellungen (Baseline +309 cp):
+  - **Mobility (Minoren+Türme MG ×2): Gap +309 → +288 cp** (nur ~7 % geschlossen; selbst
+    Verdopplung verschiebt die Eval ~5 cp/Stellung — der Mobility-DIFF zwischen den Seiten
+    ist strukturell zu klein). **Ausgeschlossen.**
+  - **King-Safety (Angreifer-Gewichte ×2 + SafetyTable ×1.5): Gap +309 → +297 cp** (~4 %).
+    **Ausgeschlossen.**
+  - **Schluss:** Der fehlende ~300 cp wohnt in **keinem existierenden Eval-Term** — kein
+    billiger TOML-Fix. Es ist *strukturell fehlendes* Positionswissen (das, was Safe-Mobility
+    laut Doku ignoriert: Pins, Koordination, Initiative, Bauernschwächen, Outposts; vgl.
+    [blunder-analyse.md](blunder-analyse.md) Z.137). Methodik-Lehre: existierende
+    eval.toml-Gewichte VOR jedem A/B billig am Diagnose-Set gaten — spart Selfplay/Lichess-Zyklen.
+- **Nächster Schritt (offen):** Da Gewichts-Tuning raus ist, bleibt (2) **neues Positions-
+  wissen in `eval.rs`** (Outposts / rückständige Bauern / schwache Felder) — echte Eigenarbeit.
+  Empfehlung: erst **qualitative Stellungs-Diagnose** (Handvoll Survivors, SF-Plan vs
+  Martuni-Zug) um den **EINEN dominanten fehlenden Begriff** zu finden, statt alle Features
+  gleichzeitig zu bauen. Eval-Änderungen historisch regressionsanfällig (conn_rooks=150,
+  Passer-Raise) → **immer A/B + Lichess vor Rollout**.
+
 **31.05.2026 — Auswertung 01.06., Lookback grün, SEE-Follow-up als Eval-Problem entlarvt.**
 Auswertung `analyse-01.06.2026.json` (173 Partien, 266 Blunders, **B/P 1.54**
 — Trend runter: 1.74 @27.05. → 1.589 @29.05. → 1.54). Verteilung: Mittelspiel
