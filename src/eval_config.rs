@@ -93,6 +93,33 @@ pub struct EvalParams {
     /// Siehe `eval::material_imbalance`.
     pub imbalance_two_minors_mg: i32,
     pub imbalance_two_minors_eg: i32,
+    /// Knight-Outpost-Bonus (Diagnose 05.06.2026): ein durch einen eigenen
+    /// Bauern gedeckter Springer auf vorgeschobenem Feld (4.-6. Reihe aus
+    /// eigener Sicht), das kein gegnerischer Bauer je angreifen kann, ist
+    /// dauerhaft unvertreibbar und positionell wertvoller, als PST/Safe-Mobility
+    /// erfassen. Hintergrund: die "motivlosen" Mittelspiel-Drops sind real
+    /// (78 % halten bei SF d26) und entstehen durch Figuren-Passivitaet bei
+    /// materiellem Gleichstand/Vorteil — Eval ist ~300 cp zu optimistisch.
+    /// Phase-getapert (MG > EG: im Mittelspiel zaehlt der raumgewinnende,
+    /// blockierende Springer mehr). Default 0 = inaktiv (verhaltensgleich zur
+    /// Vorversion); wirksame Werte in eval.toml `[outpost]`.
+    /// Siehe `eval::is_knight_outpost`.
+    pub outpost_knight_mg: i32,
+    pub outpost_knight_eg: i32,
+    /// Material-Defizit-Daempfung der "Kompensations"-Terme (Bxe4-Diagnose
+    /// 06.06.2026). Befund: Martuni gibt eine Leichtfigur fuer einen Bauern und
+    /// bewertet die Folgestellung ~300 cp zu optimistisch, weil ein vorgeschobener
+    /// Freibauer (`pawn_bonus`) + gute Figurenfelder (`pst_eg`) den Figurenverlust
+    /// kaschieren — obwohl der Gegner eine Mehrfigur zum Blockieren/Schlagen hat.
+    /// Wirkung (`eval::material_deficit_damping`): liegt eine Seite statisch um
+    /// >= `damp_deficit_threshold` cp zurueck, werden IHR Freibauer-Vormarschbonus
+    /// (auf `damp_passed_pct` %) und ihr positiver PST-eg-Ueberschuss (auf
+    /// `damp_pst_eg_pct` %) gekuerzt. Defaults: threshold 200 (≈ Leichtfigur fuer
+    /// Bauer), beide Prozentsaetze 100 → KEIN Abschlag → verhaltensgleich zur
+    /// Vorversion. Wirksame Werte in eval.toml `[damping]`.
+    pub damp_deficit_threshold: i32,
+    pub damp_passed_pct: i32,
+    pub damp_pst_eg_pct: i32,
     pub connected_rooks_pair: i32,
     /// Turm auf vollständig offener Linie (keine eigenen und keine gegnerischen Bauern)
     pub rook_open_file_bonus: i32,
@@ -259,6 +286,17 @@ impl Default for EvalParams {
             bp_open_scale: 0,
             imbalance_two_minors_mg: 0,
             imbalance_two_minors_eg: 0,
+            // Code-Default 0 → Term inaktiv, Build verhaltensgleich. Rollout-Wert
+            // erst nach dem Diagnose-Gate (Optimismus-Gap auf den 35 Stellungen)
+            // + A/B + Lichess in eval.toml `[outpost]` eintragen.
+            outpost_knight_mg: 0,
+            outpost_knight_eg: 0,
+            // Defizit-Schwelle 200 cp ≈ Leichtfigur fuer einen Bauern. Beide
+            // Prozentsaetze 100 → kein Abschlag → Build verhaltensgleich. Rollout-
+            // Werte (z.B. 50/50) erst nach A/B + Lichess in eval.toml `[damping]`.
+            damp_deficit_threshold: 200,
+            damp_passed_pct: 100,
+            damp_pst_eg_pct: 100,
             connected_rooks_pair: 150,
             rook_open_file_bonus: 30,
             rook_semiopen_file_bonus: 15,
@@ -394,6 +432,20 @@ impl EvalParams {
         p.imbalance_two_minors_mg = i(&imb, "two_minors_mg", p.imbalance_two_minors_mg);
         p.imbalance_two_minors_eg = i(&imb, "two_minors_eg", p.imbalance_two_minors_eg);
 
+        // [outpost] — Knight-Outpost-Bonus (Diagnose 05.06.2026). Ohne Sektion
+        // bleibt der Code-Default 0 (Term inaktiv, verhaltensgleich).
+        let outp = section(v, "outpost");
+        p.outpost_knight_mg = i(&outp, "knight_mg", p.outpost_knight_mg);
+        p.outpost_knight_eg = i(&outp, "knight_eg", p.outpost_knight_eg);
+
+        // [damping] — Material-Defizit-Daempfung der Kompensations-Terme
+        // (Diagnose 06.06.2026, Bxe4-Bug). Ohne Sektion bleiben die Defaults
+        // (Prozentsaetze 100 → kein Abschlag, verhaltensgleich).
+        let damp = section(v, "damping");
+        p.damp_deficit_threshold = i(&damp, "deficit_threshold", p.damp_deficit_threshold);
+        p.damp_passed_pct = i(&damp, "passed_pct", p.damp_passed_pct);
+        p.damp_pst_eg_pct = i(&damp, "pst_eg_pct", p.damp_pst_eg_pct);
+
         let pw = section(v, "pawns");
         p.pawn_isolated_penalty = i(&pw, "isolated_penalty", p.pawn_isolated_penalty);
         p.pawn_de_file_bonus = i(&pw, "de_file_bonus", p.pawn_de_file_bonus);
@@ -453,12 +505,9 @@ impl EvalParams {
         p.ks_queen_weight = i(&ks, "queen_weight", p.ks_queen_weight);
         p.ks_shield_rank1_bonus = i(&ks, "shield_rank1_bonus", p.ks_shield_rank1_bonus);
         p.ks_shield_rank2_bonus = i(&ks, "shield_rank2_bonus", p.ks_shield_rank2_bonus);
-        p.ks_shield_missing_penalty =
-            i(&ks, "shield_missing_penalty", p.ks_shield_missing_penalty);
-        p.ks_exposed_center_penalty =
-            i(&ks, "exposed_center_penalty", p.ks_exposed_center_penalty);
-        p.king_exposure_weight =
-            i(&ks, "exposure_weight", p.king_exposure_weight);
+        p.ks_shield_missing_penalty = i(&ks, "shield_missing_penalty", p.ks_shield_missing_penalty);
+        p.ks_exposed_center_penalty = i(&ks, "exposed_center_penalty", p.ks_exposed_center_penalty);
+        p.king_exposure_weight = i(&ks, "exposure_weight", p.king_exposure_weight);
 
         if let Some(arr) = ks
             .and_then(|s| s.get("safety_table"))
@@ -475,8 +524,7 @@ impl EvalParams {
 
         let eg = section(v, "endgame");
         p.eg_corner_weight = i(&eg, "corner_weight", p.eg_corner_weight);
-        p.eg_king_proximity_weight =
-            i(&eg, "king_proximity_weight", p.eg_king_proximity_weight);
+        p.eg_king_proximity_weight = i(&eg, "king_proximity_weight", p.eg_king_proximity_weight);
         p.eg_passed_unstoppable_bonus = i(
             &eg,
             "passed_unstoppable_bonus",

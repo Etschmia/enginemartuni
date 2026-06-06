@@ -43,8 +43,15 @@ pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
     let b_trap_eg = rook_trapped_endgame_malus(board, Color::Black, p);
     let trap = taper(0, w_trap_eg - b_trap_eg, phase);
 
-    non_pst + taper(mg, eg, phase) + king_act + king_pass_syn + pawn_eg_guard + mob + trap
+    non_pst
+        + taper(mg, eg, phase)
+        + king_act
+        + king_pass_syn
+        + pawn_eg_guard
+        + mob
+        + trap
         + material_imbalance(board, phase, p)
+        + material_deficit_damping(board, phase, p, w_eg, b_eg)
 }
 
 /// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
@@ -94,6 +101,95 @@ fn material_imbalance(board: &Board, phase: i32, p: &EvalParams) -> i32 {
     } else {
         0
     }
+}
+
+/// Material-Defizit-Daempfung der "Kompensations"-Terme (Diagnose 06.06.2026,
+/// Bxe4-Bug, docs/roadmap.md). Problem: opfert Martuni eine Leichtfigur fuer
+/// einen Bauern, bewertet es die Folgestellung ~300 cp zu optimistisch, weil ein
+/// vorgeschobener Freibauer (`pawn_bonus`) und gute Figurenfelder (`pst_eg`) den
+/// Figurenverlust kaschieren — obwohl der Gegner eine Mehrfigur zum Blockieren
+/// oder Schlagen hat. Gegenmittel: liegt eine Seite statisch um
+/// >= `damp_deficit_threshold` cp zurueck, werden IHRE Kompensations-Boni
+/// gekuerzt — der Freibauer-Vormarschbonus auf `damp_passed_pct` %, der positive
+/// PST-eg-Ueberschuss auf `damp_pst_eg_pct` %.
+///
+/// Rueckgabe in Weiss-Sicht (cp), als additive Korrektur analog `material_imbalance`:
+/// ein Abschlag bei Weiss zieht das Total runter, ein Abschlag bei Schwarz hoch.
+/// `w_pst_eg`/`b_pst_eg` sind die bereits in `evaluate()` berechneten Roh-PST-eg-
+/// Summen je Seite (kein zweites `pst_score`). Beide Prozentsaetze 100 (Default)
+/// → Rueckgabe 0 → verhaltensgleich. Code-Default damit inaktiv.
+fn material_deficit_damping(
+    board: &Board,
+    phase: i32,
+    p: &EvalParams,
+    w_pst_eg: i32,
+    b_pst_eg: i32,
+) -> i32 {
+    // Kein Abschlag konfiguriert → No-op (spart die Material-Zaehlung im Hot-Path).
+    if p.damp_passed_pct >= 100 && p.damp_pst_eg_pct >= 100 {
+        return 0;
+    }
+
+    // Statisches Material beider Seiten aus den Anker-Werten [material] (ohne
+    // Koenig). Bewusst NICHT die dynamische, getaperte Figurenbewertung — die
+    // Schwelle soll ein stabiler Materialzaehler sein, kein bewegliches Ziel.
+    let material = |us: Color| -> i32 {
+        let bb = *board.color_combined(us);
+        (*board.pieces(Piece::Pawn) & bb).popcnt() as i32 * p.pawn
+            + (*board.pieces(Piece::Knight) & bb).popcnt() as i32 * p.knight
+            + (*board.pieces(Piece::Bishop) & bb).popcnt() as i32 * p.bishop
+            + (*board.pieces(Piece::Rook) & bb).popcnt() as i32 * p.rook
+            + (*board.pieces(Piece::Queen) & bb).popcnt() as i32 * p.queen
+    };
+    let w_mat = material(Color::White);
+    let b_mat = material(Color::Black);
+
+    // Abschlag (>= 0 cp), den eine materiell unterlegene Seite auf ihre
+    // Kompensations-Terme bekommt. 0, wenn die Seite nicht (genug) zurueckliegt.
+    let side_cut = |us: Color, pst_eg: i32| -> i32 {
+        let deficit = if us == Color::White {
+            b_mat - w_mat
+        } else {
+            w_mat - b_mat
+        };
+        if deficit < p.damp_deficit_threshold {
+            return 0;
+        }
+        // (1) Freibauer-Vormarschbonus dieser Seite anteilig kuerzen.
+        let passed = side_passed_bonus_sum(board, us, p);
+        let passed_cut = passed * (100 - p.damp_passed_pct) / 100;
+        // (2) Positiven PST-eg-Ueberschuss anteilig kuerzen. Getapert mit 0 im
+        //     MG, sodass der Abschlag dieselbe Phasen-Gewichtung traegt wie der
+        //     PST-eg-Beitrag selbst (`taper(mg, eg, phase)`).
+        let pst_cut_eg = pst_eg.max(0) * (100 - p.damp_pst_eg_pct) / 100;
+        let pst_cut = taper(0, pst_cut_eg, phase);
+        passed_cut + pst_cut
+    };
+
+    -side_cut(Color::White, w_pst_eg) + side_cut(Color::Black, b_pst_eg)
+}
+
+/// Summe der Freibauer-Vormarschboni einer Seite. Spiegelt die Freibauer-Logik
+/// aus `pawn_bonus` (gleiche Advancement-Formel, gleiche `pawn_passed_rank_bonuses`),
+/// hier separat fuer `material_deficit_damping`. Bei Aenderung der Formel beide
+/// Stellen anpassen.
+fn side_passed_bonus_sum(board: &Board, us: Color, p: &EvalParams) -> i32 {
+    let our_bb = *board.color_combined(us);
+    let our_pawns = *board.pieces(Piece::Pawn) & our_bb;
+    let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
+    let mut sum = 0;
+    for sq in our_pawns {
+        if is_passed(sq, us, their_pawns) {
+            let rank_idx = sq.get_rank().to_index();
+            let advancement = match us {
+                Color::White => rank_idx.saturating_sub(1),
+                Color::Black => 6usize.saturating_sub(rank_idx),
+            }
+            .min(p.pawn_passed_rank_bonuses.len() - 1);
+            sum += p.pawn_passed_rank_bonuses[advancement];
+        }
+    }
+    sum
 }
 
 /// Akkumuliert den PST-Beitrag einer Seite in (mg, eg).
@@ -150,6 +246,11 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
                 let rank = sq.get_rank();
                 if rank == Rank::First || rank == Rank::Eighth {
                     score += p.knight_backrank_penalty;
+                }
+                // Outpost-Bonus (Diagnose 05.06.2026): gedeckter, unvertreibbarer
+                // Springer auf vorgeschobenem Feld. Code-Default 0 → inaktiv.
+                if is_knight_outpost(sq, us, our_pawns, their_pawns) {
+                    score += taper(p.outpost_knight_mg, p.outpost_knight_eg, phase);
                 }
             }
             _ => {}
@@ -547,6 +648,72 @@ fn is_passed(sq: Square, us: Color, their_pawns: BitBoard) -> bool {
     // geprueft. Die Bitmaske beschreibt exakt dieselben Felder: Nachbarlinien
     // plus eigene Linie, aber nur vor dem Bauern.
     (their_pawns.0 & file_mask & ahead_mask) == 0
+}
+
+/// Prueft, ob der Springer auf `sq` auf einem (gewerteten) Outpost steht.
+///
+/// Drei Bedingungen — alle muessen erfuellt sein:
+///   1. **Vorgeschoben:** 4.-6. Reihe aus eigener Sicht. Ein Outpost auf der
+///      eigenen Haelfte bringt keinen Raumgewinn; erst ab der 4. Reihe wird der
+///      Springer zum dauerhaften Stachel in der gegnerischen Stellung.
+///   2. **Gedeckt:** ein eigener Bauer steht diagonal dahinter (Nachbarlinie,
+///      eine Reihe Richtung eigene Grundreihe). Nur ein gedeckter Springer ist
+///      stabil — ungedeckte "Outposts" verschenken sich oft taktisch.
+///   3. **Loch:** kein gegnerischer Bauer auf den Nachbarlinien VOR dem Springer.
+///      Solche Bauern koennten vorruecken und den Springer vertreiben; fehlen
+///      sie, ist das Feld ein permanentes Loch in der gegnerischen Struktur.
+///
+/// Dieses Wissen erfasst weder PST (statisch pro Feld) noch Safe-Mobility
+/// (zaehlt nur Zielfelder) — es war eine der Eval-Luecken hinter den
+/// "motivlosen" Mittelspiel-Drops (Diagnose 05.06.2026, docs/roadmap.md).
+fn is_knight_outpost(sq: Square, us: Color, our_pawns: BitBoard, their_pawns: BitBoard) -> bool {
+    let rank_idx = sq.get_rank().to_index() as i32;
+
+    // (1) Relative Reihe: 0 = eigene Grundreihe, 7 = Umwandlungsreihe.
+    let rel_rank = match us {
+        Color::White => rank_idx,
+        Color::Black => 7 - rank_idx,
+    };
+    if !(3..=5).contains(&rel_rank) {
+        return false; // nur 4., 5. oder 6. Reihe
+    }
+
+    // Nachbarlinien (ohne die eigene Linie) — Bauern auf derselben Linie koennen
+    // einen Springer weder decken noch (diagonal) angreifen.
+    let adj = get_adjacent_files(sq.get_file());
+
+    // (2) Bauern-Deckung: eigener Bauer eine Reihe Richtung Heimat, Nachbarlinie.
+    let behind_rank = match us {
+        Color::White => rank_idx - 1,
+        Color::Black => rank_idx + 1,
+    };
+    if !(0..8).contains(&behind_rank) {
+        return false;
+    }
+    let behind_mask = BitBoard::new(0xffu64 << (8 * behind_rank as u32));
+    if (our_pawns & adj & behind_mask) == BitBoard::new(0) {
+        return false; // ungedeckt → kein gewerteter Outpost
+    }
+
+    // (3) "Loch": kein Gegnerbauer auf den Nachbarlinien vor dem Springer
+    //     (gleiche ahead-Maske wie `is_passed`, hier nur auf Nachbarlinien).
+    let ahead_mask: u64 = match us {
+        Color::White => {
+            if rank_idx >= 7 {
+                0
+            } else {
+                !0u64 << (8 * (rank_idx + 1) as u32)
+            }
+        }
+        Color::Black => {
+            if rank_idx <= 0 {
+                0
+            } else {
+                (1u64 << (8 * rank_idx as u32)) - 1
+            }
+        }
+    };
+    (their_pawns & adj & BitBoard::new(ahead_mask)) == BitBoard::new(0)
 }
 
 fn phalanx_bonus(our_pawns: BitBoard, p: &EvalParams) -> i32 {
@@ -1013,7 +1180,7 @@ fn key_square_bonus(board: &Board, us: Color, p: &EvalParams) -> i32 {
         }
 
         let rank_i = sq.get_rank().to_index() as i32; // 0..7
-        // "Bauern-Rang aus eigener Sicht": Weiss = rank_i+1, Schwarz = 8-rank_i.
+                                                      // "Bauern-Rang aus eigener Sicht": Weiss = rank_i+1, Schwarz = 8-rank_i.
         let rel_rank: i32 = match us {
             Color::White => rank_i + 1,
             Color::Black => 8 - rank_i,
@@ -1233,6 +1400,9 @@ pub struct PerSideBreakdown {
     pub material: i32,
     pub pawn_bonus: i32,
     pub knight_backrank: i32,
+    /// Knight-Outpost-Bonus (bereits phase-getapert, summiert ueber alle
+    /// Outpost-Springer der Seite). Siehe `is_knight_outpost`.
+    pub knight_outpost: i32,
     pub bishop_pair: i32,
     pub connected_rooks: i32,
     pub rook_file: i32,
@@ -1268,6 +1438,9 @@ pub struct EvalBreakdown {
     pub black_endgame_guard_raw: i32,
     /// Material-Imbalance-Term (Weiss-Sicht, phase-getapert). Siehe `material_imbalance`.
     pub imbalance: i32,
+    /// Material-Defizit-Daempfung (Weiss-Sicht). Siehe `material_deficit_damping`.
+    /// Negativ = Weiss bekommt einen Kompensations-Abschlag, positiv = Schwarz.
+    pub damping: i32,
     pub total: i32,
 }
 
@@ -1299,6 +1472,9 @@ fn evaluate_side_breakdown(
                 let rank = sq.get_rank();
                 if rank == Rank::First || rank == Rank::Eighth {
                     b.knight_backrank += p.knight_backrank_penalty;
+                }
+                if is_knight_outpost(sq, us, our_pawns, their_pawns) {
+                    b.knight_outpost += taper(p.outpost_knight_mg, p.outpost_knight_eg, phase);
                 }
             }
             _ => {}
@@ -1377,11 +1553,15 @@ pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
     }
     bd.pawn_endgame_guard = pawn_endgame_guard(board, bd.phase, p);
     bd.imbalance = material_imbalance(board, bd.phase, p);
+    // Gleiche Roh-PST-eg-Summen wie evaluate() (hier aus dem Breakdown), damit
+    // beide Pfade denselben Daempfungswert ergeben (Konsistenz-Check unten).
+    bd.damping = material_deficit_damping(board, bd.phase, p, bd.white.pst_eg, bd.black.pst_eg);
 
     // Summe aller Per-Side-Terme (so wie evaluate_side sie addiert), als Differenz.
     let side_sum_white = bd.white.material
         + bd.white.pawn_bonus
         + bd.white.knight_backrank
+        + bd.white.knight_outpost
         + bd.white.bishop_pair
         + bd.white.connected_rooks
         + bd.white.rook_file
@@ -1392,6 +1572,7 @@ pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
     let side_sum_black = bd.black.material
         + bd.black.pawn_bonus
         + bd.black.knight_backrank
+        + bd.black.knight_outpost
         + bd.black.bishop_pair
         + bd.black.connected_rooks
         + bd.black.rook_file
@@ -1408,7 +1589,8 @@ pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
         + bd.pawn_endgame_guard
         + bd.mobility_tapered
         + bd.rook_trapped_tapered
-        + bd.imbalance;
+        + bd.imbalance
+        + bd.damping;
     bd
 }
 
@@ -1442,6 +1624,11 @@ pub fn print_eval_breakdown(board: &Board, p: &EvalParams) {
         bd.white.knight_backrank,
         bd.black.knight_backrank,
     );
+    line(
+        "knight_outpost",
+        bd.white.knight_outpost,
+        bd.black.knight_outpost,
+    );
     line("bishop_pair", bd.white.bishop_pair, bd.black.bishop_pair);
     line(
         "connected_rooks",
@@ -1472,12 +1659,18 @@ pub fn print_eval_breakdown(board: &Board, p: &EvalParams) {
 
     println!("info string ----- abgeleitete Terme (Weiss-Sicht) -----");
     println!("info string pst_tapered          {:>6}", bd.pst_tapered);
-    println!("info string mobility_tapered     {:>6}", bd.mobility_tapered);
+    println!(
+        "info string mobility_tapered     {:>6}",
+        bd.mobility_tapered
+    );
     println!(
         "info string rook_trapped_tapered {:>6}",
         bd.rook_trapped_tapered
     );
-    println!("info string king_activity_eg     {:>6}", bd.king_activity_eg);
+    println!(
+        "info string king_activity_eg     {:>6}",
+        bd.king_activity_eg
+    );
     println!(
         "info string king_passed_synergy  {:>6}",
         bd.king_passed_synergy
@@ -1487,6 +1680,7 @@ pub fn print_eval_breakdown(board: &Board, p: &EvalParams) {
         bd.pawn_endgame_guard
     );
     println!("info string imbalance            {:>6}", bd.imbalance);
+    println!("info string damping              {:>6}", bd.damping);
     println!("info string total                {:>6} cp", bd.total);
 
     // Sanity: muss mit evaluate() uebereinstimmen.
@@ -1521,6 +1715,85 @@ mod tests {
         let score = evaluate(&b, &p);
         // 8 Bauern minus Symmetrie erwartet > 0
         assert!(score > 0, "expected white advantage, got {score}");
+    }
+
+    #[test]
+    fn knight_outpost_detected_and_scored() {
+        // Weisser Springer d5, gedeckt vom Bauern c4; schwarze c/e-Bauern fehlen
+        // (Loch) → d5 ist ein echter Outpost. Der schwarze d6-Bauer steht auf der
+        // EIGENEN Linie des Springers und kann ihn diagonal nicht angreifen.
+        let b = Board::from_str("4k3/8/3p4/3N4/2P5/8/8/4K3 w - - 0 1").unwrap();
+        let wp = *b.pieces(Piece::Pawn) & *b.color_combined(Color::White);
+        let bp = *b.pieces(Piece::Pawn) & *b.color_combined(Color::Black);
+        assert!(is_knight_outpost(
+            Square::from_str("d5").unwrap(),
+            Color::White,
+            wp,
+            bp
+        ));
+
+        // Default 0 → kein Effekt; aktiver Bonus → Weiss-Vorteil steigt.
+        let p0 = EvalParams::default();
+        let mut p1 = EvalParams::default();
+        p1.outpost_knight_mg = 30;
+        p1.outpost_knight_eg = 20;
+        assert!(evaluate(&b, &p1) > evaluate(&b, &p0));
+    }
+
+    #[test]
+    fn material_deficit_damping_cuts_compensation() {
+        // Bxe4-Illusions-Blatt (Diagnose 06.06.2026): Weiss ist eine Leichtfigur
+        // fuer einen Bauern hinten (statisches Defizit 200), hat aber einen
+        // vorgeschobenen c6-Freibauer + positives pst_eg als "Kompensation".
+        let b = Board::from_str("r1b2rk1/p4p2/2P3pp/8/8/P1Q1P1R1/1P3P1q/2R1K3 w - - 0 1").unwrap();
+
+        // Default (Prozentsaetze 100) → Daempfung ist ein No-op, Eval unveraendert.
+        let p0 = EvalParams::default();
+        assert_eq!(
+            material_deficit_damping(&b, game_phase(&b), &p0, 70, -70),
+            0
+        );
+
+        // Aktive Daempfung (50/50 ab Defizit 200): Weiss als unterlegene Seite
+        // bekommt seinen Freibauer- und PST-eg-Ueberschuss gekuerzt → Eval faellt.
+        let mut p1 = EvalParams::default();
+        p1.damp_deficit_threshold = 200;
+        p1.damp_passed_pct = 50;
+        p1.damp_pst_eg_pct = 50;
+        assert!(evaluate(&b, &p1) < evaluate(&b, &p0));
+
+        // Breakdown muss mit evaluate() uebereinstimmen (Konsistenz-Check).
+        assert_eq!(evaluate_breakdown(&b, &p1).total, evaluate(&b, &p1));
+
+        // Materielle Gleichheit (Startstellung): Schwelle nie erreicht → 0,
+        // selbst bei aktiven Prozentsaetzen.
+        let start = Board::default();
+        assert_eq!(
+            material_deficit_damping(&start, game_phase(&start), &p1, 0, 0),
+            0
+        );
+    }
+
+    #[test]
+    fn knight_outpost_requires_support_and_hole() {
+        let pawns = |b: &Board| {
+            (
+                *b.pieces(Piece::Pawn) & *b.color_combined(Color::White),
+                *b.pieces(Piece::Pawn) & *b.color_combined(Color::Black),
+            )
+        };
+        let d5 = Square::from_str("d5").unwrap();
+
+        // (a) ungedeckt (kein c4/e4-Bauer) → kein Outpost
+        let b1 = Board::from_str("4k3/8/8/3N4/8/8/8/4K3 w - - 0 1").unwrap();
+        let (wp1, bp1) = pawns(&b1);
+        assert!(!is_knight_outpost(d5, Color::White, wp1, bp1));
+
+        // (b) gedeckt, aber schwarzer e6-Bauer greift d5 an (e-Linie, davor)
+        //     → kein Loch → kein Outpost
+        let b2 = Board::from_str("4k3/8/4p3/3N4/2P5/8/8/4K3 w - - 0 1").unwrap();
+        let (wp2, bp2) = pawns(&b2);
+        assert!(!is_knight_outpost(d5, Color::White, wp2, bp2));
     }
 
     #[test]
@@ -2024,8 +2297,7 @@ mod tests {
     #[test]
     fn guard_gate_blocks_middlegame() {
         // Mittelspiel mit Tuermen: NPM 1000 pro Seite > Gate 700.
-        let b = Board::from_str("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1")
-            .unwrap();
+        let b = Board::from_str("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
         let p = p_guard_active();
         let s = pawn_endgame_guard(&b, game_phase(&b), &p);
         assert_eq!(s, 0, "guard must be inactive above NPM gate");

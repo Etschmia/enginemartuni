@@ -112,6 +112,28 @@ bp_open_scale  = 2
 two_minors_mg = 80
 two_minors_eg = 80
 
+[outpost]
+# Knight-Outpost-Bonus (Diagnose 05.06.2026, docs/roadmap.md). Befund: die
+# "motivlosen" Mittelspiel-Drops (50 % aller Blunder) sind real (78 % halten
+# bei SF d26) und entstehen durch Figuren-Passivitaet bei materiellem
+# Gleichstand/Vorteil — Martunis Eval ist dort ~300 cp zu optimistisch. Weder
+# PST (statisch pro Feld) noch Safe-Mobility (zaehlt nur Zielfelder) erfassen
+# einen unvertreibbaren Springer.
+#
+# Wirkung (eval::is_knight_outpost): Bonus fuer einen eigenen Springer auf der
+# 4.-6. Reihe, der von einem eigenen Bauern gedeckt ist UND von keinem
+# gegnerischen Bauern je angegriffen werden kann ("Loch"). Phase-getapert
+# (MG > EG). Code-Default 0/0 → ohne aktive Werte inaktiv (verhaltensgleich).
+#
+# STATUS: A/B verworfen (06.06.2026). Standalone-A/B 25/15 vs imbalance_8080
+# (matches/baseline_vs_outpost, 1000 Partien): outpost -10.77 Elo +/- 17.33,
+# LOS 88.89 % ZUGUNSTEN baseline, Pentanomial [57,64,243,63,73] (WW73>LL57 fuer
+# baseline). CI deckt Null, aber Richtung klar gegen den Term — deckt sich mit
+# frueherem negativem Outpost-Gate (05.06.). Kein Rollout. Term dormant auf 0/0
+# (Code bleibt im Tree, verhaltensgleich zur Produktion).
+knight_mg = 0
+knight_eg = 0
+
 [pawns]
 # Isolani: Bauer ohne eigene Bauern auf benachbarten Linien
 # Finding: -20 ist ein flacher Malus. Im Endspiel sind isolierte Bauern oft
@@ -393,3 +415,15 @@ rook_pawn_drawish_penalty = -60
 # Endspiel-Dichte; bei 300er-Gate lagen zu viele relevante KN/KB-
 # Endspiele ausserhalb des Guards.
 npm_endgame_gate = 700
+
+[damping]
+# Material-Defizit-Daempfung der Kompensations-Terme (Diagnose 06.06.2026,
+# Bxe4-Bug, docs/roadmap.md). Liegt eine Seite statisch >= deficit_threshold cp
+# zurueck, werden IHR Freibauer-Vormarschbonus (passed_pct %) und ihr positiver
+# PST-eg-Ueberschuss (pst_eg_pct %) gekuerzt — vorgeschobene Bauern und gute
+# Felder sind weniger wert, wenn der Gegner eine Mehrfigur zum Blockieren/Schlagen
+# hat. baseline imbalance_8080 kennt diese Sektion nicht und ignoriert sie.
+# A/B-Kandidat 06.06.: 50/50 ab 200 cp. Prozentsaetze 100 = inaktiv.
+deficit_threshold = 200
+passed_pct = 50
+pst_eg_pct = 50
