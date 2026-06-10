@@ -10,6 +10,33 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**10.06.2026 (Fix) — TT-Mate-Ply-Bug behoben (Option C = Adjustment + Matt-Break-Guard).
+Tobias-Entscheid; Rollout = Bot-Neustart steht noch aus.**
+- **Fix A — Mate-Ply-Adjustment** (`search.rs`): neue Helfer `mate_score_to_tt` /
+  `mate_score_from_tt` — Mate-Scores werden beim `tt.store` knotenrelativ normiert
+  (`score ± ply`) und beim Probe-Cutoff auf die Wurzel der aktuellen Suche zurückgerechnet.
+  Normale Scores passieren unverändert. Standardlösung jeder TT-Engine.
+- **Fix B — Matt-Break-Guard:** der Deepening-Abbruch bei gefundenem Matt greift nur noch,
+  wenn die Mattdistanz innerhalb der gerade abgeschlossenen Suchtiefe liegt
+  (`MATE − |score| ≤ depth`) — ein TT-gestütztes „mate N" jenseits der Tiefe wird
+  weitergerechnet statt bei d1 blind gespielt. Kostet praktisch nichts.
+- **Nebenprodukt:** `SearchResult.score` (Score der letzten abgeschlossenen Iteration,
+  im Bin-Target ungenutzt) für Tests/Diagnostik.
+- **Tests: 84 grün** (82 + 2 neu): `mate_score_tt_normierung_roundtrip` (konkrete
+  Zahlen, beide Vorzeichen, Identitäts-Roundtrip) und `tt_mate_distance_shrinks_across_
+  searches` (KQvK, geteilte TT, zwei Plies weiter → Distanz MUSS schrumpfen).
+  Sabotage-Gegenprobe: mit kurzgeschlossenen Helfern wird der Test rot — er beißt.
+- **End-to-End-Verifikation** (deterministischer zKfpQEn8-Replay, echte Uhrstände):
+  vorher ab Zug 83 nur 0-ms-d1-Antworten mit eingefrorenem „mate 15"; nachher schrumpft
+  die Distanz Zug für Zug (16→15→14→…→5), echte Tiefen d13–d30, König wird geführt
+  (Ke5/Kf4/Kf5 statt Damen-Geschiebe), verbleibende 0-ms-Antworten sind verifizierte
+  Matts innerhalb der Tiefe. KRvK-Probe (Wk1Ynq5F): mate 13 → mate 12 über Iterationen.
+  Smoke grün (Buch + startpos normal). Binary md5 `c92b1241`.
+- **Rollout:** Live-Bot läuft bis zum Neustart mit dem alten Binary. Kein A/B nötig
+  (Bug-Fix-Kategorie wie Repetition-Fixes 02./07.05., kein Eval-Hebel) — Lichess-Lookback
+  beim nächsten Fenster beobachtet missed_mate + verschenkte Remis (Erwartung: die
+  6-Remis-Klasse verschwindet).
+
 **10.06.2026 (spät) — K+P-Endspiel-Probe → ROOT CAUSE gefunden: TT-Mate-Scores ohne
 Ply-Adjustment. Konversions-Bug, ≥5 verschenkte Remis im Fenster. Fix = Tobias-Entscheid.**
 - **Hypothese „K+P-Technik" widerlegt:** reine K+P-Blunder nur **1/462** (und das ein

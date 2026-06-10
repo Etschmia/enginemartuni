@@ -12,6 +12,49 @@ use std::time::{Duration, Instant};
 const INF: i32 = 1_000_000;
 const MATE: i32 = 100_000;
 const MATE_THRESHOLD: i32 = MATE - 1000;
+
+// --- Mate-Score-Normierung fuer die TT -------------------------------------
+// Suchscores codieren Mattdistanz relativ zur WURZEL der laufenden Suche:
+// "Matt in k Plies ab Wurzel" = MATE - k (bzw. -MATE + k, wenn die Seite am
+// Zug selbst matt gesetzt wird). Ein TT-Eintrag entsteht aber an einem Knoten
+// bei `ply` und wird spaeter von ganz anderen Suchen (anderer Wurzel, anderem
+// ply) wiederverwendet. Wuerde der Score roh gespeichert, waere die Distanz
+// dort ein Fossil der alten Suche: die Engine meldet Zug um Zug "mate 15",
+// ohne dass die Distanz je schrumpft, waehlt ihre Zuege aus veralteten
+// Eintraegen und schiebt Dame/Turm bis zum 50-Zuege- oder 3-fold-Remis
+// (Repro 10.06.2026: zKfpQEn8/Wk1Ynq5F/rYuxSr81/NPiP3O5A, vier verschenkte
+// Mop-up-Gewinne; Details docs/roadmap.md).
+//
+// Standardloesung (jede TT-Engine macht das so): beim SPEICHERN die Distanz
+// auf den Knoten selbst normieren ("Matt in k Plies ab DIESEM Knoten" —
+// unabhaengig davon, wo die Wurzel lag), beim LESEN zurueck auf die Wurzel
+// der jetzigen Suche rechnen. Normale (Nicht-Matt-)Scores passieren beide
+// Funktionen unveraendert.
+
+/// Wurzelrelativ -> knotenrelativ: vor `tt.store` am Knoten `ply` aufrufen.
+fn mate_score_to_tt(score: i32, ply: i32) -> i32 {
+    if score > MATE_THRESHOLD {
+        // Matt FUER die Seite am Zug: MATE - (ply + k)  ->  MATE - k
+        score + ply
+    } else if score < -MATE_THRESHOLD {
+        // Matt GEGEN die Seite am Zug: -MATE + (ply + k)  ->  -MATE + k
+        score - ply
+    } else {
+        score
+    }
+}
+
+/// Knotenrelativ -> wurzelrelativ: nach `tt.probe` am Knoten `ply` aufrufen.
+/// Exaktes Gegenstueck zu `mate_score_to_tt`.
+fn mate_score_from_tt(score: i32, ply: i32) -> i32 {
+    if score > MATE_THRESHOLD {
+        score - ply
+    } else if score < -MATE_THRESHOLD {
+        score + ply
+    } else {
+        score
+    }
+}
 // Maximale Summe aller Extensions in einer Suchlinie. 26.04.2026: 6 → 4
 // reduziert. Hintergrund: Check-Extensions wurden gleichzeitig von +2 auf
 // das Standard-+1 verringert. Cap 4 entspricht damit etwa der alten
@@ -90,6 +133,11 @@ impl Default for GoParams {
 pub struct SearchResult {
     pub best: ChessMove,
     pub ponder: Option<ChessMove>,
+    /// Score der letzten abgeschlossenen Iteration (wurzelrelativ, cp bzw.
+    /// Mate-Codierung MATE-k). Bei Buch-Treffer/forciertem Zug 0, weil dort
+    /// keine Suche laeuft. Genutzt von Tests (Matt-Distanz-Regression).
+    #[allow(dead_code)] // im Bin-Target (uci.rs) bewusst ungenutzt
+    pub score: i32,
 }
 
 pub struct SearchRequest {
@@ -217,7 +265,7 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         if let Some(m) = req.book.probe(&req.board) {
             println!("info string book hit");
             let ponder = ponder_move_from_tt(&req.board, m, &req.tt);
-            return Some(SearchResult { best: m, ponder });
+            return Some(SearchResult { best: m, ponder, score: 0 });
         }
     }
 
@@ -230,7 +278,7 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
             if legal.next().is_none() {
                 println!("info string forced move");
                 let ponder = ponder_move_from_tt(&req.board, only, &req.tt);
-                return Some(SearchResult { best: only, ponder });
+                return Some(SearchResult { best: only, ponder, score: 0 });
             }
         }
     }
@@ -308,8 +356,16 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
 
         emit_info(depth, score, state.nodes, state.start.elapsed(), last_move);
 
-        // Gefundenes Matt: nicht weitersuchen
-        if score.abs() > MATE_THRESHOLD {
+        // Gefundenes Matt: nicht weitersuchen — aber nur, wenn die
+        // Mattdistanz innerhalb der gerade abgeschlossenen Suchtiefe liegt,
+        // die Iteration die Mattlinie also wirklich bis zum Ende verifiziert
+        // hat. Ein "mate N" mit N > depth kann nur TT-gestuetzt entstanden
+        // sein; vor dem Ply-Adjustment brach genau das die Suche schon bei
+        // Tiefe 1 auf einem Fossil ab (0-ms-Zuege, Repro 10.06.2026). Die
+        // Bedingung kostet praktisch nichts: ist das Matt echt, holt die
+        // naechste Iteration es billig per TT wieder ein und der Break
+        // greift dann.
+        if score.abs() > MATE_THRESHOLD && MATE - score.abs() <= depth {
             break;
         }
     }
@@ -323,10 +379,13 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         );
     }
 
-    let _ = last_score; // unused in final output for now
     last_move.map(|best| {
         let ponder = ponder_move_from_tt(&req.board, best, &req.tt);
-        SearchResult { best, ponder }
+        SearchResult {
+            best,
+            ponder,
+            score: last_score,
+        }
     })
 }
 
@@ -437,7 +496,10 @@ fn alpha_beta(
         let tt = state.tt.lock().unwrap();
         if let Some(entry) = tt.probe(key) {
             if entry.depth as i32 >= depth && ply > 0 {
-                let v = entry.eval;
+                // Mate-Distanzen liegen knotenrelativ in der TT (siehe
+                // mate_score_to_tt) — erst auf die aktuelle Wurzel
+                // umrechnen, dann Bounds pruefen.
+                let v = mate_score_from_tt(entry.eval, ply);
                 let cutoff_fires = match entry.flag {
                     TtFlag::Exact => true,
                     TtFlag::Lower => v >= beta,
@@ -856,7 +918,16 @@ fn alpha_beta(
     };
     {
         let mut tt = state.tt.lock().unwrap();
-        tt.store(key, best_move, best_score, depth as i8, flag);
+        // Mate-Scores knotenrelativ ablegen (siehe mate_score_to_tt) —
+        // sonst transportiert der Eintrag die Wurzeldistanz DIESER Suche
+        // als Fossil in alle spaeteren Suchen.
+        tt.store(
+            key,
+            best_move,
+            mate_score_to_tt(best_score, ply),
+            depth as i8,
+            flag,
+        );
     }
 
     best_score
@@ -1541,6 +1612,7 @@ mod tests {
 
     use crate::polyglot::BookSet;
     use std::path::Path;
+    use std::str::FromStr;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
@@ -1618,6 +1690,104 @@ mod tests {
             "Engine ist auf vergifteten TT-Score reingefallen — der Fix in der \
              TT-Probe greift nicht. Stellung: Anfangsbrett, vergifteter Eintrag \
              auf Folgeposition nach 1. a3."
+        );
+    }
+
+    // --- TT-Mate-Ply-Adjustment (Bug 10.06.2026) --------------------------
+    //
+    // Regression auf die verschenkten Mop-up-Gewinne (zKfpQEn8 u. a.):
+    // Mate-Scores wurden roh (wurzelrelativ) in der TT abgelegt. Spaetere
+    // Suchen bekamen damit fossile Mattdistanzen serviert — die gemeldete
+    // Distanz schrumpfte von Zug zu Zug nie, die Engine schob Dame/Turm
+    // bis zum 50-Zuege-/3-fold-Remis. Details: docs/roadmap.md (10.06.).
+
+    #[test]
+    fn mate_score_tt_normierung_roundtrip() {
+        // Matt in 2 Plies ab einem Knoten bei ply=3, aus Sicht der dortigen
+        // Seite am Zug: wurzelrelativ MATE-(3+2). Knotenrelativ muss MATE-2
+        // gespeichert werden — unabhaengig von der Wurzel.
+        assert_eq!(mate_score_to_tt(MATE - 5, 3), MATE - 2);
+        // Gelesen von einer ANDEREN Suche, deren Knoten bei ply=7 liegt:
+        // Matt in 2 ab Knoten = Matt in 9 ab deren Wurzel.
+        assert_eq!(mate_score_from_tt(MATE - 2, 7), MATE - 9);
+        // Spiegelbild fuer "wird selbst matt gesetzt" (negative Codierung).
+        assert_eq!(mate_score_to_tt(-(MATE - 5), 3), -(MATE - 2));
+        assert_eq!(mate_score_from_tt(-(MATE - 2), 7), -(MATE - 9));
+        // Normale Scores passieren unveraendert.
+        assert_eq!(mate_score_to_tt(123, 9), 123);
+        assert_eq!(mate_score_from_tt(-450, 9), -450);
+        // Roundtrip am selben Knoten ist die Identitaet.
+        assert_eq!(mate_score_from_tt(mate_score_to_tt(MATE - 11, 4), 4), MATE - 11);
+    }
+
+    fn run_search_scored(
+        board: Board,
+        tt: Arc<Mutex<TranspositionTable>>,
+        depth: u32,
+    ) -> SearchResult {
+        let req = SearchRequest {
+            board,
+            history: Vec::new(),
+            halfmove_clock: 0,
+            params: GoParams {
+                depth: Some(depth),
+                movetime: Some(10_000),
+                ..GoParams::default()
+            },
+            tt,
+            book: Arc::new(BookSet::load(Path::new("."), &[])),
+            eval: Arc::new(EvalParams::default()),
+            stop: Arc::new(AtomicBool::new(false)),
+            pondering: Arc::new(AtomicBool::new(false)),
+            move_overhead: 0,
+        };
+        search(req).expect("Suche liefert ein Ergebnis")
+    }
+
+    #[test]
+    fn tt_mate_distance_shrinks_across_searches() {
+        // KQvK (Figurensatz aus der Live-Partie zKfpQEn8, Weiss am Zug).
+        // Ablauf wie live: erst eine Suche, die das Matt findet und die TT
+        // fuellt; dann zwei Plies weiterruecken (bester Zug + erwartete
+        // Verteidigung) und mit DERSELBEN TT erneut suchen. Die gemeldete
+        // Mattdistanz MUSS jetzt kleiner sein — vor dem Ply-Adjustment
+        // blieb sie stehen oder wuchs (live: 12 -> 14 -> 15 -> 15 ...).
+        let p0 = Board::from_str("6Q1/8/8/5K2/8/4k3/8/8 w - - 0 1")
+            .expect("FEN ist gueltig");
+        let tt = Arc::new(Mutex::new(TranspositionTable::new(16)));
+
+        let r0 = run_search_scored(p0, Arc::clone(&tt), 16);
+        assert!(
+            r0.score > MATE_THRESHOLD,
+            "Erste Suche muss das KQvK-Matt sehen, Score war {}",
+            r0.score
+        );
+        let dist0 = MATE - r0.score;
+
+        // Zwei Plies entlang der erwarteten Linie weiterruecken. Faellt der
+        // Pondermove aus (kein TT-Eintrag), tut es jeder legale Zug — auch
+        // gegen suboptimale Verteidigung muss die Distanz schrumpfen.
+        let p_after_best = p0.make_move_new(r0.best);
+        let reply = r0.ponder.unwrap_or_else(|| {
+            MoveGen::new_legal(&p_after_best)
+                .next()
+                .expect("Verteidiger hat einen legalen Zug")
+        });
+        let p1 = p_after_best.make_move_new(reply);
+
+        let r1 = run_search_scored(p1, Arc::clone(&tt), 16);
+        assert!(
+            r1.score > MATE_THRESHOLD,
+            "Zweite Suche muss das Matt weiterhin sehen, Score war {}",
+            r1.score
+        );
+        let dist1 = MATE - r1.score;
+        assert!(
+            dist1 < dist0,
+            "Mattdistanz schrumpft nicht ({} -> {} Plies): TT liefert \
+             fossile Mate-Scores — Ply-Adjustment defekt.",
+            dist0,
+            dist1
         );
     }
 }
