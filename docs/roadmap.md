@@ -10,6 +10,44 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**10.06.2026 — Lookback Damping-Rollout: Gate GRÜN, Term bleibt LIVE (50/50).**
+- **Fenster:** `analyse-08.06.2026.json` = 321 Partien, ausschließlich post-Rollout
+  (06.06. 19:25 UTC – 10.06. 17:46 UTC), 462 Blunder → **B/P 1.439** (von 1.542 @04.06.,
+  −6.7 %). Score 58.4 %. Tagestrend B/P leicht fallend (1.47 → 1.33).
+- **Rating vs Anker (06.06. Blitz 2108 / Rapid 2161):** 10.06. **Blitz 2100 (−8, Rauschen) /
+  Rapid 2176 (+15)**. Der befürchtete Einbruch des global wirkenden Terms ist NICHT
+  eingetreten → KPI erfüllt, `eval.toml [damping]` bleibt 50/50.
+- **Profil:** `hangs_*` 0.233/P (~flat von 0.241), `allows_mate` **0.072/P** (von 0.110,
+  −35 %), `missed_capture` 0.199/P (wie immer d17-Bias-verdächtig, nicht validiert),
+  motivlose Drops 0.704/P = **49 % aller Blunder** (stabil, weiterhin größter Posten;
+  Cluster ruht). MG 0.944/P, EG 0.396/P, Opening 0.100/P.
+- **Damping-Zonen-Check:** nur 59/462 Blunder entstehen in Stellungen mit eigenem
+  Materialdefizit ≥ 200 cp; dort Median-Gap (Martuni-Eval − SF-Eval) **−192 cp**, nur 7 %
+  > 150 cp optimistisch (vs 13 % im Rest) — kein Optimismus-Cluster in der Zielzone.
+  Schwaches Pro-Signal für die Eval-Ehrlichkeit, ohne Pre-Rollout-Vergleichswert aber
+  nicht beweisend.
+- **Hotspots:** stickshark99 45 P / B/P **1.98** (↑ von 1.71, Score trotzdem 61 %),
+  AetherBot 66 P / 1.58 (stabil), BaymaxMate 12 P / 2.08 (neu, dünn), Boosted_Maia_1900
+  11 P / 1.82; RavenEngine 11 P / Score **9 %** (schlicht stärker, kein Blunder-Ausreißer);
+  sxphia 28 P / 0.86 / 89 % entschärft.
+- **Grok-Analyse gesichtet (`grok_analyse_09062026.md`, eigener SF-Scan über 224 PGNs):**
+  - Die Top-Liste „Auffällige Fehler in gewonnenen Partien" besteht überwiegend aus
+    **Mate-Score-Artefakten** (Loss ~99 000 cp = Mate-Score-Arithmetik): langsameres Matt
+    in trivial gewonnenen Q+N-vs-K- / R-vs-K-Endspielen — bekanntes Tiefenphänomen
+    (vgl. missed_mate-Befund 04.05.), nicht eval-relevant. Partien wurden gewonnen.
+  - **Brauchbar (a):** Endspiel-Technik-Cluster (K+P-Opposition/Key-Squares, 168 Fälle)
+    deckt sich mit unserem EG-Anteil 0.396/P und dem KNP-Drift aus dem
+    stickshark99-Deep-Dive → ernsthafter nächster Hebel-Kandidat (endgame.rs-Probe).
+  - **Brauchbar (b):** Erweiterung des Dampings auf gegnerische Freibauer
+    (enemy_passed-Optimismus, 113 Fälle) — gleiche Mechanik, denkbar als Folge-Term.
+  - **Nicht verfolgen:** „King-Safety verstärken (queen_weight 6, steilere SafetyTable)"
+    widerspricht unserer Empirie (King-Gefahr-A/B −29 Elo verworfen, King-Safety-Gate
+    05.06. negativ). „Rook-Activity ohne Kontext" (309/536 getaggt) ist heuristisches
+    Korrelations-Tagging, kein kausaler Befund — vor jedem Code-Schritt eigenständig
+    verifizieren (SF-Tiefe des Grok-Scans unbekannt → d17-Snapshot-Falle).
+- **Nächste Hebel-Kandidaten:** (1) K+P-Endspiel-Technik-Probe, (2) ggf.
+  enemy_passed-Damping; motivlose MG-Drops bleiben diffus (kein Ein-Feature-Fix).
+
 **06.06.2026 (spät) — Beide Hebel abgearbeitet: Damping-Term gebaut & A/B-startklar; simpleEval-Hotspot entfällt.**
 - **simpleEval-Deep-Dive → kein Hebel, Hotspot entfällt.** B/P-Verlauf 2.85 (7P) → 2.08 (13P) →
   **1.93 (14P, 06.06.)**, jetzt Mittelfeld (dumbotai/Chess960/Epimetheus/Boosted_Maia liegen drüber).
