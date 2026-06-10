@@ -10,6 +10,52 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**10.06.2026 (spät) — K+P-Endspiel-Probe → ROOT CAUSE gefunden: TT-Mate-Scores ohne
+Ply-Adjustment. Konversions-Bug, ≥5 verschenkte Remis im Fenster. Fix = Tobias-Entscheid.**
+- **Hypothese „K+P-Technik" widerlegt:** reine K+P-Blunder nur **1/462** (und das ein
+  Mate-Score-Artefakt), K+P+1-Figur 11/462 → kein Opposition/Key-Square-Cluster. Groks
+  `endgame_technique`-Kategorie (168) ist identisch mit seinem Phase-Tag `endgame` —
+  Korrelations-Tagging, kein Technik-Befund.
+- **Echter Befund — verschenkte Gewinne:** 6 Remis im Fenster mit ≥ Turm-Vorteil am
+  Partieende: **2× KRvK** (Wk1Ynq5F 50-Züge, NPiP3O5A 3-fold — eins davon in Rapid 600+5!),
+  **2× KQvK** (zKfpQEn8 50-Züge in 780+5, rYuxSr81 3-fold), 1× KQ+P (p4z9XyE2 3-fold),
+  1× Bullet-Mittelspiel-3-fold. clk-Beweis: Martuni verbrauchte **~50 ms/Zug** trotz
+  Minuten auf der Uhr (Uhr STIEG um ~5 s/Zug) und führte in zKfpQEn8 50 Züge lang nie
+  den König — nur Damen-Geschiebe.
+- **Deterministischer Replay** (zKfpQEn8 ab Zug 80, echte Uhrstände, sequentiell für
+  TT-Aufbau; `tools/ponder_mopup_repro.py`): Zug 82 saubere Suche **d26 „mate 12" in
+  2.0 s** — ab Zug 83 nur noch **d1 in 0–9 ms**, gemeldete Matt-Distanz schrumpft NIE
+  (12→14→15→15… über 65 Züge), Endstellung der Live-Partie wird mit `d64 cp 0` erreicht.
+  Live-Muster exakt reproduziert. Gegenproben: frischer Engine-Start auf denselben FENs
+  findet mate 5/mate 9 in <1 s und konvertiert in 12 Halbzügen (mit und ohne Ponder;
+  Ponder ist unschuldig).
+- **Mechanik (drei Zutaten):**
+  1. `tt.store` (search.rs:859) speichert Mate-Scores **roh** — `MATE − ply` ist aber
+     relativ zur Wurzel der damaligen Suche. Der Probe-Cutoff (search.rs:445) gibt sie
+     unkorrigiert zurück → Matt-Distanzen sind Fossilien der alten Suche, durch die
+     Negamax-Negation bleiben sie als „mate 15" stehen statt zu schrumpfen.
+  2. Der **Matt-Break** (search.rs:312, `score.abs() > MATE_THRESHOLD → break`) bricht
+     das Deepening schon nach **Tiefe 1** auf dem TT-Fossil ab → 0-ms-Antworten ohne
+     echte Suche; der gewählte Zug liegt nicht zwingend auf einem echten Mattpfad.
+  3. Der hochlaufende 50-Züge-Zähler liegt jenseits des d1-Horizonts (50-Züge-Regel ist
+     in der Suche korrekt modelliert, search.rs:400, aber unsichtbar bei Tiefe 1).
+  Die 07.05.-Mitigation (TT-Cutoff-Suppression bei Key in Spielhistorie) deckt nur die
+  Wurzel-Keys — Kind-Knoten mit frischen Stellungen cutten ungebremst.
+- **Nebenbefund (sekundär):** Mop-up-Gradient schwach — `eg_corner_weight=20` auf
+  Chebyshev-Distanz zur Ecke belohnt Zentrum→Rand-Drängen mit **0 cp** (d5 und d8 sind
+  beide Distanz 3 zu a8), Gesamt-Spread nur ~100 cp. NICHT die Remis-Ursache (Matt wird
+  bei echter Suche trotzdem gefunden), aber bei Zeitnot ohne TT-Hilfe relevant.
+  Klassische Abhilfe wäre ein Center-Distance-Term. Separat entscheiden.
+- **Fix-Optionen (Engine-Logik → Tobias entscheidet):**
+  - **A) Mate-Ply-Adjustment** bei Store/Probe (Standardlösung jeder TT-Engine, ~8 Zeilen
+    an 2 Stellen: beim Speichern Distanz auf den Knoten normieren, beim Lesen zurückrechnen).
+  - **B) Matt-Break absichern:** nur brechen, wenn das Matt innerhalb der tatsächlich
+    durchsuchten Tiefe liegt (oder Break ganz streichen — er spart fast nichts).
+  - **C) = A + B** (A ist die Wurzel, B billige Versicherung gegen künftige TT-Stale-Fälle).
+- **Kosten im Fenster:** ≥2.5 Punkte aus 321 Partien (~6–7 Elo) nur aus den 5 klaren
+  Fällen; dazu Verzerrung der missed_mate/allows_mate-Statistik. Betrifft potenziell
+  jede mattnahe Stellung (auch Mittelspiel), nicht nur Endspiele.
+
 **10.06.2026 — Lookback Damping-Rollout: Gate GRÜN, Term bleibt LIVE (50/50).**
 - **Fenster:** `analyse-08.06.2026.json` = 321 Partien, ausschließlich post-Rollout
   (06.06. 19:25 UTC – 10.06. 17:46 UTC), 462 Blunder → **B/P 1.439** (von 1.542 @04.06.,
