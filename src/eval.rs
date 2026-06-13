@@ -1846,9 +1846,11 @@ mod tests {
         // (Material + Eckenterm + Koenigsnaehe).
         let b = Board::from_str("3k4/8/8/8/4K3/8/8/R6R w - - 0 1").unwrap();
         let p = EvalParams::default();
-        // 1000 (2 Tuerme) + 20*(7-3) Eckenterm + 10*(14-2*4) Koenigsnaehe
-        // = 1000 + 80 + 60 = 1140
-        assert_eq!(evaluate(&b, &p), 1140);
+        // 1000 (2 Tuerme) + 20*center_manhattan_distance + 10*(14-2*4) Koenigsnaehe.
+        // Mop-up nutzt jetzt die Zentrums-Distanz (CPW) statt Chebyshev-zur-Ecke:
+        // schwacher Koenig d8 → df(d)=0, dr(8)=3 → CMD=3, Eckenterm 20*3 = 60.
+        // = 1000 + 60 + 60 = 1120
+        assert_eq!(evaluate(&b, &p), 1120);
     }
 
     #[test]

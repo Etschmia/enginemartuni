@@ -144,11 +144,17 @@ fn mop_up_score(board: &Board, strong: Color, p: &EvalParams) -> i32 {
     let weak_king = board.king_square(weak);
     let strong_king = board.king_square(strong);
 
-    let corner_d = nearest_corner_distance(weak_king, &ALL_CORNERS);
+    // Zentrums-Manhattan-Distanz statt "Distanz zur naechsten Ecke":
+    // die alte Chebyshev-zur-Ecke plateaut (d5 und a5 sind beide Chebyshev 3
+    // zu a8), also zahlte das Raus-Draengen 0 cp. Die Zentrums-Distanz
+    // (0 auf d4/e4/d5/e5 .. 6 in der Ecke) steigt streng monoton, je weiter
+    // der schwache Koenig an den Rand getrieben wird — sauberer Mop-up-
+    // Gradient (CPW-Standard). Fuer KR/KQ/KRR reicht "irgendeine Ecke".
+    let center_d = center_manhattan_distance(weak_king);
     let king_d = chebyshev(weak_king, strong_king);
 
     let bonus =
-        p.eg_corner_weight * (7 - corner_d) + p.eg_king_proximity_weight * (14 - 2 * king_d);
+        p.eg_corner_weight * center_d + p.eg_king_proximity_weight * (14 - 2 * king_d);
 
     let material = strong_material(board, strong, p);
     signed(material + bonus, strong)
@@ -166,11 +172,18 @@ fn kbnk_score(board: &Board, strong: Color, bishop_sq: Square, p: &EvalParams) -
     } else {
         &DARK_CORNERS
     };
-    let corner_d = nearest_corner_distance(weak_king, corners);
+    // KBNK ist nur in einer laeuferfarbigen Ecke matt. Die Manhattan-Distanz
+    // zur naechsten Zielecke faellt streng monoton, je naeher der schwache
+    // Koenig getrieben wird (kein Chebyshev-Plateau), und richtet den
+    // Gradienten gezielt auf die RICHTIGE Ecke — genau das, woran die alte
+    // Formel scheiterte (in der Probe 3/6 Remis, weil der Koenig zur falschen
+    // Ecke irrte). Die volle 0..14-Spanne gibt dem Eckenzug bewusst mehr
+    // Gewicht als beim KR/KQ-Mop-up, weil dieses Matt enger gefuehrt werden muss.
+    let corner_pull = 14 - nearest_manhattan_distance(weak_king, corners);
     let king_d = chebyshev(weak_king, strong_king);
 
     let bonus =
-        p.eg_corner_weight * (7 - corner_d) + p.eg_king_proximity_weight * (14 - 2 * king_d);
+        p.eg_corner_weight * corner_pull + p.eg_king_proximity_weight * (14 - 2 * king_d);
 
     let material = strong_material(board, strong, p);
     signed(material + bonus, strong)
@@ -274,11 +287,30 @@ fn chebyshev(a: Square, b: Square) -> i32 {
     df.max(dr)
 }
 
-fn nearest_corner_distance(sq: Square, corners: &[Square]) -> i32 {
-    corners.iter().map(|c| chebyshev(sq, *c)).min().unwrap_or(0)
+/// Manhattan-Distanz zweier Felder (Summe der Datei- und Reihen-Differenz).
+/// Anders als Chebyshev plateaut sie nicht — jeder Schritt Richtung Ziel
+/// senkt sie um genau 1 und liefert so einen feinen Mop-up-Gradienten.
+fn manhattan(a: Square, b: Square) -> i32 {
+    let df = (a.get_file().to_index() as i32 - b.get_file().to_index() as i32).abs();
+    let dr = (a.get_rank().to_index() as i32 - b.get_rank().to_index() as i32).abs();
+    df + dr
 }
 
-const ALL_CORNERS: [Square; 4] = [Square::A1, Square::H1, Square::A8, Square::H8];
+/// Kleinste Manhattan-Distanz zu einer der gegebenen Ecken.
+fn nearest_manhattan_distance(sq: Square, corners: &[Square]) -> i32 {
+    corners.iter().map(|c| manhattan(sq, *c)).min().unwrap_or(0)
+}
+
+/// Zentrums-Manhattan-Distanz: 0 auf den vier Zentralfeldern (d4/e4/d5/e5),
+/// 6 in den Ecken. Treibt den schwachen Koenig streng monoton an den Rand —
+/// der Kern des verbesserten Mop-up-Gradienten.
+fn center_manhattan_distance(sq: Square) -> i32 {
+    let f = sq.get_file().to_index() as i32;
+    let r = sq.get_rank().to_index() as i32;
+    let df = (3 - f).max(f - 4);
+    let dr = (3 - r).max(r - 4);
+    df + dr
+}
 
 const LIGHT_CORNERS: [Square; 2] = [Square::A8, Square::H1];
 
@@ -351,6 +383,34 @@ mod tests {
         assert!(
             s_edge > s_center,
             "edge {s_edge} should beat center {s_center}"
+        );
+    }
+
+    #[test]
+    fn center_manhattan_distance_zero_at_center_six_at_corner() {
+        assert_eq!(center_manhattan_distance(Square::D4), 0);
+        assert_eq!(center_manhattan_distance(Square::E5), 0);
+        assert_eq!(center_manhattan_distance(Square::A1), 6);
+        assert_eq!(center_manhattan_distance(Square::H8), 6);
+        assert_eq!(center_manhattan_distance(Square::A5), 3); // Rand, nicht Ecke
+        // Streng monoton: ein Schritt vom Zentrum zum Rand erhoeht den Wert.
+        assert!(center_manhattan_distance(Square::C5) > center_manhattan_distance(Square::D5));
+        assert!(center_manhattan_distance(Square::A5) > center_manhattan_distance(Square::C5));
+    }
+
+    #[test]
+    fn kbnk_gradient_pulls_to_bishop_colored_corner() {
+        // Dunkelfeldriger Laeufer (h2) → Mattecken a1/h8. Der schwache Koenig
+        // gleich weit von der RICHTIGEN Ecke a1 muss hoeher (besser fuer Weiss)
+        // bewertet sein als von der FALSCHEN Ecke a8 — genau die Steuerung,
+        // die der alten Chebyshev-Formel fehlte.
+        let right = Board::from_str("8/8/8/8/8/k1K5/7B/6N1 w - - 0 1").unwrap();
+        let wrong = Board::from_str("8/8/k1K5/8/8/8/7B/6N1 w - - 0 1").unwrap();
+        let s_right = endgame_score(&right, &p()).unwrap();
+        let s_wrong = endgame_score(&wrong, &p()).unwrap();
+        assert!(
+            s_right > s_wrong,
+            "richtige Ecke {s_right} sollte falsche Ecke {s_wrong} schlagen"
         );
     }
 

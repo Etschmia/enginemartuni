@@ -10,8 +10,51 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**13.06.2026 — Rückschau: TT-Mate-Fix bestätigt (Mop-up-Remis 6 → 0). KBNvK-Restdefekt
+gefunden & gefixt (Center-Distanz-Gradient, Option A). Rollout = Tobias-Entscheid offen.**
+- **Rollout-Status TT-Mate-Fix verifiziert:** Live-Binary `c92b1241` seit Bot-Neustart
+  **10.06. 21:43 CEST** aktiv. `analyse-13.06.2026.json` = 251 Partien, davon **250 post-Fix**
+  (10.06. 19:43 UTC – 13.06. 15:34 UTC) → sauberes Rückschau-Fenster.
+- **Verschenkte Mop-up-Remis 6 → 0:** Replay aller 33 post-Fix-Remis (Endstellungs-Material
+  via python-chess). Genau **1** Remis mit ≥ Turm-Vorteil (BaymaxMate `EGfWKKZ2`) — aber
+  **Mess-Artefakt**: Endstellung war K+T vs K+T (echtes Remis), Turm erst im letzten Zug
+  (105. Rxb6) geschlagen; echte Tiefen d23–d28, Eval 0.00, Uhr normal → **kein d1/0-ms-Fossil
+  mehr.** Die vom Fix anvisierte 6-Remis-Klasse ist verschwunden. **KPI erfüllt.**
+- **Rating:** 13.06. **Blitz 2044 / Rapid 2207** (Anker 10.06. Blitz 2100 / Rapid 2176).
+  Rapid **+31** (Fix wirkt sauber), Blitz **−56**. Schere = Format-Stärke, kein Eval-Regress:
+  Score post-Fix nach Lichess-Kategorie **Rapid 64,4 % / Blitz 54,8 % / Bullet 41,2 %**.
+  Time-forfeits netto **positiv** (10 S / 2 N / 1 R) → nicht der Treiber.
+- **Restdefekt (sekundär, vom Fix freigelegt): schwacher Mop-up-Gradient.** Beispiel sxphia
+  `u6N2u9an`: Martuni sieht **+7,89 bei echtem d27**, fällt aber **auf Zeit** (180+0) beim
+  Eck-Schieben statt zu matten — der Nebenbefund `eg_corner_weight` aus dem 10.06.-Report.
+  **Mate-Probe (Live-Binary `c92b1241`, validierte Stellungen):** KR/KQ konvertieren sauber,
+  aber **KBNvK 3/6 Remis** + Matt zu langsam (79–93 Hz). Ursache: `(7 − corner_d)` mit
+  Chebyshev-zur-nächsten-Ecke plateaut (d5 = a5 = 3) → König irrt zur falschen Ecke.
+  Scope-Caveat: `mop_up_score` feuert nur bei reinen Bare-King-Signaturen (keine Bauern) →
+  **Korrektheits-Fix, Lichess-Rating-Wirkung klein** (KBNvK selten; sxphia = K+B+P fällt
+  nicht darunter).
+- **Fix gebaut — Option A (Center-Distanz, CPW-Standard, Tobias-Entscheid):**
+  - `endgame.rs` `mop_up_score` (KR/KQ/KRR): `(7 − corner_d)` → `center_manhattan_distance`
+    (0 Zentrum .. 6 Ecke, streng monoton). Neue Helfer `manhattan` /
+    `nearest_manhattan_distance` / `center_manhattan_distance`; `nearest_corner_distance`
+    + `ALL_CORNERS` entfernt.
+  - `kbnk_score`: `(7 − corner_d)` → `(14 − nearest_manhattan_distance)` zur läuferfarbenen
+    Zielecke (kein Plateau, richtet Gradient auf die RICHTIGE Ecke).
+  - **Tests: 86 grün** (2 neu: `center_manhattan_distance_zero_at_center_six_at_corner`,
+    `kbnk_gradient_pulls_to_bishop_colored_corner`; `connected_rooks` in eval.rs an neue
+    Formel angepasst: KRRvK d8 → CMD 3 → 1120 statt 1140).
+  - **Mate-Probe gegen Variante: KBNvK 0/6 Remis** (alle matten, 51–63 Hz statt 93/Remis),
+    KR/KQ unverändert. Smoke grün (Buch + Mittelspiel normal).
+- **Binary-Hygiene:** Variante = `martuni.mopup_grad_20260613` (md5 `6bfc392d`).
+  `target/release/martuni` auf approved `c92b1241` zurückgesetzt → **Live-Bot unverändert**,
+  kein stiller Rollout bei systemd-Restart. Source-Änderungen uncommitted im Tree.
+- **Offen (Tobias-Entscheid):** (1) Rollout direkt wie TT-Mate-Fix (commit + Variante live +
+  Neustart, kein A/B nötig — Bug-Fix-Kategorie, Mate-Probe ist die Validierung), oder
+  (2) A/B als No-Regression-Guard (~1000 P, fast sicher flat), oder (3) nur committen.
+  Größerer Blitz-Hebel bleibt allgemeine Endspiel-Technik (K+Bauern), nicht der Bare-King-Term.
+
 **10.06.2026 (Fix) — TT-Mate-Ply-Bug behoben (Option C = Adjustment + Matt-Break-Guard).
-Tobias-Entscheid; Rollout = Bot-Neustart steht noch aus.**
+Tobias-Entscheid; Rollout = Bot-Neustart 10.06. 21:43 (verifiziert 13.06.).**
 - **Fix A — Mate-Ply-Adjustment** (`search.rs`): neue Helfer `mate_score_to_tt` /
   `mate_score_from_tt` — Mate-Scores werden beim `tt.store` knotenrelativ normiert
   (`score ± ply`) und beim Probe-Cutoff auf die Wurzel der aktuellen Suche zurückgerechnet.
