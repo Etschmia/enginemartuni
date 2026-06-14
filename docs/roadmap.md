@@ -10,6 +10,38 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**14.06.2026 — Hotpath-Cleanup Bundle 1 aus dem grok-/Cursor-Auto-Effizienz-Review umgesetzt
+(bit-exakt, kein Verhaltenswechsel). A/B 1000 P kein Regress. Branch `perf/eval-hotpath-cleanup`.**
+- **Review-Verifikation:** Befunde des `code-review-effizienz-cursor-auto-2026-06-13.md` vor der
+  Umsetzung gegen den echten Quellcode geprüft → **echt** (Zeilennummern, Funktionsnamen, Duplikate
+  stimmten). Konkurrierende Hermes-Behauptung „redundante `game_phase`-Aufrufe in `evaluate()`" war
+  **falsch** (Phase wird genau einmal berechnet und durchgereicht) → bewusst nicht umgesetzt.
+- **Bundle 1 — 5 bit-exakte Maßnahmen (Commit `271f9f3`), reine Geschwindigkeit/Entdopplung/Dead-Code:**
+  1. Totes Feld `root_best_score` aus `search.rs` entfernt (geschrieben, nie gelesen).
+  2. `is_passed` vereinheitlicht — bit-identische Kopie `is_passed_simple` aus `search.rs` gelöscht,
+     `eval::is_passed` jetzt `pub(crate)` (eine Quelle der Wahrheit statt zwei driftgefährdeter Kopien).
+  3. Chebyshev vereinheitlicht — lokale `eval_chebyshev` gelöscht, `endgame::chebyshev` jetzt `pub(crate)`.
+  4. `#[inline]` auf ~14 kleine Hot-Helper (vorher nur `taper`) — reine Hints, keine Ergebnisänderung.
+  5. Wurzel-`MoveGen` 3× → 1× pro `go` — legale Wurzelzüge einmal erzeugen, für Forced-Move-Check +
+     Fallback wiederverwenden (deterministisch → bit-identisch, spart zwei MoveGen-Läufe je Suche).
+- **Verifikation:**
+  - **`cargo test --release`: 86/86 grün.**
+  - **Bit-Exaktheit (stärkstes Gate):** an deadline-freiem `go depth 8` liefern Baseline (master) und
+    Kandidat für 12 diverse Stellungen **identischen bestmove UND identischen Node-Count**; das Aggregat
+    von **195.020.958 Knoten** ist über alle Läufe beider Binaries deckungsgleich → beweisbar keine
+    Verhaltensänderung.
+  - **NPS:** −0,82 % Median (im Rauschen des geteilten Live-Bot-Servers; Node-Counts identisch → reine
+    Zeitvarianz).
+- **A/B-Selfplay (5+0.05, UHO_Lichess, Hash=64, conc=2), 1000 Spiele gepoolt:** W434 / L407 / D159 →
+  Baseline 51,35 % → **+9,4 Elo ±~17 (95 %-CI deckt 0), LOS ≈86 % — nicht signifikant** (Pilot 300:
+  +32,5/LOS 96,9 % war ein ~1,85σ-Rauschblip; Erweiterung 700: −0,5/LOS 48 % flach) → **kein Regress**,
+  neutral wie von der Bit-Exaktheit vorhergesagt.
+- **Lichess-Rating-Snapshot (vor Merge, Lichess-API, 2026-06-14T10:39:53Z):**
+  **Blitz 2105** (2276 Partien) / **Rapid 2205** (1350 Partien).
+- **Nutzen:** kein Elo-Versprechen (bit-exakt → Stärke unverändert); Wert = Entdopplung (killt das
+  „Bugfix-nur-an-einer-Stelle"-Risiko bei `is_passed`/Chebyshev), Dead-Code-Abbau, kleineres NPS-Polster.
+  PR gegen `master` offen.
+
 **13.06.2026 — Rückschau: TT-Mate-Fix bestätigt (Mop-up-Remis 6 → 0). KBNvK-Restdefekt
 gefunden & gefixt (Center-Distanz-Gradient, Option A). Rollout = Tobias-Entscheid offen.**
 - **Rollout-Status TT-Mate-Fix verifiziert:** Live-Binary `c92b1241` seit Bot-Neustart
