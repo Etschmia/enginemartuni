@@ -64,6 +64,7 @@ pub fn taper(mg: i32, eg: i32, phase: i32) -> i32 {
 
 /// Phase-Berechnung nach klassischer Gewichtung: Springer 1, Laeufer 1,
 /// Turm 2, Dame 4. Startpos = 24, reines KvK-Endspiel = 0.
+#[inline]
 pub fn game_phase(board: &Board) -> i32 {
     let knights = board.pieces(Piece::Knight).popcnt() as i32;
     let bishops = board.pieces(Piece::Bishop).popcnt() as i32;
@@ -611,11 +612,15 @@ fn pawn_bonus(
     b
 }
 
+#[inline]
 fn is_isolated(our_pawns: BitBoard, file: File) -> bool {
     (our_pawns & get_adjacent_files(file)) == BitBoard::new(0)
 }
 
-fn is_passed(sq: Square, us: Color, their_pawns: BitBoard) -> bool {
+// pub(crate): wird auch von der Check-Extension in search.rs genutzt
+// (frueher dort als identische Kopie `is_passed_simple` dupliziert).
+#[inline]
+pub(crate) fn is_passed(sq: Square, us: Color, their_pawns: BitBoard) -> bool {
     let file_idx = sq.get_file().to_index() as i32;
     let rank_idx = sq.get_rank().to_index() as i32;
 
@@ -735,6 +740,7 @@ fn phalanx_bonus(our_pawns: BitBoard, p: &EvalParams) -> i32 {
     total
 }
 
+#[inline]
 fn score_run(len: usize, p: &EvalParams) -> i32 {
     if len >= 3 {
         p.pawn_phalanx_triple
@@ -841,6 +847,7 @@ fn rook_passed_pawn_bonus(
 /// Prüft, ob ein Turm hinter einem Bauern (dessen Farbe `pawn_color`) steht.
 /// Weißer Bauer läuft Richtung Rang 7 → hinter ihm = Rang < pawn_rank.
 /// Schwarzer Bauer läuft Richtung Rang 0 → hinter ihm = Rang > pawn_rank.
+#[inline]
 fn rook_is_behind_pawn(rook_rank: i32, pawn_rank: i32, pawn_color: Color) -> bool {
     match pawn_color {
         Color::White => rook_rank < pawn_rank,
@@ -938,7 +945,7 @@ fn side_king_passed_synergy(board: &Board, us: Color, p: &EvalParams) -> i32 {
         if !is_passed(pawn_sq, us, their_pawns) {
             continue;
         }
-        let d = eval_chebyshev(king_sq, pawn_sq);
+        let d = crate::endgame::chebyshev(king_sq, pawn_sq);
         score += (7 - d) * p.king_near_own_passed_bonus;
     }
     for pawn_sq in their_pawns {
@@ -946,18 +953,10 @@ fn side_king_passed_synergy(board: &Board, us: Color, p: &EvalParams) -> i32 {
         if !is_passed(pawn_sq, !us, our_pawns) {
             continue;
         }
-        let d = eval_chebyshev(king_sq, pawn_sq);
+        let d = crate::endgame::chebyshev(king_sq, pawn_sq);
         score += (7 - d) * p.king_near_enemy_passed_bonus;
     }
     score
-}
-
-/// Chebyshev-Distanz (King-Distance): max der File- und Rank-Differenz.
-/// Lokale Kopie, weil `endgame::chebyshev` privat ist.
-fn eval_chebyshev(a: Square, b: Square) -> i32 {
-    let df = (a.get_file().to_index() as i32 - b.get_file().to_index() as i32).abs();
-    let dr = (a.get_rank().to_index() as i32 - b.get_rank().to_index() as i32).abs();
-    df.max(dr)
 }
 
 // =========================================================================
@@ -1092,6 +1091,7 @@ fn has_opposition_geometry(board: &Board, a: Square, b: Square) -> bool {
     true
 }
 
+#[inline]
 fn file_from_index(i: i32) -> File {
     match i {
         0 => File::A,
@@ -1105,6 +1105,7 @@ fn file_from_index(i: i32) -> File {
     }
 }
 
+#[inline]
 fn rank_from_index(i: i32) -> Rank {
     match i {
         0 => Rank::First,
@@ -1272,7 +1273,7 @@ fn rook_pawn_correction(board: &Board, us: Color, p: &EvalParams) -> i32 {
     };
     let promo_corner = Square::make_square(promo_rank, pawn_sq.get_file());
     let their_k = board.king_square(!us);
-    if eval_chebyshev(their_k, promo_corner) <= 1 {
+    if crate::endgame::chebyshev(their_k, promo_corner) <= 1 {
         return p.rook_pawn_drawish_penalty;
     }
     0
@@ -1280,6 +1281,7 @@ fn rook_pawn_correction(board: &Board, us: Color, p: &EvalParams) -> i32 {
 
 /// Bauernangriffe einer Seite als BitBoard. Weiße Bauern schlagen NE/NW
 /// (shift +9 / +7 mit File-Maske gegen Wrap), schwarze Bauern SE/SW.
+#[inline]
 fn pawn_attacks_of(pawns: BitBoard, us: Color) -> BitBoard {
     const NOT_A_FILE: u64 = 0xFEFE_FEFE_FEFE_FEFE;
     const NOT_H_FILE: u64 = 0x7F7F_7F7F_7F7F_7F7F;
@@ -1381,6 +1383,7 @@ fn heavy_piece_threat(board: &Board, side: Color) -> bool {
 
 /// Zentralisierungswert eines Feldes: 7 = Zentrum (d4/d5/e4/e5), 0 = Ecke.
 /// Manhattan-Abstand zur Zentrums-2x2-Box (d4, d5, e4, e5).
+#[inline]
 fn king_centralization_score(sq: Square) -> i32 {
     let file = sq.get_file().to_index() as i32;
     let rank = sq.get_rank().to_index() as i32;

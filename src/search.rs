@@ -32,6 +32,7 @@ const MATE_THRESHOLD: i32 = MATE - 1000;
 // Funktionen unveraendert.
 
 /// Wurzelrelativ -> knotenrelativ: vor `tt.store` am Knoten `ply` aufrufen.
+#[inline]
 fn mate_score_to_tt(score: i32, ply: i32) -> i32 {
     if score > MATE_THRESHOLD {
         // Matt FUER die Seite am Zug: MATE - (ply + k)  ->  MATE - k
@@ -46,6 +47,7 @@ fn mate_score_to_tt(score: i32, ply: i32) -> i32 {
 
 /// Knotenrelativ -> wurzelrelativ: nach `tt.probe` am Knoten `ply` aufrufen.
 /// Exaktes Gegenstueck zu `mate_score_to_tt`.
+#[inline]
 fn mate_score_from_tt(score: i32, ply: i32) -> i32 {
     if score > MATE_THRESHOLD {
         score - ply
@@ -176,7 +178,6 @@ struct SearchState {
     // (2-fold-as-draw-Trick) zu unterscheiden.
     root_history_len: usize,
     root_best_move: Option<ChessMove>,
-    root_best_score: i32,
     // Wenn die Wurzel nur einen legalen Zug hat, merken wir ihn vor: beim
     // Uebergang Ponder → Normal koennen wir dann sofort abbrechen.
     forced_only_move: Option<ChessMove>,
@@ -196,6 +197,7 @@ struct SearchState {
     move_history: Vec<i32>,
 }
 
+#[inline]
 fn history_idx(side: Color, from: Square, to: Square) -> usize {
     let side_idx = match side {
         Color::White => 0,
@@ -269,17 +271,22 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         }
     }
 
+    // Legale Wurzelzuege EINMAL erzeugen und fuer alle drei Wurzel-Zwecke
+    // wiederverwenden (Forced-Move-Check, forced_only_move-Vormerkung,
+    // Fallback last_move). MoveGen ist deterministisch, daher bit-identisch
+    // zu drei separaten new_legal-Aufrufen — spart aber zwei MoveGen-Laeufe
+    // pro `go` (Effizienz-Review Cursor-Auto 13.06.).
+    let root_moves: Vec<ChessMove> = MoveGen::new_legal(&req.board).collect();
+
     // Forcierter Zug: nur eine legale Antwort → ohne Suche spielen.
     // Im Ponder-Modus muessen wir weiterdenken, bis ponderhit/stop kommt,
     // deshalb nur im normalen Modus kurzschliessen.
     if !req.params.ponder {
-        let mut legal = MoveGen::new_legal(&req.board);
-        if let Some(only) = legal.next() {
-            if legal.next().is_none() {
-                println!("info string forced move");
-                let ponder = ponder_move_from_tt(&req.board, only, &req.tt);
-                return Some(SearchResult { best: only, ponder, score: 0 });
-            }
+        if root_moves.len() == 1 {
+            let only = root_moves[0];
+            println!("info string forced move");
+            let ponder = ponder_move_from_tt(&req.board, only, &req.tt);
+            return Some(SearchResult { best: only, ponder, score: 0 });
         }
     }
 
@@ -294,13 +301,11 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
 
     // Forcierter Zug im Ponder-Modus vormerken: sobald ponderhit kommt
     // (pondering=false), koennen wir ohne weitere Suche zurueckkehren.
-    let forced_only_move = {
-        let mut it = MoveGen::new_legal(&req.board);
-        let first = it.next();
-        match (first, it.next()) {
-            (Some(m), None) => Some(m),
-            _ => None,
-        }
+    // Nutzt die oben einmalig erzeugten root_moves wieder.
+    let forced_only_move = if root_moves.len() == 1 {
+        Some(root_moves[0])
+    } else {
+        None
     };
 
     let history = req.history;
@@ -317,7 +322,6 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         history,
         root_history_len,
         root_best_move: None,
-        root_best_score: 0,
         forced_only_move,
         debug_root: std::env::var_os("MARTUNI_DEBUG_ROOT").is_some(),
         nmp_off: std::env::var_os("MARTUNI_NMP_OFF").is_some(),
@@ -372,7 +376,8 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
 
     if completed_depth == 0 {
         // Not a single iteration finished — spiele den ersten legalen Zug
-        last_move = MoveGen::new_legal(&req.board).next();
+        // (aus den oben einmalig erzeugten root_moves).
+        last_move = root_moves.first().copied();
         println!(
             "info string fallback (no completed depth, nodes={})",
             state.nodes
@@ -882,7 +887,6 @@ fn alpha_beta(
             best_move = Some(mv);
             if ply == 0 {
                 state.root_best_move = Some(mv);
-                state.root_best_score = score;
             }
         }
         if score > alpha {
@@ -1102,6 +1106,7 @@ fn has_non_pawn_material(board: &Board, side: Color) -> bool {
     (non_pawns & side_bb) != BitBoard::new(0)
 }
 
+#[inline]
 fn is_capture(board: &Board, mv: ChessMove) -> bool {
     if board.piece_on(mv.get_dest()).is_some() {
         return true;
@@ -1176,45 +1181,11 @@ fn is_candidate_move(
     if board.piece_on(mv.get_source()) == Some(Piece::Pawn) {
         let us = board.side_to_move();
         let their_pawns = *new_board.pieces(Piece::Pawn) & *new_board.color_combined(!us);
-        if is_passed_simple(mv.get_dest(), us, their_pawns) {
+        if crate::eval::is_passed(mv.get_dest(), us, their_pawns) {
             return true;
         }
     }
     false
-}
-
-fn is_passed_simple(sq: chess::Square, us: Color, their_pawns: chess::BitBoard) -> bool {
-    let file_idx = sq.get_file().to_index() as i32;
-    let rank_idx = sq.get_rank().to_index() as i32;
-
-    let mut file_mask: u64 = 0;
-    for df in [-1i32, 0, 1] {
-        let f = file_idx + df;
-        if (0..8).contains(&f) {
-            file_mask |= 0x0101_0101_0101_0101u64 << (f as u32);
-        }
-    }
-
-    let ahead_mask = match us {
-        Color::White => {
-            if rank_idx >= 7 {
-                0
-            } else {
-                !0u64 << (8 * (rank_idx + 1) as u32)
-            }
-        }
-        Color::Black => {
-            if rank_idx <= 0 {
-                0
-            } else {
-                (1u64 << (8 * rank_idx as u32)) - 1
-            }
-        }
-    };
-
-    // Gleiche Logik wie die alte 8x3-Feldschleife: gegnerische Bauern auf
-    // eigener oder Nachbarlinie, aber nur vor dem Bauern, verhindern Freibauer.
-    (their_pawns.0 & file_mask & ahead_mask) == 0
 }
 
 /// Zug mit vorberechneten Sortier-/SEE-Informationen. `see_val` ist nur
@@ -1342,6 +1313,7 @@ fn piece_rank(p: Piece) -> i32 {
 
 /// Materialwert einer Figur für SEE (unabhängig von EvalParams, damit SEE
 /// keine Referenz auf die Eval braucht und schnell bleibt).
+#[inline]
 fn see_piece_value(p: Piece) -> i32 {
     match p {
         Piece::Pawn => 100,

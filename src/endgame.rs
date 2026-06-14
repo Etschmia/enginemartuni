@@ -281,7 +281,9 @@ fn signed(cp: i32, strong: Color) -> i32 {
     }
 }
 
-fn chebyshev(a: Square, b: Square) -> i32 {
+// pub(crate): eval.rs nutzt dieselbe Chebyshev-Distanz (King-Distance) und
+// hatte sie frueher als lokale Kopie `eval_chebyshev` dupliziert.
+pub(crate) fn chebyshev(a: Square, b: Square) -> i32 {
     let df = (a.get_file().to_index() as i32 - b.get_file().to_index() as i32).abs();
     let dr = (a.get_rank().to_index() as i32 - b.get_rank().to_index() as i32).abs();
     df.max(dr)
