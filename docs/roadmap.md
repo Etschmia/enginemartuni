@@ -11,9 +11,9 @@ Einzeldokumenten:
 ## Aktueller Status
 
 **15.06.2026 — Syzygy-Tablebases (3-4-5) via `pyrrhic-rs`: Phasen ①–④ + Integritäts-Guard
-(Adapter, Option/Config, WDL-in-Suche, DTZ-Wurzel), default-off + bit-exakt, end-to-end
-validiert. GEPUSHT (①–③ `499e22c`, ④+Guard Folge-Commit). Live-Bot unberührt (Binary
-weiterhin approved `27acb202`, `.env` ohne `SYZYGY_PATH`). Aktivierung = Tobias-Entscheid.**
+(Adapter, Option/Config, WDL-in-Suche, DTZ-Wurzel), end-to-end validiert, GEPUSHT
+(①–③ `499e22c`, ④+Guard `dc974a1`). AKTIVIERT + LIVE seit 15.06. 18:34 CEST
+(Tobias-Entscheid, kein A/B — Tabellen millionenfach erprobt).**
 - **Auswertung `analyse-15.06.2026.json` (159 P, 294 Blunder, B/P 1.849):** Der Sprung von
   1.439 (08.06.) ist **kein Regress, sondern Opponent-Mix** — AetherBot (25 P, B/P 2.8) +
   stickshark99 (25 P, 2.4) stellen 31 % der Partien, aber 44 % der Blunder; Rest ~1.4.
@@ -70,16 +70,19 @@ weiterhin approved `27acb202`, `.env` ohne `SYZYGY_PATH`). Aktivierung = Tobias-
   3-4-5 geladen) → Gate lässt 6-7-Steine-Knoten zur Probe durch; Fathom liefert dort sauber
   FAILED (TB_LARGEST=5) → korrekt, nur minimal verschwendete Probe-Calls. Optionale Verfeinerung:
   echte max-Kardinalität aus den Dateinamen ableiten und kappen.
-- **Binär-Hygiene:** `target/release/martuni` auf approved **27acb202** zurückgesetzt
-  (kein stiller Rollout bei systemd-Restart), WIP-Binaries gesichert
-  (`martuni.syzygy_wip_20260615` = ①–③ fc889864; `martuni.syzygy_phase4_20260615` = ①–④
-  5f8b9aa8). `.env` **ohne** `SYZYGY_PATH` → Probing aus. **90/90 Tests grün.** Code GEPUSHT
-  auf `master`.
-- **Offen (Tobias):** (1) **Aktivierung** — `SYZYGY_PATH=/home/librechat/syzygy/3-4-5` in `.env`
-  ODER UCI `SyzygyPath`, dann Binary live (`cp …syzygy_phase4… target/release/martuni` +
-  Bot-Neustart) + A/B/Lichess-Lookback (KPI: Endspiel-Konversion ↑, kein Rating-Einbruch);
-  (2) optional `max_pieces`-Kappung (meldet 7 statt 5 — harmlos, nur verschwendete Probe-Calls
-  an 6-7-Steine-Knoten); (3) optional en-passant-Behandlung statt v1-Skip.
+- **ROLLOUT 15.06. 18:34 CEST (Tobias, kein A/B):** `SYZYGY_PATH=/home/librechat/syzygy/3-4-5`
+  in der Projekt-`.env` gesetzt (Engine findet sie via Kaskaden-Suche aus der Bot-CWD `~/lichess-bot`,
+  wie die Bücher — Pre-Flight bestätigt: `Syzygy: tablebases loaded (up to 7 men)`). Live-Binary
+  = `martuni.syzygy_phase4_20260615` (md5 **5f8b9aa8**) → `target/release/martuni`. Bot-Neustart
+  bei idle (keine Partie betroffen, letzte endete 16:45), `Engine configuration OK` + `Welcome
+  Martuni / connected`. **90/90 Tests grün.** Backups: `…syzygy_wip…` (①–③ fc889864), approved
+  Vor-Syzygy `27acb202` (rekonstruierbar via Worktree `a673ee2`).
+  - **Rollback** (falls nötig): `SYZYGY_PATH` aus `.env` entfernen + Bot-Neustart (Code dann
+    bit-exakt zur Vor-Syzygy-Engine), ODER Binary zurück auf `27acb202`.
+- **Offen:** (1) **Lichess-Lookback** gegen Anker 15.06. (Blitz 2037 / Rapid 2205) — KPI:
+  Endspiel-Konversion ↑ (verschenkte ≤5-Steine-Remis → 0), kein Rating-Einbruch; (2) optional
+  `max_pieces`-Kappung (meldet 7 statt 5 — harmlos, nur verschwendete Probe-Calls an
+  6-7-Steine-Knoten); (3) optional en-passant-Behandlung statt v1-Skip.
 
 **14.06.2026 — Hotpath-Cleanup Bundle 1 aus dem grok-/Cursor-Auto-Effizienz-Review umgesetzt
 (bit-exakt, kein Verhaltenswechsel). A/B 1000 P kein Regress. Branch `perf/eval-hotpath-cleanup`.**
