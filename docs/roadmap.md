@@ -10,9 +10,10 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
-**15.06.2026 — Syzygy-Tablebases (3-4-5) angefangen: Phasen ①–③ via `pyrrhic-rs`
-(Adapter + Option/Config + WDL-in-Suche), default-off + bit-exakt, end-to-end validiert.
-DTZ-Wurzel + Integritäts-Guard offen. UNCOMMITTED, Live-Bot unberührt.**
+**15.06.2026 — Syzygy-Tablebases (3-4-5) via `pyrrhic-rs`: Phasen ①–④ + Integritäts-Guard
+(Adapter, Option/Config, WDL-in-Suche, DTZ-Wurzel), default-off + bit-exakt, end-to-end
+validiert. GEPUSHT (①–③ `499e22c`, ④+Guard Folge-Commit). Live-Bot unberührt (Binary
+weiterhin approved `27acb202`, `.env` ohne `SYZYGY_PATH`). Aktivierung = Tobias-Entscheid.**
 - **Auswertung `analyse-15.06.2026.json` (159 P, 294 Blunder, B/P 1.849):** Der Sprung von
   1.439 (08.06.) ist **kein Regress, sondern Opponent-Mix** — AetherBot (25 P, B/P 2.8) +
   stickshark99 (25 P, 2.4) stellen 31 % der Partien, aber 44 % der Blunder; Rest ~1.4.
@@ -42,31 +43,43 @@ DTZ-Wurzel + Integritäts-Guard offen. UNCOMMITTED, Live-Bot unberührt.**
     WIP-Binary, **8 diverse Stellungen** `go depth 6` deadline-frei — **identische Tiefe +
     Node-Count + bestmove** (beide aus Projekt-Root, damit gleiche eval.toml). Methodik-Falle
     notiert: Binary aus fremdem CWD findet eval.toml nicht → Default-Eval → scheinbarer Mismatch.
-  - **End-to-end (kompletter Satz):** KBNvK tbhits=368 cp 89999 (Win — das ursprüngliche
+  - **End-to-end WDL (kompletter Satz):** KBNvK tbhits=368 cp 89999 (Win — das ursprüngliche
     Mop-up-Motiv jetzt TB-gelöst), KRvK/KQvKR Win, KQvKQ/KRvKR cp 0 (Remis), 5-Steiner
     (KRPvKR) probt. Keine Crashes.
+  - **End-to-end DTZ-Wurzel (Phase ④, Playout beide Seiten engine+TB):** KBNvK **mattet in 55
+    Halbzügen** bei optimaler Verteidigung (< 100-Ply-50-Züge-Grenze — genau die Remis-Klasse,
+    die die alte Eck-Heuristik verlor), KRvK 23, KQvKR 27, alle 1-0 echtes Schachmatt
+    (`board.is_checkmate()`). Die **Gewinnerseite trifft die DTZ-Wurzel zu 100 %**; die
+    verlierende (verteidigende) Seite fällt auf die normale Suche zurück (`root` dort kein
+    `DtzResult`) — harmlos, weil der ply-adjustierte WDL-Score `-(TB_WIN−ply)` automatisch
+    längsten Widerstand spielt.
+  - **Integritäts-Guard verifiziert:** SyzygyPath auf Ordner mit absichtlich korrupter Datei →
+    `info string Syzygy: deaktiviert — 1 defekte… KQvK.rtbw`, **kein SIGBUS**, Engine sucht
+    normal weiter. Plus Unit-Test `verify_tables_flags_bad_magic`.
 - **Tabellen:** voller 3-4-5-Satz **290 Dateien / 940 MB** in `~/syzygy/3-4-5` (sesse.net;
   rekursiver Crawl wird 403-geblockt → Einzel-GETs via `wget -i` + UA + Nachlade-Reparatur;
   alle 290 magic-byte-verifiziert WDL `71e8235d` / DTZ `d7660ca5`).
-- **KRITISCHER BEFUND — truncierte Tabellen → SIGBUS (nicht von `catch_unwind` fangbar):**
-  Eine abgeschnittene `.rtbw`/`.rtbz` (mmap) crasht die Engine beim (rekursiven) Probe →
-  Bot-Forfeit. Aufgetreten mit 403-Trunkaten im Smoke-Ordner (KQvKQ→KQvK). **Vor jeder
-  Aktivierung Pflicht:** (a) magic-byte-/Größen-Verifikation des Tabellen-Ordners (Verifier in
-  `tools/`-Repro vorhanden), (b) optional ein Lade-Zeit-Integritäts-Guard in `Syzygy::load`
-  (Dateien VOR dem mmap prüfen, sonst `None`). Stockfish & Co. gaten das nicht — sie setzen
-  vollständige Tabellen voraus.
+- **KRITISCHER BEFUND (jetzt entschärft) — truncierte Tabellen → SIGBUS (nicht von
+  `catch_unwind` fangbar):** Eine abgeschnittene `.rtbw`/`.rtbz` (mmap) crasht die Engine beim
+  (rekursiven) Probe → Bot-Forfeit. Aufgetreten mit 403-Trunkaten im Smoke-Ordner (KQvKQ→KQvK).
+  **Lade-Zeit-Guard `verify_tables` ergänzt:** prüft alle `.rtbw`/`.rtbz` VOR dem mmap auf
+  Magic-Bytes; ein Defekt → Tablebases ganz aus (`None`) statt Crash. Best-effort (Magic +
+  Lesbarkeit; exakte Seitengrenzen-Trunkate mit gültigem Header bleiben unentdeckt → die
+  einmalige Magic-Verifikation des Download-Ordners bleibt die autoritative Prüfung).
 - **Nebenbefund:** `pyrrhic_rs::max_pieces()` meldet **7** (Capability-Konstante, obwohl nur
   3-4-5 geladen) → Gate lässt 6-7-Steine-Knoten zur Probe durch; Fathom liefert dort sauber
   FAILED (TB_LARGEST=5) → korrekt, nur minimal verschwendete Probe-Calls. Optionale Verfeinerung:
   echte max-Kardinalität aus den Dateinamen ableiten und kappen.
 - **Binär-Hygiene:** `target/release/martuni` auf approved **27acb202** zurückgesetzt
-  (kein stiller Rollout bei systemd-Restart), WIP-Binary gesichert als
-  `martuni.syzygy_wip_20260615` (md5 fc889864). `.env` **ohne** `SYZYGY_PATH` → Probing aus.
-  Source-Änderungen uncommitted im Tree.
-- **Offen (Tobias):** (1) **Phase ④ DTZ-Wurzel-Probe** (50-Züge-sichere Konversion an der
-  Wurzel, Root-Move-Filter); (2) **Integritäts-Guard** vor Aktivierung; (3) max_pieces-Kappung;
-  (4) Aktivierung (`SYZYGY_PATH` in `.env` ODER UCI `SyzygyPath`) + A/B/Lichess-Lookback;
-  (5) Commit-Entscheid für Phasen ①–③.
+  (kein stiller Rollout bei systemd-Restart), WIP-Binaries gesichert
+  (`martuni.syzygy_wip_20260615` = ①–③ fc889864; `martuni.syzygy_phase4_20260615` = ①–④
+  5f8b9aa8). `.env` **ohne** `SYZYGY_PATH` → Probing aus. **90/90 Tests grün.** Code GEPUSHT
+  auf `master`.
+- **Offen (Tobias):** (1) **Aktivierung** — `SYZYGY_PATH=/home/librechat/syzygy/3-4-5` in `.env`
+  ODER UCI `SyzygyPath`, dann Binary live (`cp …syzygy_phase4… target/release/martuni` +
+  Bot-Neustart) + A/B/Lichess-Lookback (KPI: Endspiel-Konversion ↑, kein Rating-Einbruch);
+  (2) optional `max_pieces`-Kappung (meldet 7 statt 5 — harmlos, nur verschwendete Probe-Calls
+  an 6-7-Steine-Knoten); (3) optional en-passant-Behandlung statt v1-Skip.
 
 **14.06.2026 — Hotpath-Cleanup Bundle 1 aus dem grok-/Cursor-Auto-Effizienz-Review umgesetzt
 (bit-exakt, kein Verhaltenswechsel). A/B 1000 P kein Regress. Branch `perf/eval-hotpath-cleanup`.**

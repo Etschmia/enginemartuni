@@ -298,6 +298,27 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         }
     }
 
+    // Syzygy-DTZ-Wurzel-Probe: an einer <= N-Steine-Wurzel ohne Rochaderechte
+    // den 50-Zuege-sicher konvertierenden Zug direkt aus der Tabelle spielen.
+    // Im Endspiel ist der DTZ-optimale Zug der beste Zug (die eigene Suche kann
+    // ihn nicht schlagen), und er vermeidet die 50-Zuege-Remis-Klasse. Im
+    // Ponder-Modus NICHT kurzschliessen — dort wird bis ponderhit weitergedacht.
+    if !req.params.ponder {
+        if let Some(syz) = &req.syzygy {
+            if let Some((tb_move, tb_score)) =
+                syz.probe_root_move(&req.board, req.halfmove_clock)
+            {
+                println!("info string syzygy root hit");
+                let ponder = ponder_move_from_tt(&req.board, tb_move, &req.tt);
+                return Some(SearchResult {
+                    best: tb_move,
+                    ponder,
+                    score: tb_score,
+                });
+            }
+        }
+    }
+
     let start = Instant::now();
     let think_time = calculate_think_time(&req.params, req.move_overhead, req.board.side_to_move());
     // Ponder: Deadline initial offen lassen, sie wird beim Ponderhit gesetzt.

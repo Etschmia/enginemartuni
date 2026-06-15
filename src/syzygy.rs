@@ -25,9 +25,19 @@
 
 use chess::{
     get_bishop_moves, get_king_moves, get_knight_moves, get_pawn_attacks, get_rook_moves,
-    BitBoard, Board, CastleRights, Color, File, Piece, Rank, Square, EMPTY,
+    BitBoard, Board, CastleRights, ChessMove, Color, File, MoveGen, Piece, Rank, Square, EMPTY,
 };
-use pyrrhic_rs::{Color as TbColor, EngineAdapter, TableBases, WdlProbeResult};
+use pyrrhic_rs::{
+    Color as TbColor, DtzProbeValue, EngineAdapter, Piece as TbPiece, TableBases, WdlProbeResult,
+};
+use std::fs;
+use std::path::Path;
+
+/// Magic-Bytes am Dateianfang gültiger Syzygy-Tabellen (de Mans Format),
+/// empirisch gegen den 3-4-5-Satz verifiziert. WDL = `.rtbw`, DTZ = `.rtbz`.
+/// Dienen dem Integritäts-Guard (siehe `verify_tables` / `load`).
+const WDL_MAGIC: [u8; 4] = [0x71, 0xe8, 0x23, 0x5d];
+const DTZ_MAGIC: [u8; 4] = [0xd7, 0x66, 0x0c, 0xa5];
 
 /// TB-Gewinn-Basiswert. Bewusst **über** jeder normalen Bewertung, aber
 /// **unter** `MATE_THRESHOLD` (99_000) der Suche angesiedelt: so gehen echte
@@ -102,6 +112,13 @@ impl Syzygy {
         if path.trim().is_empty() {
             return None;
         }
+        // Integritäts-Guard VOR dem mmap: eine defekte/truncierte Tabelle würde
+        // sonst beim Probing einen SIGBUS auslösen (Engine-Crash, nicht
+        // abfangbar). Lieber Tablebases ganz abschalten als crashen.
+        if let Err(e) = verify_tables(path) {
+            println!("info string Syzygy: deaktiviert — {}", e);
+            return None;
+        }
         match TableBases::<ChessAdapter>::new(path) {
             Ok(tb) => {
                 let max_pieces = tb.max_pieces();
@@ -134,36 +151,15 @@ impl Syzygy {
     /// Rochaderechte, en-passant-Stellung oder fehlende Tabelle für das
     /// Material. In allen `None`-Fällen sucht der Aufrufer normal weiter.
     pub fn probe_wdl_score(&self, board: &Board, ply: i32) -> Option<i32> {
-        // --- Gates (Syzygy-Vorbedingungen) ---
-        if board.combined().popcnt() > self.max_pieces {
+        if !self.probeable(board) {
             return None;
         }
-        if board.castle_rights(Color::White) != CastleRights::NoRights
-            || board.castle_rights(Color::Black) != CastleRights::NoRights
-        {
-            return None;
-        }
-        if board.en_passant().is_some() {
-            return None;
-        }
-
-        // --- Bitboards extrahieren (jeweils als u64) ---
-        let white = board.color_combined(Color::White).0;
-        let black = board.color_combined(Color::Black).0;
-        let kings = board.pieces(Piece::King).0;
-        let queens = board.pieces(Piece::Queen).0;
-        let rooks = board.pieces(Piece::Rook).0;
-        let bishops = board.pieces(Piece::Bishop).0;
-        let knights = board.pieces(Piece::Knight).0;
-        let pawns = board.pieces(Piece::Pawn).0;
-        let turn = board.side_to_move() == Color::White;
-
-        // ep = 0 (en passant oben ausgeschlossen). WDL ignoriert rule50;
-        // die 50-Züge-Grenze prüft die Suche selbst (halfmove >= 100).
-        match self
-            .tb
-            .probe_wdl(white, black, kings, queens, rooks, bishops, knights, pawns, 0, turn)
-        {
+        let (bb, turn) = position_bitboards(board);
+        // ep = 0 (en passant in `probeable` ausgeschlossen). WDL ignoriert
+        // rule50; die 50-Züge-Grenze prüft die Suche selbst (halfmove >= 100).
+        match self.tb.probe_wdl(
+            bb[0], bb[1], bb[2], bb[3], bb[4], bb[5], bb[6], bb[7], 0, turn,
+        ) {
             Ok(WdlProbeResult::Win) => Some(TB_WIN - ply),
             Ok(WdlProbeResult::Loss) => Some(-(TB_WIN - ply)),
             Ok(WdlProbeResult::Draw)
@@ -172,6 +168,159 @@ impl Syzygy {
             Err(_) => None,
         }
     }
+
+    /// DTZ-**Wurzel**-Probe: liefert den 50-Züge-sicher konvertierenden Zug
+    /// (DTZ-optimal) plus einen Score (Win/Draw/Loss aus Wurzelsicht), oder
+    /// `None` wenn nicht probebar bzw. kein eindeutiger Zug (→ normale Suche).
+    ///
+    /// `root` trägt (als `DtzResult`) den von Fathom empfohlenen Bestzug mit
+    /// `from`/`to`/`promotion`. Wir spielen ihn direkt — in einem ≤N-Steine-
+    /// Endspiel ist der DTZ-optimale Zug der beste Zug; die Suche kann ihn nicht
+    /// schlagen. Das ersetzt die fehleranfällige Konversions-Heuristik und
+    /// vermeidet die 50-Züge-Remis-Klasse (Damen-/Turm-Geschiebe ohne Fortschritt).
+    ///
+    /// Hinweis: „DTZ-optimal" = gewinnt unter Beachtung der 50-Züge-Regel, nicht
+    /// zwingend „mattet in den wenigsten Zügen" — gelegentlich wirkt der Zug
+    /// umständlich, ist aber beweisbar korrekt.
+    ///
+    /// Der Legalitätscheck am Ende ist ein Sicherheitsnetz gegen eine
+    /// Fehlabbildung (Index/Promotion): findet sich der Zug nicht unter den
+    /// legalen Wurzelzügen, geben wir `None` zurück und suchen normal weiter.
+    pub fn probe_root_move(&self, board: &Board, halfmove: u8) -> Option<(ChessMove, i32)> {
+        if !self.probeable(board) {
+            return None;
+        }
+        let (bb, turn) = position_bitboards(board);
+        let res = self
+            .tb
+            .probe_root(
+                bb[0], bb[1], bb[2], bb[3], bb[4], bb[5], bb[6], bb[7],
+                halfmove as u32,
+                0,
+                turn,
+            )
+            .ok()?;
+
+        let r = match res.root {
+            DtzProbeValue::DtzResult(r) => r,
+            // Stalemate/Checkmate/Failed → an einer Ongoing-Wurzel praktisch nie;
+            // defensiv auf normale Suche zurückfallen.
+            _ => return None,
+        };
+
+        let from = sq_from_index(r.from_square as u64);
+        let to = sq_from_index(r.to_square as u64);
+        let promo = match r.promotion {
+            TbPiece::Queen => Some(Piece::Queen),
+            TbPiece::Rook => Some(Piece::Rook),
+            TbPiece::Bishop => Some(Piece::Bishop),
+            TbPiece::Knight => Some(Piece::Knight),
+            // Pawn/King = Sentinel „keine Promotion".
+            _ => None,
+        };
+        let mv = ChessMove::new(from, to, promo);
+
+        if !MoveGen::new_legal(board).any(|m| m == mv) {
+            return None;
+        }
+
+        let score = match r.wdl {
+            WdlProbeResult::Win => TB_WIN,
+            WdlProbeResult::Loss => -TB_WIN,
+            _ => 0,
+        };
+        Some((mv, score))
+    }
+
+    /// Gemeinsame Probe-Vorbedingungen (Syzygy): Steinzahl ≤ `max_pieces`, keine
+    /// Rochaderechte, kein en passant (v1). Genutzt von WDL- und DTZ-Probe.
+    fn probeable(&self, board: &Board) -> bool {
+        board.combined().popcnt() <= self.max_pieces
+            && board.castle_rights(Color::White) == CastleRights::NoRights
+            && board.castle_rights(Color::Black) == CastleRights::NoRights
+            && board.en_passant().is_none()
+    }
+}
+
+/// Extrahiert die acht u64-Bitboards (Reihenfolge wie von Pyrrhic erwartet:
+/// white, black, kings, queens, rooks, bishops, knights, pawns) plus
+/// Seite-am-Zug (`true` = Weiß) aus dem `chess::Board`.
+fn position_bitboards(board: &Board) -> ([u64; 8], bool) {
+    (
+        [
+            board.color_combined(Color::White).0,
+            board.color_combined(Color::Black).0,
+            board.pieces(Piece::King).0,
+            board.pieces(Piece::Queen).0,
+            board.pieces(Piece::Rook).0,
+            board.pieces(Piece::Bishop).0,
+            board.pieces(Piece::Knight).0,
+            board.pieces(Piece::Pawn).0,
+        ],
+        board.side_to_move() == Color::White,
+    )
+}
+
+/// Integritäts-Guard: prüft alle `.rtbw`/`.rtbz` unter den (Doppelpunkt-
+/// getrennten) Verzeichnissen auf gültige Magic-Bytes.
+///
+/// **Warum:** Eine truncierte oder durch einen abgebrochenen Download
+/// verfälschte Tabelle würde beim mmap-gestützten Probing über das Dateiende
+/// hinaus lesen → **SIGBUS** → harter Engine-Crash. SIGBUS ist ein
+/// Hardware-Signal und **nicht** von `catch_unwind` fangbar, daher muss die
+/// Prüfung VOR dem mmap (`TableBases::new`) passieren.
+///
+/// **Best-effort:** Magic + Lesbarkeit der ersten 4 Bytes. Fängt die
+/// realistischen Defekte (0-Byte, HTML-Fehlerseite, falscher Inhalt). Eine exakt
+/// an einer Seitengrenze mit gültigem Header abgeschnittene Datei bleibt
+/// unentdeckt — dagegen hilft nur die einmalige Magic-/Checksummen-Prüfung beim
+/// Download. Gibt `Err` mit den defekten Dateinamen zurück.
+fn verify_tables(path: &str) -> Result<(), String> {
+    let mut bad: Vec<String> = Vec::new();
+    for dir in path.split(':').map(str::trim).filter(|s| !s.is_empty()) {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            // Nicht lesbares Verzeichnis: kein Defekt-Befund hier — pyrrhic
+            // meldet einen leeren/fehlenden Pfad selbst (max_pieces == 0).
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let want = match p.extension().and_then(|e| e.to_str()) {
+                Some("rtbw") => WDL_MAGIC,
+                Some("rtbz") => DTZ_MAGIC,
+                _ => continue,
+            };
+            let ok = read_magic(&p).map(|m| m == want).unwrap_or(false);
+            if !ok {
+                bad.push(
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("?")
+                        .to_string(),
+                );
+            }
+        }
+    }
+    if bad.is_empty() {
+        Ok(())
+    } else {
+        bad.sort();
+        let shown = bad.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+        Err(format!(
+            "{} defekte/truncierte Tabellendatei(en): {}",
+            bad.len(),
+            shown
+        ))
+    }
+}
+
+fn read_magic(p: &Path) -> std::io::Result<[u8; 4]> {
+    use std::io::Read;
+    let mut f = fs::File::open(p)?;
+    let mut buf = [0u8; 4];
+    f.read_exact(&mut buf)?;
+    Ok(buf)
 }
 
 #[cfg(test)]
@@ -224,5 +373,34 @@ mod tests {
         assert_eq!(krk.castle_rights(Color::White), CastleRights::NoRights);
         assert_eq!(krk.castle_rights(Color::Black), CastleRights::NoRights);
         assert!(krk.en_passant().is_none());
+    }
+
+    /// Integritäts-Guard: gültige Magic → Ok; eine Datei mit falscher Magic
+    /// (truncierter/abgebrochener Download) → Err, der die Datei benennt. Genau
+    /// das verhindert den SIGBUS beim mmap-Probing.
+    #[test]
+    fn verify_tables_flags_bad_magic() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("martuni_syz_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let dirstr = dir.to_str().unwrap();
+
+        // Nur gültige Magic-Bytes → Ok.
+        fs::File::create(dir.join("KRvK.rtbw"))
+            .unwrap()
+            .write_all(&WDL_MAGIC)
+            .unwrap();
+        assert!(verify_tables(dirstr).is_ok());
+
+        // Eine Datei mit falscher Magic → Err, die sie benennt.
+        fs::File::create(dir.join("KQvK.rtbz"))
+            .unwrap()
+            .write_all(b"XXXX")
+            .unwrap();
+        let res = verify_tables(dirstr);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("KQvK.rtbz"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
