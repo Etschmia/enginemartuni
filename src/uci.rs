@@ -4,6 +4,7 @@ use crate::options::EngineOptions;
 use crate::polyglot::BookSet;
 use crate::position::{move_to_uci, Position};
 use crate::search::{search, GoParams, SearchRequest};
+use crate::syzygy::Syzygy;
 use crate::tt::TranspositionTable;
 use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +19,10 @@ pub fn uci_loop() {
 
     let mut position = Position::new();
     let mut options = EngineOptions::from_config(&cfg);
+    // Tablebase-Handle: None solange kein SyzygyPath gesetzt ist (→ Engine
+    // verhält sich exakt wie ohne Tablebases). Wird bei setoption SyzygyPath
+    // neu geladen. Arc, damit es billig in den Such-Thread geklont werden kann.
+    let mut syzygy: Option<Arc<Syzygy>> = load_syzygy(&options.syzygy_path);
     let stop = Arc::new(AtomicBool::new(false));
     let pondering = Arc::new(AtomicBool::new(false));
     let mut search_handle: Option<thread::JoinHandle<()>> = None;
@@ -54,6 +59,7 @@ pub fn uci_loop() {
             "setoption" => {
                 if let Some((name, value)) = parse_setoption(&tokens) {
                     let old_hash = options.hash;
+                    let old_syzygy_path = options.syzygy_path.clone();
                     options.set_option(&name, &value);
                     if options.hash != old_hash {
                         let mut t = tt.lock().unwrap();
@@ -62,6 +68,10 @@ pub fn uci_loop() {
                             "info string hash resized to {} MB",
                             t.size_mb()
                         );
+                    }
+                    if options.syzygy_path != old_syzygy_path {
+                        // Pfad geändert → Tablebases (neu) laden bzw. abschalten.
+                        syzygy = load_syzygy(&options.syzygy_path);
                     }
                 }
             }
@@ -92,6 +102,7 @@ pub fn uci_loop() {
                     stop: Arc::clone(&stop),
                     pondering: Arc::clone(&pondering),
                     move_overhead: options.move_overhead,
+                    syzygy: syzygy.as_ref().map(Arc::clone),
                 };
 
                 search_handle = Some(thread::spawn(move || {
@@ -144,6 +155,29 @@ pub fn uci_loop() {
     pondering.store(false, Ordering::Relaxed);
     if let Some(h) = search_handle.take() {
         let _ = h.join();
+    }
+}
+
+/// Lädt die Syzygy-Tablebases vom angegebenen Pfad und meldet das Ergebnis als
+/// `info string`. Leerer Pfad oder Ladefehler → `None` (Engine arbeitet dann
+/// ohne Tablebases weiter — kein Abbruch).
+fn load_syzygy(path: &str) -> Option<Arc<Syzygy>> {
+    if path.trim().is_empty() {
+        return None;
+    }
+    match Syzygy::load(path) {
+        Some(s) => {
+            println!(
+                "info string Syzygy: tablebases loaded (up to {} men) from {}",
+                s.max_pieces(),
+                path
+            );
+            Some(Arc::new(s))
+        }
+        None => {
+            println!("info string Syzygy: no tablebases loaded from {}", path);
+            None
+        }
     }
 }
 

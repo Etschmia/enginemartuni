@@ -7,6 +7,9 @@ pub struct Config {
     pub hash_size_mb: usize,
     pub book_dir: PathBuf,
     pub book_files: Vec<String>,
+    /// Pfad(e) zu den Syzygy-Tablebases (Doppelpunkt-getrennt möglich).
+    /// Leer = keine Tablebases (Engine arbeitet rein mit eigener Suche/Eval).
+    pub syzygy_path: String,
 }
 
 impl Config {
@@ -50,10 +53,29 @@ impl Config {
                 ]
             });
 
+        // SYZYGY_PATH: leer lassen = aus. Einen einzelnen *relativen* Pfad
+        // lösen wir gegen das Base-Dir auf (wie book_dir), damit z. B.
+        // SYZYGY_PATH=syzygy/3-4-5 vom Projekt-Root aus funktioniert; absolute
+        // oder doppelpunkt-getrennte Pfade bleiben unverändert.
+        let syzygy_path = env_map
+            .get("SYZYGY_PATH")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(|raw| {
+                let p = PathBuf::from(&raw);
+                if raw.contains(':') || p.is_absolute() {
+                    raw
+                } else {
+                    resolve_path(&p, &base_dir).to_string_lossy().into_owned()
+                }
+            })
+            .unwrap_or_default();
+
         Config {
             hash_size_mb,
             book_dir,
             book_files,
+            syzygy_path,
         }
     }
 }

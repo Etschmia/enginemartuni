@@ -128,6 +128,7 @@ name = "martuni"
 version = "0.1.0"
 dependencies = [
  "chess",
+ "pyrrhic-rs",
  "rand 0.8.5",
  "toml",
 ]
@@ -137,6 +138,15 @@ name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
+
+[[package]]
+name = "memmap2"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -178,6 +188,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "pyrrhic-rs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3910f053bb86e0d75fb0e61b47d82e456a15c548fb4d8a8da9d9d1a34a4e299"
+dependencies = [
+ "libc",
+ "memmap2",
 ]
 
 [[package]]

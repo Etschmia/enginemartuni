@@ -7,6 +7,7 @@ mod polyglot;
 mod position;
 mod pst;
 mod search;
+mod syzygy;
 mod tt;
 mod uci;
 

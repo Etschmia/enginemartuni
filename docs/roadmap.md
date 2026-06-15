@@ -10,6 +10,64 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**15.06.2026 — Syzygy-Tablebases (3-4-5) angefangen: Phasen ①–③ via `pyrrhic-rs`
+(Adapter + Option/Config + WDL-in-Suche), default-off + bit-exakt, end-to-end validiert.
+DTZ-Wurzel + Integritäts-Guard offen. UNCOMMITTED, Live-Bot unberührt.**
+- **Auswertung `analyse-15.06.2026.json` (159 P, 294 Blunder, B/P 1.849):** Der Sprung von
+  1.439 (08.06.) ist **kein Regress, sondern Opponent-Mix** — AetherBot (25 P, B/P 2.8) +
+  stickshark99 (25 P, 2.4) stellen 31 % der Partien, aber 44 % der Blunder; Rest ~1.4.
+  Bei bit-exaktem Live-Binary (14.06.) ohnehin nicht regressionsfähig. EG-Anteil erhöht
+  (94 Blunder, 0.591/P), aber Gros in **8–14-Steine**-Stellungen; nur **6/294** in ≤5 Steinen
+  → Syzygy ist **kein direkter B/P-Hebel** für dieses Fenster, sondern Korrektheits-/Polish-Lever
+  (perfekte Konversion, retired die fragile Endspiel-Heuristik für ≤5 Steine).
+- **Rating 15.06.: Blitz 2037 (−68 vs 14.06.) / Rapid 2205 (flat).** Setzt das 13.06.-Muster
+  fort (Blitz volatil/schwächeres Format, Rapid stabil); Binary seit 14.06. bit-exakt + reine
+  Korrektheits-Fixes → kein Eval-Regress, Blitz −68 = Tagesvarianz.
+- **Entscheid (Tobias):** Syzygy **3-4-5 via `pyrrhic-rs`** (FFI um Pyrrhic/Fathom), heutiger
+  Umfang Phasen ①–③ (WDL in der Suche), DTZ-Wurzel nächste Sitzung. Doc:
+  [syzygy-rust-options.md](syzygy-rust-options.md).
+- **Umgesetzt (uncommitted):**
+  - `src/syzygy.rs` (neu): `ChessAdapter` (EngineAdapter-Trait → `chess`-Angriffstabellen,
+    Index→Square), `Syzygy::load`/`probe_wdl_score`. Gates: Steine ≤ max_pieces, **keine
+    Rochaderechte**, **kein en passant** (v1 — `chess`-EP-Semantik ≠ Fathom-Zielfeld, Auslassen
+    ist immer korrekt). WDL→Score: Win `90_000−ply` / Loss `−(…)` / Draw·Cursed·Blessed `0`
+    (unter `MATE_THRESHOLD` 99_000 → echte Matts gehen vor, TT-Mate-Normierung unberührt).
+  - `options.rs`/`config.rs`/`uci.rs`: UCI-Option `SyzygyPath` + `.env`-Key `SYZYGY_PATH`,
+    Handle-Laden bei Start/setoption, `Option<Arc<Syzygy>>` in `SearchRequest`.
+  - `search.rs`: WDL-Probe im inneren Knoten (ply > 0, nach 50-Züge/Repetition-Check) als
+    Cutoff; `tbhits` im `info`-Output (nur wenn > 0 → Default-Output byte-identisch).
+- **Verifikation:**
+  - **89/89 Tests grün** (86 + 3 neue in `syzygy.rs`: Index-Mapping, Adapter=chess-Angriffe, Gates).
+  - **Bit-Exaktheit (default-off):** Referenz aus `HEAD` (Worktree, md5 27acb202 = Live) vs.
+    WIP-Binary, **8 diverse Stellungen** `go depth 6` deadline-frei — **identische Tiefe +
+    Node-Count + bestmove** (beide aus Projekt-Root, damit gleiche eval.toml). Methodik-Falle
+    notiert: Binary aus fremdem CWD findet eval.toml nicht → Default-Eval → scheinbarer Mismatch.
+  - **End-to-end (kompletter Satz):** KBNvK tbhits=368 cp 89999 (Win — das ursprüngliche
+    Mop-up-Motiv jetzt TB-gelöst), KRvK/KQvKR Win, KQvKQ/KRvKR cp 0 (Remis), 5-Steiner
+    (KRPvKR) probt. Keine Crashes.
+- **Tabellen:** voller 3-4-5-Satz **290 Dateien / 940 MB** in `~/syzygy/3-4-5` (sesse.net;
+  rekursiver Crawl wird 403-geblockt → Einzel-GETs via `wget -i` + UA + Nachlade-Reparatur;
+  alle 290 magic-byte-verifiziert WDL `71e8235d` / DTZ `d7660ca5`).
+- **KRITISCHER BEFUND — truncierte Tabellen → SIGBUS (nicht von `catch_unwind` fangbar):**
+  Eine abgeschnittene `.rtbw`/`.rtbz` (mmap) crasht die Engine beim (rekursiven) Probe →
+  Bot-Forfeit. Aufgetreten mit 403-Trunkaten im Smoke-Ordner (KQvKQ→KQvK). **Vor jeder
+  Aktivierung Pflicht:** (a) magic-byte-/Größen-Verifikation des Tabellen-Ordners (Verifier in
+  `tools/`-Repro vorhanden), (b) optional ein Lade-Zeit-Integritäts-Guard in `Syzygy::load`
+  (Dateien VOR dem mmap prüfen, sonst `None`). Stockfish & Co. gaten das nicht — sie setzen
+  vollständige Tabellen voraus.
+- **Nebenbefund:** `pyrrhic_rs::max_pieces()` meldet **7** (Capability-Konstante, obwohl nur
+  3-4-5 geladen) → Gate lässt 6-7-Steine-Knoten zur Probe durch; Fathom liefert dort sauber
+  FAILED (TB_LARGEST=5) → korrekt, nur minimal verschwendete Probe-Calls. Optionale Verfeinerung:
+  echte max-Kardinalität aus den Dateinamen ableiten und kappen.
+- **Binär-Hygiene:** `target/release/martuni` auf approved **27acb202** zurückgesetzt
+  (kein stiller Rollout bei systemd-Restart), WIP-Binary gesichert als
+  `martuni.syzygy_wip_20260615` (md5 fc889864). `.env` **ohne** `SYZYGY_PATH` → Probing aus.
+  Source-Änderungen uncommitted im Tree.
+- **Offen (Tobias):** (1) **Phase ④ DTZ-Wurzel-Probe** (50-Züge-sichere Konversion an der
+  Wurzel, Root-Move-Filter); (2) **Integritäts-Guard** vor Aktivierung; (3) max_pieces-Kappung;
+  (4) Aktivierung (`SYZYGY_PATH` in `.env` ODER UCI `SyzygyPath`) + A/B/Lichess-Lookback;
+  (5) Commit-Entscheid für Phasen ①–③.
+
 **14.06.2026 — Hotpath-Cleanup Bundle 1 aus dem grok-/Cursor-Auto-Effizienz-Review umgesetzt
 (bit-exakt, kein Verhaltenswechsel). A/B 1000 P kein Regress. Branch `perf/eval-hotpath-cleanup`.**
 - **Review-Verifikation:** Befunde des `code-review-effizienz-cursor-auto-2026-06-13.md` vor der

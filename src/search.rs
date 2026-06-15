@@ -3,6 +3,7 @@ use crate::eval::evaluate;
 use crate::eval_config::EvalParams;
 use crate::polyglot::BookSet;
 use crate::position::move_to_uci;
+use crate::syzygy::Syzygy;
 use crate::tt::{TranspositionTable, TtFlag};
 use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, MoveGen, Piece, Square};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -153,6 +154,9 @@ pub struct SearchRequest {
     pub stop: Arc<AtomicBool>,
     pub pondering: Arc<AtomicBool>,
     pub move_overhead: u64,
+    /// Optionaler Syzygy-Tablebase-Handle (None = aus). Wird in der Suche für
+    /// WDL-Cutoffs an ≤N-Steine-Knoten genutzt.
+    pub syzygy: Option<Arc<Syzygy>>,
 }
 
 struct SearchState {
@@ -195,6 +199,10 @@ struct SearchState {
     // auf MAX_HISTORY). Quiet Moves werden innerhalb ihres Ordering-Bands
     // nach dem History-Score absteigend sortiert.
     move_history: Vec<i32>,
+    // Optionaler Syzygy-Tablebase-Handle (None = aus) und Trefferzähler für
+    // die UCI-`tbhits`-Ausgabe.
+    syzygy: Option<Arc<Syzygy>>,
+    tb_hits: u64,
 }
 
 #[inline]
@@ -327,6 +335,8 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         nmp_off: std::env::var_os("MARTUNI_NMP_OFF").is_some(),
         killers: [[None; 2]; MAX_PLY],
         move_history: vec![0; 2 * 64 * 64],
+        syzygy: req.syzygy,
+        tb_hits: 0,
     };
 
     // Iteratives Deepening
@@ -358,7 +368,14 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         last_score = score;
         last_move = state.root_best_move;
 
-        emit_info(depth, score, state.nodes, state.start.elapsed(), last_move);
+        emit_info(
+            depth,
+            score,
+            state.nodes,
+            state.start.elapsed(),
+            last_move,
+            state.tb_hits,
+        );
 
         // Gefundenes Matt: nicht weitersuchen — aber nur, wenn die
         // Mattdistanz innerhalb der gerade abgeschlossenen Suchtiefe liegt,
@@ -419,7 +436,14 @@ fn ponder_move_from_tt(
     }
 }
 
-fn emit_info(depth: i32, score: i32, nodes: u64, elapsed: Duration, best: Option<ChessMove>) {
+fn emit_info(
+    depth: i32,
+    score: i32,
+    nodes: u64,
+    elapsed: Duration,
+    best: Option<ChessMove>,
+    tb_hits: u64,
+) {
     let ms = elapsed.as_millis().max(1) as u64;
     let nps = (nodes * 1000) / ms;
     let score_str = if score.abs() > MATE_THRESHOLD {
@@ -430,7 +454,16 @@ fn emit_info(depth: i32, score: i32, nodes: u64, elapsed: Duration, best: Option
         format!("cp {}", score)
     };
     let pv = best.map(move_to_uci).unwrap_or_default();
-    println!("info depth {depth} score {score_str} nodes {nodes} time {ms} nps {nps} pv {pv}");
+    // `tbhits` nur ausgeben, wenn es Tablebase-Treffer gab — so bleibt der
+    // Default-Output (ohne Syzygy) byte-identisch zur Vorversion.
+    let tb = if tb_hits > 0 {
+        format!(" tbhits {tb_hits}")
+    } else {
+        String::new()
+    };
+    println!(
+        "info depth {depth} score {score_str} nodes {nodes} time {ms} nps {nps}{tb} pv {pv}"
+    );
 }
 
 fn alpha_beta(
@@ -463,6 +496,30 @@ fn alpha_beta(
         }
         if halfmove >= 100 {
             return 0;
+        }
+    }
+
+    // Syzygy-Tablebase-Probe (WDL).
+    //
+    // Nur an inneren Knoten (ply > 0): die Wurzel braucht einen konkreten Zug,
+    // den die WDL-Probe nicht liefert — die 50-Zuege-sichere Wurzel-Konversion
+    // (DTZ) folgt als eigene Phase. An einem Knoten mit <= max_pieces Steinen
+    // (und ohne Rochaderechte/en passant, von probe_wdl_score geprueft) gibt
+    // die Tabelle die spieltheoretische Wahrheit zurueck — wir schneiden den
+    // Teilbaum mit diesem Score ab (Win/Loss knotenrelativ, Remis = 0). Das
+    // ersetzt dort die fehleranfaellige eigene Endspiel-Heuristik.
+    //
+    // None (kein Handle / nicht probebar / Tabelle fehlt) => normale Suche.
+    // Der Borrow auf state.syzygy endet mit `and_then`, daher ist danach das
+    // mutable Hochzaehlen von state.tb_hits konfliktfrei.
+    if ply > 0 {
+        let tb_score = state
+            .syzygy
+            .as_deref()
+            .and_then(|syz| syz.probe_wdl_score(board, ply));
+        if let Some(score) = tb_score {
+            state.tb_hits += 1;
+            return score;
         }
     }
 
@@ -1627,6 +1684,7 @@ mod tests {
             stop: Arc::new(AtomicBool::new(false)),
             pondering: Arc::new(AtomicBool::new(false)),
             move_overhead: 0,
+            syzygy: None,
         };
         search(req).expect("Suche liefert ein Ergebnis").best
     }
@@ -1712,6 +1770,7 @@ mod tests {
             stop: Arc::new(AtomicBool::new(false)),
             pondering: Arc::new(AtomicBool::new(false)),
             move_overhead: 0,
+            syzygy: None,
         };
         search(req).expect("Suche liefert ein Ergebnis")
     }
