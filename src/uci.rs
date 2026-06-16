@@ -186,6 +186,7 @@ fn handle_position(position: &mut Position, tokens: &[&str]) {
         return;
     }
 
+    let previous = position.clone();
     let move_start = match tokens[1] {
         "startpos" => {
             position.set_startpos();
@@ -199,7 +200,9 @@ fn handle_position(position: &mut Position, tokens: &[&str]) {
                 i += 1;
             }
             let fen = fen_parts.join(" ");
-            if position.set_fen(&fen).is_err() {
+            if let Err(e) = position.set_fen(&fen) {
+                println!("info string position error: {e}");
+                *position = previous;
                 return;
             }
             if i < tokens.len() && tokens[i] == "moves" { i + 1 } else { 0 }
@@ -209,7 +212,10 @@ fn handle_position(position: &mut Position, tokens: &[&str]) {
 
     if move_start > 0 && move_start < tokens.len() {
         let moves: Vec<&str> = tokens[move_start..].to_vec();
-        let _ = position.apply_moves(&moves);
+        if let Err(e) = position.apply_moves(&moves) {
+            println!("info string position error: {e}");
+            *position = previous;
+        }
     }
 }
 

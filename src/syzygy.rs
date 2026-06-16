@@ -121,11 +121,15 @@ impl Syzygy {
         }
         match TableBases::<ChessAdapter>::new(path) {
             Ok(tb) => {
-                let max_pieces = tb.max_pieces();
-                if max_pieces == 0 {
+                let pyrrhic_max = tb.max_pieces();
+                if pyrrhic_max == 0 {
                     // Pfad existiert, aber keine ladbaren Tabellen gefunden.
                     None
                 } else {
+                    let detected_max = detect_max_pieces(path);
+                    let max_pieces = detected_max
+                        .map(|detected| pyrrhic_max.min(detected))
+                        .unwrap_or(pyrrhic_max);
                     Some(Syzygy { tb, max_pieces })
                 }
             }
@@ -323,6 +327,46 @@ fn read_magic(p: &Path) -> std::io::Result<[u8; 4]> {
     Ok(buf)
 }
 
+fn detect_max_pieces(path: &str) -> Option<u32> {
+    let mut max_pieces = 0;
+    for dir in path.split(':').map(str::trim).filter(|s| !s.is_empty()) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            match p.extension().and_then(|e| e.to_str()) {
+                Some("rtbw") | Some("rtbz") => {}
+                _ => continue,
+            }
+            let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if let Some(count) = table_name_piece_count(stem) {
+                max_pieces = max_pieces.max(count);
+            }
+        }
+    }
+    (max_pieces > 0).then_some(max_pieces)
+}
+
+fn table_name_piece_count(stem: &str) -> Option<u32> {
+    let mut seen_separator = false;
+    let mut count = 0;
+    for ch in stem.chars() {
+        if ch == 'v' {
+            seen_separator = true;
+            continue;
+        }
+        if matches!(ch, 'K' | 'Q' | 'R' | 'B' | 'N' | 'P') {
+            count += 1;
+        } else {
+            return None;
+        }
+    }
+    (seen_separator && count >= 2).then_some(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,6 +444,36 @@ mod tests {
         let res = verify_tables(dirstr);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("KQvK.rtbz"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn table_name_piece_count_counts_both_sides() {
+        assert_eq!(table_name_piece_count("KQvK"), Some(3));
+        assert_eq!(table_name_piece_count("KPPvKPP"), Some(6));
+        assert_eq!(table_name_piece_count("KQK"), None);
+        assert_eq!(table_name_piece_count("KXvK"), None);
+    }
+
+    #[test]
+    fn detect_max_pieces_uses_table_filenames() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!(
+            "martuni_syz_detect_{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        fs::File::create(dir.join("KQvK.rtbw"))
+            .unwrap()
+            .write_all(&WDL_MAGIC)
+            .unwrap();
+        fs::File::create(dir.join("KPPvKPP.rtbz"))
+            .unwrap()
+            .write_all(&DTZ_MAGIC)
+            .unwrap();
+
+        assert_eq!(detect_max_pieces(dir.to_str().unwrap()), Some(6));
 
         let _ = fs::remove_dir_all(&dir);
     }

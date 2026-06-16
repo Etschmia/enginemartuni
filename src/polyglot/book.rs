@@ -105,14 +105,17 @@ impl BookSet {
     /// zufaellig ein legaler Zug ausgewaehlt.
     pub fn probe(&self, board: &Board) -> Option<ChessMove> {
         let key = polyglot_hash(board);
+        let mut legal_moves: Option<Vec<ChessMove>> = None;
         for book in &self.books {
             let entries = book.find(key);
             if entries.is_empty() {
                 continue;
             }
+            let legal_moves =
+                legal_moves.get_or_insert_with(|| MoveGen::new_legal(board).collect());
             let legal: Vec<(u16, ChessMove)> = entries
                 .iter()
-                .filter_map(|e| decode_move(e.mv, board).map(|mv| (e.weight, mv)))
+                .filter_map(|e| decode_move(e.mv, board, legal_moves).map(|mv| (e.weight, mv)))
                 .collect();
             if legal.is_empty() {
                 continue;
@@ -141,7 +144,7 @@ fn weighted_choice(candidates: &[(u16, ChessMove)]) -> ChessMove {
     candidates.last().unwrap().1
 }
 
-fn decode_move(m: u16, board: &Board) -> Option<ChessMove> {
+fn decode_move(m: u16, board: &Board, legal_moves: &[ChessMove]) -> Option<ChessMove> {
     let to_file = (m & 0x7) as usize;
     let to_rank = ((m >> 3) & 0x7) as usize;
     let from_file = ((m >> 6) & 0x7) as usize;
@@ -176,10 +179,8 @@ fn decode_move(m: u16, board: &Board) -> Option<ChessMove> {
     }
 
     let candidate = ChessMove::new(from, to, promotion);
-    for legal in MoveGen::new_legal(board) {
-        if legal == candidate {
-            return Some(candidate);
-        }
+    if legal_moves.iter().any(|&legal| legal == candidate) {
+        return Some(candidate);
     }
     None
 }

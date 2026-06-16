@@ -5,7 +5,7 @@ use crate::polyglot::BookSet;
 use crate::position::move_to_uci;
 use crate::syzygy::Syzygy;
 use crate::tt::{TranspositionTable, TtFlag};
-use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, MoveGen, Piece, Square};
+use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, MoveGen, Piece, Square, EMPTY};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1030,7 +1030,7 @@ fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, state: &mut Se
     }
 
     let in_check = board.checkers().popcnt() > 0;
-    let legal_moves = MoveGen::new_legal(board);
+    let mut legal_moves = MoveGen::new_legal(board);
     if legal_moves.len() == 0 {
         return if in_check { -MATE + ply } else { 0 };
     }
@@ -1075,28 +1075,47 @@ fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, state: &mut Se
         return stand_pat;
     }
 
-    // Nur Schlagzuege generieren (inkl. en passant), SEE einmal pro Zug.
-    // Sortierung nach SEE absteigend: beste Captures zuerst → frühere Cutoffs.
-    let mut captures: Vec<(ChessMove, i32)> = legal_moves
-        .filter(|mv| is_capture(board, *mv))
-        .map(|mv| {
-            let v = see(board, mv);
-            (mv, v)
-        })
-        .collect();
-    captures.sort_by_key(|(_, v)| -*v);
+    // Taktische QSearch-Zuege: Captures per Zielmaske (gegnerische Figuren
+    // plus EP-Zielfeld) und stille Damenumwandlungen separat. Damit iterieren
+    // wir nicht mehr alle ruhigen Zielquadrate nur, um sie danach wegzufiltern.
+    let mut target_mask = *board.color_combined(!board.side_to_move());
+    if let Some(ep_sq) = board.en_passant() {
+        target_mask |= BitBoard::from_square(ep_sq.uforward(board.side_to_move()));
+    }
+    legal_moves.set_iterator_mask(target_mask);
 
-    for (mv, see_val) in captures {
-        // Bad Capture Pruning: verlierende Schlagzuege ueberspringen.
-        if see_val < 0 {
+    let mut tactical: Vec<(ChessMove, Option<i32>, i32)> = Vec::new();
+    for mv in legal_moves.by_ref() {
+        if !is_capture(board, mv) {
             continue;
         }
+        let v = see(board, mv);
+        tactical.push((mv, Some(v), -v));
+    }
 
-        // Delta Pruning: wenn selbst ein optimistischer Gewinn den alpha-Wert
-        // nicht mehr erreichen kann, diesen Capture überspringen.
-        // Gilt nicht bei Beförderungen (Promotion kann viel mehr wert sein).
-        if mv.get_promotion().is_none() && stand_pat + see_val + DELTA_MARGIN < alpha {
-            continue;
+    // Nach der maskierten Iteration liefert die Crate mit `!EMPTY` die
+    // verbleibenden Zuege. Davon nehmen wir nur stille Queen-Promotions.
+    legal_moves.set_iterator_mask(!EMPTY);
+    for mv in legal_moves {
+        if is_quiet_queen_promotion(board, mv) {
+            tactical.push((mv, None, -10_000));
+        }
+    }
+    tactical.sort_by_key(|(_, _, order_key)| *order_key);
+
+    for (mv, see_val, _) in tactical {
+        if let Some(see_val) = see_val {
+            // Bad Capture Pruning: verlierende Schlagzuege ueberspringen.
+            if see_val < 0 {
+                continue;
+            }
+
+            // Delta Pruning: wenn selbst ein optimistischer Gewinn den alpha-Wert
+            // nicht mehr erreichen kann, diesen Capture überspringen.
+            // Gilt nicht bei Beförderungen (Promotion kann viel mehr wert sein).
+            if mv.get_promotion().is_none() && stand_pat + see_val + DELTA_MARGIN < alpha {
+                continue;
+            }
         }
 
         let nb = board.make_move_new(mv);
@@ -1197,6 +1216,11 @@ fn is_capture(board: &Board, mv: ChessMove) -> bool {
         return true;
     }
     false
+}
+
+#[inline]
+fn is_quiet_queen_promotion(board: &Board, mv: ChessMove) -> bool {
+    mv.get_promotion() == Some(Piece::Queen) && !is_capture(board, mv)
 }
 
 /// Late-Move-Reductions-Stufenformel (Variante A).
