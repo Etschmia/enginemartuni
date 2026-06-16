@@ -1,6 +1,7 @@
 use chess::{Board, ChessMove, MoveGen, Piece, Square};
 use std::str::FromStr;
 
+#[derive(Clone)]
 pub struct Position {
     board: Board,
     /// Hashes aller bisherigen Stellungen seit dem letzten irreversiblen

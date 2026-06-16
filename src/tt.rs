@@ -37,10 +37,11 @@ impl Default for TtEntry {
 }
 
 /// Transposition Table — reservierter RAM-Bereich fuer bereits bewertete
-/// Stellungen. Hash-Slot pro Schluessel ueber Modulo, einfache Replace-
-/// Always-Strategie (siehe `store`). Wird aktiv von Alpha-Beta + Quiescence
-/// in `search.rs` befuellt und in der Move-Ordering ueber den Hash-Move
-/// genutzt. Groesse via UCI-Option `Hash` (MB), Default in `config.rs`.
+/// Stellungen. Hash-Slot pro Schluessel ueber Modulo, depth-/exact-preferred
+/// Replacement (siehe `should_replace`). Wird aktiv von Alpha-Beta +
+/// Quiescence in `search.rs` befuellt und in der Move-Ordering ueber den
+/// Hash-Move genutzt. Groesse via UCI-Option `Hash` (MB), Default in
+/// `config.rs`.
 pub struct TranspositionTable {
     entries: Vec<TtEntry>,
     size_mb: usize,
@@ -99,6 +100,9 @@ impl TranspositionTable {
         flag: TtFlag,
     ) {
         let idx = (key as usize) % self.entries.len();
+        if !should_replace(self.entries[idx], key, depth, flag) {
+            return;
+        }
         self.entries[idx] = TtEntry {
             key,
             best_move,
@@ -106,5 +110,77 @@ impl TranspositionTable {
             depth,
             flag,
         };
+    }
+}
+
+fn flag_priority(flag: TtFlag) -> i32 {
+    match flag {
+        TtFlag::Exact => 3,
+        TtFlag::Lower | TtFlag::Upper => 2,
+        TtFlag::Empty => 0,
+    }
+}
+
+fn should_replace(old: TtEntry, new_key: u64, new_depth: i8, new_flag: TtFlag) -> bool {
+    if old.flag == TtFlag::Empty {
+        return true;
+    }
+
+    if old.key == new_key {
+        if new_depth != old.depth {
+            return new_depth > old.depth;
+        }
+        return flag_priority(new_flag) >= flag_priority(old.flag);
+    }
+
+    if new_depth > old.depth {
+        return true;
+    }
+    if new_depth == old.depth {
+        return flag_priority(new_flag) >= flag_priority(old.flag);
+    }
+
+    // Exact-Eintraege sind als Hash-Move und Score-Hinweis wertvoll genug, um
+    // einen nur geringfuegig tieferen Bound bei Kollision zu verdraengen.
+    new_flag == TtFlag::Exact && old.flag != TtFlag::Exact && new_depth + 2 >= old.depth
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chess::Square;
+
+    fn mv() -> ChessMove {
+        ChessMove::new(Square::A2, Square::A3, None)
+    }
+
+    fn one_slot_tt() -> TranspositionTable {
+        TranspositionTable {
+            entries: vec![TtEntry::default()],
+            size_mb: 1,
+        }
+    }
+
+    #[test]
+    fn deeper_entry_survives_shallow_collision() {
+        let mut tt = one_slot_tt();
+        tt.store(1, Some(mv()), 40, 8, TtFlag::Lower);
+        tt.store(2, None, 10, 4, TtFlag::Exact);
+
+        let entry = tt.probe(1).expect("tiefer Eintrag bleibt erhalten");
+        assert_eq!(entry.eval, 40);
+        assert_eq!(entry.depth, 8);
+        assert!(tt.probe(2).is_none());
+    }
+
+    #[test]
+    fn exact_replaces_same_depth_bound() {
+        let mut tt = one_slot_tt();
+        tt.store(1, None, 10, 5, TtFlag::Lower);
+        tt.store(1, Some(mv()), 22, 5, TtFlag::Exact);
+
+        let entry = tt.probe(1).expect("exact ersetzt bound gleicher Tiefe");
+        assert_eq!(entry.eval, 22);
+        assert_eq!(entry.flag, TtFlag::Exact);
     }
 }
