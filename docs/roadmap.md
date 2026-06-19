@@ -10,6 +10,27 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**19.06.2026 — Staged MovePicker (Code-Review-P1): `order_moves` (eager: alle Züge
+scoren → `Vec<ScoredMove>` → Gesamt-Sort pro Knoten) ersetzt durch lazy `MovePicker`
+mit 8 Stufen (TT → stille Dame-Umwandlung → gewinnende Captures → Killer 1/2 →
+Unterumwandlung → ruhige Züge → verlierende Captures). BIT-EXAKT, +8–12 % NPS.**
+- **Gewinn-Mechanik:** Ein früher Cutoff (typisch TT-Move an Cut-Nodes) überspringt die
+  SEE-Berechnung *aller* Captures und beide Sorts komplett — die teure Arbeit fällt nur an,
+  wenn ihre Stufe erreicht wird.
+- **Bit-Exaktheit (zwei Fallen sauber adressiert):** (a) SEE wandert ans Stufenende, ist aber
+  reine Funktion der (während des Knotens unveränderten) Stellung → wertgleich; (b) die
+  Quiet-History-Scores werden in `MovePicker::new()` bei Knoten-Eintritt gelesen, BEVOR
+  Kind-Suchen die globale History-Tabelle mutieren → nur das *Sortieren* der Quiets ist
+  verzögert, die Reihenfolge bleibt identisch. Klassifikation in `new()` folgt exakt der
+  alten if-else-Priorität → jeder Zug landet in genau einer Kategorie, kein Doppel-Ausgeben.
+- **Verifikation:** Node-Counts über 8 diverse Stellungen × alle Tiefen identisch zur Baseline
+  (deterministisches Harness, Buch + Syzygy bewusst aus → reine Alpha-Beta); 94/94 Tests grün;
+  NPS +8–12 % (best-of-6, identische Knoten, unter Turnier-Last gemessen). Methodik wie
+  Hotpath-Cleanup Bundle 1 — kein A/B nötig, da bit-exakt.
+- **Stand:** committet auf Branch `dev/engine-arbeit` (Dev-Worktree `../enginemartuni-dev`).
+  Live-Binary unberührt — **Rollout (Merge → `master`, Live-Build, `lichess-bot.service`-Neustart)
+  erst nach dem laufenden 12h-Bullet-Turnier**, um keine Partie zu unterbrechen.
+
 **15.06.2026 — Syzygy-Tablebases (3-4-5) via `pyrrhic-rs`: Phasen ①–④ + Integritäts-Guard
 (Adapter, Option/Config, WDL-in-Suche, DTZ-Wurzel), end-to-end validiert, GEPUSHT
 (①–③ `499e22c`, ④+Guard `dc974a1`). AKTIVIERT + LIVE seit 15.06. 18:34 CEST

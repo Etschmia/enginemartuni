@@ -680,27 +680,17 @@ fn alpha_beta(
     // ist derselbe Generator, der oben bereits die Terminal-Erkennung erledigt
     // hat; damit faellt die fruehere zweite MoveGen-Runde pro Knoten weg.
     let killers_here = state.killers_at(ply);
-    let ordered = order_moves(
+    // Lazy, gestaffelter Picker statt eager Vec<ScoredMove> + Gesamt-Sort. Der
+    // `&state.move_history`-Borrow lebt nur innerhalb von `new()` (dort werden
+    // die Quiet-History-Scores bei Knoten-Eintritt gelesen) — danach hält der
+    // Picker keinen State-Borrow mehr, der Loop darf `state` wieder mutieren.
+    let picker = MovePicker::new(
         board,
         legal_moves,
         tt_move,
         killers_here,
         &state.move_history,
     );
-    if state.debug_root && ply == 0 {
-        for sm in &ordered {
-            let see = sm
-                .see_val
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "none".to_string());
-            println!(
-                "info string rootdbg depth {depth} generated move {} order {} see {}",
-                move_to_uci(sm.mv),
-                sm.order_key,
-                see
-            );
-        }
-    }
 
     // Eigenen Hash fuer die Kinder in die Historie legen
     if ply > 0 {
@@ -715,8 +705,27 @@ fn alpha_beta(
     // zuerst mit einem Nullfenster (Scout-Search) getestet.
     let mut first_move = true;
 
-    for (move_idx, sm) in ordered.iter().enumerate() {
+    // `picker.enumerate()` liefert dieselbe `move_idx`-Folge wie früher
+    // `ordered.iter().enumerate()`: der Index zählt pro ausgegebenem Zug hoch,
+    // unabhängig von `continue`/`break` im Body (enumerate zählt am Iterator,
+    // nicht am Kontrollfluss).
+    for (move_idx, sm) in picker.enumerate() {
         let mv = sm.mv;
+        // Debug-Dump am Wurzelknoten (nur mit MARTUNI_DEBUG_ROOT). Früher als
+        // Vorab-Block vor der Schleife; jetzt pro Zug beim Ausgeben — selbe
+        // Information, nur mit der Suche verschränkt statt vorgezogen.
+        if state.debug_root && ply == 0 {
+            let see = sm
+                .see_val
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            println!(
+                "info string rootdbg depth {depth} generated move {} order {} see {}",
+                move_to_uci(sm.mv),
+                sm.order_key,
+                see
+            );
+        }
         let alpha_before = alpha;
         let nb = board.make_move_new(mv);
         // Schach-Extension phase-abhaengig:
@@ -1294,93 +1303,273 @@ fn is_candidate_move(
 /// bei Captures gesetzt und wird durch die Suche gereicht, damit SEE pro
 /// Capture genau einmal berechnet wird (Ordering + Extension-Check teilen
 /// sich das Ergebnis).
+#[derive(Clone, Copy)]
 struct ScoredMove {
     mv: ChessMove,
     order_key: i32,
     see_val: Option<i32>,
 }
 
-/// Sortier-Schlüssel (niedrig = zuerst):
-///   TT-Move:                 -100_000
-///   Promotion zu Dame:        -50_000
-///   Gewinnender Capture:      -40_000 + MVV/LVA
-///   Killer 1:                 -30_000
-///   Killer 2:                 -25_000
-///   Unterpromotion:           -20_000
-///   Quiet Move (History):     -history                (Range [-16_000, 0])
-///   Verlierender Capture:     +10_000 - SEE           (stark negative zuletzt)
-fn order_moves(
-    board: &Board,
-    moves: MoveGen,
-    tt_move: Option<ChessMove>,
-    killers: [Option<ChessMove>; 2],
-    move_history: &[i32],
-) -> Vec<ScoredMove> {
-    let stm = board.side_to_move();
-    let mut scored: Vec<ScoredMove> = moves
-        .map(|mv| {
+/// Lazy, gestaffelter Move-Picker — liefert dieselbe Zugreihenfolge wie der
+/// frühere eager `order_moves`, aber stufenweise on demand. Erzeugt eine frühe
+/// Stufe einen Beta-Cutoff (typisch der TT-Move an Cut-Nodes), entfallen die
+/// SEE-Berechnung *aller* Captures und das Sortieren komplett — das ist der
+/// NPS-Hebel. Bit-exakt zur alten Reihenfolge: dieselben order_key-Schienen,
+/// dieselbe stabile Ordnung (MoveGen-Reihenfolge bei Gleichstand), dieselben
+/// `see_val`-Werte und damit dieselben `move_idx` (→ SEE-Pruning/LMR unberührt).
+///
+/// Stufen in Ausgabereihenfolge (niedrigster order_key zuerst):
+///   0  TT-Move                  -100_000
+///   1  Dame-Umwandlung (still)   -50_000   ← VOR den Captures (−50k < −40k)!
+///   2  gewinnender Capture       -40_000 + MVV/LVA   (SEE ≥ 0)
+///   3  Killer 1                  -30_000
+///   4  Killer 2                  -25_000
+///   5  Unterumwandlung (still)   -20_000
+///   6  ruhiger Zug              -history             (Range [-16_000, 0])
+///   7  verlierender Capture      10_000 - SEE        (SEE < 0, ganz zuletzt)
+///
+/// Warum das bit-exakt bleibt:
+///   - Captures werden in Stufe 2 *einmal* per SEE klassifiziert; verlierende
+///     wandern in den `bad_captures`-Pool für Stufe 7. `see(board, mv)` ist
+///     eine reine Funktion der (während des Knotens unveränderten) Stellung —
+///     ob früh oder spät berechnet, der Wert ist derselbe.
+///   - Die History-Scores der ruhigen Züge werden bereits in `new()` (= bei
+///     Knoten-Eintritt) gelesen, BEVOR eine Kind-Suche die globale
+///     History-Tabelle verändern kann. Nur das *Sortieren* der Quiets ist
+///     verzögert. Damit ist die Quiet-Reihenfolge identisch zum eager-Stand.
+///   - Die Klassifikation in `new()` folgt exakt der alten if-else-Priorität
+///     (tt > capture > Dame-Umwandlung > Killer > Unterumwandlung > quiet);
+///     jeder Zug landet in genau einer Kategorie → kein Doppel-Ausgeben.
+struct MovePicker<'a> {
+    board: &'a Board,
+    /// aktuelle Stufe (0..=8); 8 = erschöpft
+    stage: u8,
+    /// Index innerhalb der gerade ausgegebenen Stufenliste
+    cursor: usize,
+
+    tt: Option<ScoredMove>,
+    queen_promos: Vec<ChessMove>,
+    /// alle Captures in MoveGen-Reihenfolge; SEE folgt erst in Stufe 2
+    captures: Vec<ChessMove>,
+    killer1: Option<ChessMove>,
+    killer2: Option<ChessMove>,
+    under_promos: Vec<ChessMove>,
+    /// ruhige Züge mit bereits in `new()` gelesenem History-Score (unsortiert)
+    quiets: Vec<ScoredMove>,
+
+    good_captures: Vec<ScoredMove>,
+    bad_captures: Vec<ScoredMove>,
+    captures_done: bool,
+    quiets_sorted: bool,
+}
+
+impl<'a> MovePicker<'a> {
+    fn new(
+        board: &'a Board,
+        moves: MoveGen,
+        tt_move: Option<ChessMove>,
+        killers: [Option<ChessMove>; 2],
+        move_history: &[i32],
+    ) -> Self {
+        let stm = board.side_to_move();
+        let mut tt = None;
+        let mut queen_promos = Vec::new();
+        let mut captures = Vec::new();
+        let mut killer1 = None;
+        let mut killer2 = None;
+        let mut under_promos = Vec::new();
+        let mut quiets = Vec::new();
+
+        // Einmalige Klassifikation in MoveGen-Reihenfolge. Die Zweig-Reihenfolge
+        // ist exakt die der alten `order_moves`-Prioritätskette. SEE wird hier
+        // NICHT berechnet (außer für einen schlagenden TT-Move, der ohnehin als
+        // Erster gesucht wird) — die teure Capture-SEE folgt erst in Stufe 2.
+        // `move_history` wird nur hier gelesen (Knoten-Eintritt) und NICHT
+        // gespeichert; danach hält der Picker keinen State-Borrow mehr.
+        for mv in moves {
             if Some(mv) == tt_move {
-                return ScoredMove {
+                let see_val = if is_capture(board, mv) {
+                    Some(see(board, mv))
+                } else {
+                    None
+                };
+                tt = Some(ScoredMove {
                     mv,
                     order_key: -100_000,
-                    see_val: if is_capture(board, mv) {
-                        Some(see(board, mv))
-                    } else {
-                        None
-                    },
-                };
+                    see_val,
+                });
+            } else if is_capture(board, mv) {
+                captures.push(mv);
+            } else if mv.get_promotion() == Some(Piece::Queen) {
+                queen_promos.push(mv);
+            } else if Some(mv) == killers[0] {
+                killer1 = Some(mv);
+            } else if Some(mv) == killers[1] {
+                killer2 = Some(mv);
+            } else if mv.get_promotion().is_some() {
+                under_promos.push(mv);
+            } else {
+                let h = move_history[history_idx(stm, mv.get_source(), mv.get_dest())];
+                quiets.push(ScoredMove {
+                    mv,
+                    order_key: -h,
+                    see_val: None,
+                });
             }
-            if is_capture(board, mv) {
-                let v = see(board, mv);
-                let order_key = if v >= 0 {
-                    -40_000 + mvv_lva_key(board, mv)
-                } else {
-                    10_000 - v
-                };
-                return ScoredMove {
+        }
+
+        MovePicker {
+            board,
+            stage: 0,
+            cursor: 0,
+            tt,
+            queen_promos,
+            captures,
+            killer1,
+            killer2,
+            under_promos,
+            quiets,
+            good_captures: Vec::new(),
+            bad_captures: Vec::new(),
+            captures_done: false,
+            quiets_sorted: false,
+        }
+    }
+
+    /// Stufe 2: SEE für alle Captures berechnen, in gewinnend (SEE ≥ 0) und
+    /// verlierend (SEE < 0) aufteilen und jeweils stabil nach order_key
+    /// sortieren. Wird höchstens einmal aufgerufen — und nur, wenn die Suche
+    /// Stufe 2 überhaupt erreicht (sonst bleibt die ganze SEE-Arbeit aus).
+    fn classify_captures(&mut self) {
+        for i in 0..self.captures.len() {
+            let mv = self.captures[i];
+            let v = see(self.board, mv);
+            if v >= 0 {
+                let order_key = -40_000 + mvv_lva_key(self.board, mv);
+                self.good_captures.push(ScoredMove {
                     mv,
                     order_key,
                     see_val: Some(v),
-                };
-            }
-            if mv.get_promotion() == Some(Piece::Queen) {
-                return ScoredMove {
+                });
+            } else {
+                self.bad_captures.push(ScoredMove {
                     mv,
-                    order_key: -50_000,
-                    see_val: None,
-                };
+                    order_key: 10_000 - v,
+                    see_val: Some(v),
+                });
             }
-            if Some(mv) == killers[0] {
-                return ScoredMove {
-                    mv,
-                    order_key: -30_000,
-                    see_val: None,
-                };
+        }
+        // sort_by_key ist stabil → MoveGen-Reihenfolge bei Gleichstand, wie der
+        // frühere einzelne Gesamt-Sort.
+        self.good_captures.sort_by_key(|sm| sm.order_key);
+        self.bad_captures.sort_by_key(|sm| sm.order_key);
+    }
+}
+
+impl<'a> Iterator for MovePicker<'a> {
+    type Item = ScoredMove;
+
+    fn next(&mut self) -> Option<ScoredMove> {
+        loop {
+            match self.stage {
+                // Stufe 0 — TT-Move
+                0 => {
+                    self.stage = 1;
+                    if let Some(sm) = self.tt.take() {
+                        return Some(sm);
+                    }
+                }
+                // Stufe 1 — stille Dame-Umwandlungen
+                1 => {
+                    if self.cursor < self.queen_promos.len() {
+                        let mv = self.queen_promos[self.cursor];
+                        self.cursor += 1;
+                        return Some(ScoredMove {
+                            mv,
+                            order_key: -50_000,
+                            see_val: None,
+                        });
+                    }
+                    self.cursor = 0;
+                    self.stage = 2;
+                }
+                // Stufe 2 — gewinnende Captures (klassifiziert hier ALLE Captures)
+                2 => {
+                    if !self.captures_done {
+                        self.classify_captures();
+                        self.captures_done = true;
+                    }
+                    if self.cursor < self.good_captures.len() {
+                        let sm = self.good_captures[self.cursor];
+                        self.cursor += 1;
+                        return Some(sm);
+                    }
+                    self.cursor = 0;
+                    self.stage = 3;
+                }
+                // Stufe 3 — Killer 1
+                3 => {
+                    self.stage = 4;
+                    if let Some(mv) = self.killer1.take() {
+                        return Some(ScoredMove {
+                            mv,
+                            order_key: -30_000,
+                            see_val: None,
+                        });
+                    }
+                }
+                // Stufe 4 — Killer 2
+                4 => {
+                    self.stage = 5;
+                    if let Some(mv) = self.killer2.take() {
+                        return Some(ScoredMove {
+                            mv,
+                            order_key: -25_000,
+                            see_val: None,
+                        });
+                    }
+                }
+                // Stufe 5 — stille Unterumwandlungen
+                5 => {
+                    if self.cursor < self.under_promos.len() {
+                        let mv = self.under_promos[self.cursor];
+                        self.cursor += 1;
+                        return Some(ScoredMove {
+                            mv,
+                            order_key: -20_000,
+                            see_val: None,
+                        });
+                    }
+                    self.cursor = 0;
+                    self.stage = 6;
+                }
+                // Stufe 6 — ruhige Züge (History-Score in new() gelesen)
+                6 => {
+                    if !self.quiets_sorted {
+                        self.quiets.sort_by_key(|sm| sm.order_key);
+                        self.quiets_sorted = true;
+                    }
+                    if self.cursor < self.quiets.len() {
+                        let sm = self.quiets[self.cursor];
+                        self.cursor += 1;
+                        return Some(sm);
+                    }
+                    self.cursor = 0;
+                    self.stage = 7;
+                }
+                // Stufe 7 — verlierende Captures (in Stufe 2 vorbereitet)
+                7 => {
+                    if self.cursor < self.bad_captures.len() {
+                        let sm = self.bad_captures[self.cursor];
+                        self.cursor += 1;
+                        return Some(sm);
+                    }
+                    self.stage = 8;
+                }
+                _ => return None,
             }
-            if Some(mv) == killers[1] {
-                return ScoredMove {
-                    mv,
-                    order_key: -25_000,
-                    see_val: None,
-                };
-            }
-            if mv.get_promotion().is_some() {
-                return ScoredMove {
-                    mv,
-                    order_key: -20_000,
-                    see_val: None,
-                };
-            }
-            let h = move_history[history_idx(stm, mv.get_source(), mv.get_dest())];
-            ScoredMove {
-                mv,
-                order_key: -h,
-                see_val: None,
-            }
-        })
-        .collect();
-    scored.sort_by_key(|sm| sm.order_key);
-    scored
+        }
+    }
 }
 
 fn mvv_lva_key(board: &Board, mv: ChessMove) -> i32 {
