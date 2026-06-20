@@ -10,6 +10,31 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**20.06.2026 — MovePicker AUSGEROLLT + Auswertung `analyse-18.06.2026.json` (898 P, 1507 Blunder).**
+- **Rollout:** `dev/engine-arbeit` (38841a5 Staged MovePicker) per Fast-Forward in `master` gemergt,
+  `cargo build --release`, `lichess-bot.service` neugestartet (20.06. 19:28 CEST). Smoke grün.
+  Diff rein Move-Ordering (keine Eval/Pruning/LMR/Alpha-Beta), beide Binaries identischer Zug
+  auf Kiwipete → Merge ohne A/B vertretbar (Restnutzen wäre nur Regressions-Guard, +10 % NPS ≈
+  +5–7 Elo < CI). **Offen:** `git push origin master` (dev-Branch war lokal-only).
+- **Datenlage:** Datei mischt Ultra-Bullet-Turnier (½+0, 583 P, B/P 1.66 = Zeitnot-Rauschen) +
+  Blitz (207 P, 1.80) + Rapid (85 P, **1.25**) + Bullet (22 P, 2.50); zusätzlich drei Engine-Stände
+  (pre-Syz / Syz+alt / Syz+CodeReview, 7/64/830 P) → Era-Vergleich durch TC-Mix konfundiert.
+  Alle Cluster auf Nicht-UB beschränkt.
+- **Syzygy = sauber, keine Regression:** nur 3 Blunder ≤5 Steine, alle Artefakte (2× Matt-Score-
+  Arithmetik bei eigenem Matt, 1× noch-gewonnene KPPvK-Ungenauigkeit). Die 36 EG-Blunder mit
+  6–7 Steinen liegen *außerhalb* der 3-4-5-Tabellen → bleibt Engine-Eigentechnik (schlimmster:
+  `8/R7/3Pb3/2K1k3/8/2P5/p7/8 w`, R+2B vs L+B, +11.9, d7?? statt c4, −678).
+- **Cluster (Nicht-UB, bereinigt 333):** Profil diffus wie gehabt — `positional_collapse` ist
+  #1-Treiber der entscheidenden Kipper (20/90 Remis→Verlust, 16 weggeworfene Gewinne), dann
+  `missed_capture` (52) und Hänger (~53). **d17-Overflag bestätigt:** von 110 Partien mit
+  „decisive" Blunder hat Martuni 39 gewonnen + 22 remisiert → vor Code-Maßnahme bei d25–d30 prüfen.
+- **Gegner-Hotspots:** AetherBot **Lookback erledigt = Nullbefund** — 54 P (Blitz/Rapid), B/P 2.43 sah
+  nach Regress aus, ist aber d17-Overflag: Score 52.8 % (Verlauf 25 %→44 %→52.8 %), neue Engine senkt
+  B/P (2.18→1.93), kein Buchmuster → vom Radar genommen. Neu auffällig (unverifiziert):
+  Chessiverse_Raak (2.52/21P), zipfile_chess-bot (2.79/19P).
+- **Rating:** Rapid 2228→2236 (stabil, sauberstes Signal), Blitz 2076→2045 (−31, beobachten),
+  Bullet 2443 + Turnierleistung 2577 bei Ø-Gegner 2801 (Platz 1 im Team, Eigenstärke überperformt).
+
 **19.06.2026 — Staged MovePicker (Code-Review-P1): `order_moves` (eager: alle Züge
 scoren → `Vec<ScoredMove>` → Gesamt-Sort pro Knoten) ersetzt durch lazy `MovePicker`
 mit 8 Stufen (TT → stille Dame-Umwandlung → gewinnende Captures → Killer 1/2 →
