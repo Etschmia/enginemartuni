@@ -159,8 +159,13 @@ pub struct SearchRequest {
     pub syzygy: Option<Arc<Syzygy>>,
 }
 
-struct SearchState {
-    tt: Arc<Mutex<TranspositionTable>>,
+struct SearchState<'a> {
+    // Exklusiver Zugriff auf die TT fuer die Dauer EINER Suche. Der Lock wird
+    // einmal in `search()` genommen und der Guard ueber die gesamte Suche
+    // gehalten (single-thread → keine Contention); damit entfaellt das
+    // per-Knoten `tt.lock()` im Hot-Path (probe/store). Bit-exakt, reine
+    // Overhead-Reduktion (Code-Review 16.06., Punkt "Mutex aus Hot-Path").
+    tt: &'a mut TranspositionTable,
     eval: Arc<EvalParams>,
     stop: Arc<AtomicBool>,
     pondering: Arc<AtomicBool>,
@@ -214,7 +219,7 @@ fn history_idx(side: Color, from: Square, to: Square) -> usize {
     side_idx * 64 * 64 + from.to_index() * 64 + to.to_index()
 }
 
-impl SearchState {
+impl SearchState<'_> {
     fn record_killer(&mut self, ply: i32, mv: ChessMove) {
         let p = ply as usize;
         if p >= MAX_PLY {
@@ -270,11 +275,18 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         return None;
     }
 
+    // TT EINMAL fuer die gesamte Suche locken. Es laeuft immer nur ein
+    // Such-Thread; der Main-Thread (uci.rs) greift auf die TT (clear/resize)
+    // nur zwischen Suchen zu (er joint den vorherigen Such-Thread vor jedem
+    // neuen `go`). Der gehaltene Guard serialisiert das weiterhin korrekt,
+    // erspart aber das per-Knoten Lock/Unlock im Hot-Path.
+    let mut tt_guard = req.tt.lock().unwrap();
+
     // Eroeffnungsbuch zuerst — auch im Ponder-Modus erlaubt
     if !req.book.is_empty() {
         if let Some(m) = req.book.probe(&req.board) {
             println!("info string book hit");
-            let ponder = ponder_move_from_tt(&req.board, m, &req.tt);
+            let ponder = ponder_move_from_tt(&req.board, m, &tt_guard);
             return Some(SearchResult { best: m, ponder, score: 0 });
         }
     }
@@ -293,7 +305,7 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
         if root_moves.len() == 1 {
             let only = root_moves[0];
             println!("info string forced move");
-            let ponder = ponder_move_from_tt(&req.board, only, &req.tt);
+            let ponder = ponder_move_from_tt(&req.board, only, &tt_guard);
             return Some(SearchResult { best: only, ponder, score: 0 });
         }
     }
@@ -309,7 +321,7 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
                 syz.probe_root_move(&req.board, req.halfmove_clock)
             {
                 println!("info string syzygy root hit");
-                let ponder = ponder_move_from_tt(&req.board, tb_move, &req.tt);
+                let ponder = ponder_move_from_tt(&req.board, tb_move, &tt_guard);
                 return Some(SearchResult {
                     best: tb_move,
                     ponder,
@@ -340,7 +352,7 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
     let history = req.history;
     let root_history_len = history.len();
     let mut state = SearchState {
-        tt: Arc::clone(&req.tt),
+        tt: &mut *tt_guard,
         eval: Arc::clone(&req.eval),
         stop: Arc::clone(&req.stop),
         pondering: Arc::clone(&req.pondering),
@@ -423,7 +435,7 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
     }
 
     last_move.map(|best| {
-        let ponder = ponder_move_from_tt(&req.board, best, &req.tt);
+        let ponder = ponder_move_from_tt(&req.board, best, &*state.tt);
         SearchResult {
             best,
             ponder,
@@ -438,18 +450,14 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
 fn ponder_move_from_tt(
     board: &Board,
     best: ChessMove,
-    tt: &Arc<Mutex<TranspositionTable>>,
+    tt: &TranspositionTable,
 ) -> Option<ChessMove> {
     let next = board.make_move_new(best);
     if next.status() != BoardStatus::Ongoing {
         return None;
     }
     let key = next.get_hash();
-    let stored = {
-        let tt = tt.lock().unwrap();
-        tt.probe(key).and_then(|e| e.best_move)
-    };
-    let mv = stored?;
+    let mv = tt.probe(key).and_then(|e| e.best_move)?;
     if MoveGen::new_legal(&next).any(|m| m == mv) {
         Some(mv)
     } else {
@@ -496,7 +504,7 @@ fn alpha_beta(
     extensions_used: i32,
     halfmove: u8,
     allow_null: bool,
-    state: &mut SearchState,
+    state: &mut SearchState<'_>,
 ) -> i32 {
     state.nodes += 1;
 
@@ -575,32 +583,29 @@ fn alpha_beta(
     // Richtungen heikel — zu pessimistisch verzerrt Wurzelzuege auf 0,
     // zu optimistisch laesst Engine in 3-fold laufen, obwohl Mate da ist.
     let tt_move: Option<ChessMove>;
-    {
-        let tt = state.tt.lock().unwrap();
-        if let Some(entry) = tt.probe(key) {
-            if entry.depth as i32 >= depth && ply > 0 {
-                // Mate-Distanzen liegen knotenrelativ in der TT (siehe
-                // mate_score_to_tt) — erst auf die aktuelle Wurzel
-                // umrechnen, dann Bounds pruefen.
-                let v = mate_score_from_tt(entry.eval, ply);
-                let cutoff_fires = match entry.flag {
-                    TtFlag::Exact => true,
-                    TtFlag::Lower => v >= beta,
-                    TtFlag::Upper => v <= alpha,
-                    _ => false,
-                };
-                if cutoff_fires {
-                    let key_seen_in_game_history =
-                        state.history[..state.root_history_len].contains(&key);
-                    if !key_seen_in_game_history {
-                        return v;
-                    }
+    if let Some(entry) = state.tt.probe(key) {
+        if entry.depth as i32 >= depth && ply > 0 {
+            // Mate-Distanzen liegen knotenrelativ in der TT (siehe
+            // mate_score_to_tt) — erst auf die aktuelle Wurzel
+            // umrechnen, dann Bounds pruefen.
+            let v = mate_score_from_tt(entry.eval, ply);
+            let cutoff_fires = match entry.flag {
+                TtFlag::Exact => true,
+                TtFlag::Lower => v >= beta,
+                TtFlag::Upper => v <= alpha,
+                _ => false,
+            };
+            if cutoff_fires {
+                let key_seen_in_game_history =
+                    state.history[..state.root_history_len].contains(&key);
+                if !key_seen_in_game_history {
+                    return v;
                 }
             }
-            tt_move = entry.best_move;
-        } else {
-            tt_move = None;
         }
+        tt_move = entry.best_move;
+    } else {
+        tt_move = None;
     }
 
     // --- Null-Move-Pruning ----------------------------------------------
@@ -1007,19 +1012,16 @@ fn alpha_beta(
     } else {
         TtFlag::Upper
     };
-    {
-        let mut tt = state.tt.lock().unwrap();
-        // Mate-Scores knotenrelativ ablegen (siehe mate_score_to_tt) —
-        // sonst transportiert der Eintrag die Wurzeldistanz DIESER Suche
-        // als Fossil in alle spaeteren Suchen.
-        tt.store(
-            key,
-            best_move,
-            mate_score_to_tt(best_score, ply),
-            depth as i8,
-            flag,
-        );
-    }
+    // Mate-Scores knotenrelativ ablegen (siehe mate_score_to_tt) —
+    // sonst transportiert der Eintrag die Wurzeldistanz DIESER Suche
+    // als Fossil in alle spaeteren Suchen.
+    state.tt.store(
+        key,
+        best_move,
+        mate_score_to_tt(best_score, ply),
+        depth as i8,
+        flag,
+    );
 
     best_score
 }
@@ -1031,7 +1033,7 @@ const MAX_QPLY: i32 = 12;
 // gestiegen, weil 200cp gute Captures fälschlicherweise prunte.
 const DELTA_MARGIN: i32 = 150;
 
-fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, state: &mut SearchState) -> i32 {
+fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, state: &mut SearchState<'_>) -> i32 {
     state.nodes += 1;
 
     if state.should_stop() {
