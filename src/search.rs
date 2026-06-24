@@ -281,6 +281,9 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
     // neuen `go`). Der gehaltene Guard serialisiert das weiterhin korrekt,
     // erspart aber das per-Knoten Lock/Unlock im Hot-Path.
     let mut tt_guard = req.tt.lock().unwrap();
+    // Neue Suche: Generation hochzaehlen, damit Eintraege frueherer Suchen
+    // (vorheriger Zuege) als veraltet gelten und leichter verdraengt werden.
+    tt_guard.new_search();
 
     // Eroeffnungsbuch zuerst — auch im Ponder-Modus erlaubt
     if !req.book.is_empty() {
