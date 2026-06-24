@@ -47,8 +47,14 @@ impl Default for TtEntry {
 /// (Relevanz-Score, Stockfish-Stil): `relevanz = depth - PENALTY * alter`.
 /// Ein um `n` Generationen veralteter Eintrag verliert `PENALTY * n`
 /// effektive Tiefe und wird so von frischen Eintraegen verdraengt. Zentraler
-/// Tuning-Knopf fuer das A/B (Start: 8, wie im Design abgenommen).
-const GENERATION_AGE_PENALTY: i32 = 8;
+/// Tuning-Knopf fuers A/B.
+///
+/// K=8 (24.06., erstes A/B) = ZU AGGRESSIV: A/B 1000P −12.86 ± 17.70 Elo
+/// (LOS 92 % zugunsten baseline) — die Strafe warf warmen Cache aus
+/// Nachbarzuegen (Suchbaum-Ueberlappung) weg, der Verlust ueberwog. K=3
+/// schont Eintraege bis ~Generations-Abstand 5 und entwertet nur wirklich
+/// alte Fossilien.
+const GENERATION_AGE_PENALTY: i32 = 3;
 
 /// Transposition Table — reservierter RAM-Bereich fuer bereits bewertete
 /// Stellungen. Hash-Slot pro Schluessel ueber Modulo, depth-/exact-preferred
@@ -246,14 +252,16 @@ mod tests {
     fn stale_deep_fossil_is_evicted_by_fresh_shallow_entry() {
         // Tiefer Eintrag aus einer frueheren Suche; nach genug new_search()-
         // Inkrementen ueberwiegt die Alters-Strafe seine Tiefe, sodass ein
-        // frischer flacher Eintrag den Slot uebernimmt.
+        // frischer flacher Eintrag den Slot uebernimmt. K-agnostisch: bumpe so
+        // oft, dass depth(8) - PENALTY*age < 1, also age > 7/PENALTY.
         let mut tt = one_slot_tt();
         tt.store(1, Some(mv()), 40, 8, TtFlag::Lower); // gen 0, depth 8
 
-        // Zwei Generationen weiter: effektive Tiefe 8 - 8*2 = -8.
-        tt.new_search();
-        tt.new_search();
-        // Frischer flacher Fremd-Key (depth 1) schlaegt das Fossil.
+        let bumps = 8 / GENERATION_AGE_PENALTY + 1; // age, der 8 unter 1 drueckt
+        for _ in 0..bumps {
+            tt.new_search();
+        }
+        // Frischer flacher Fremd-Key (depth 1) schlaegt das gealterte Fossil.
         tt.store(2, None, 5, 1, TtFlag::Upper);
 
         assert!(tt.probe(1).is_none(), "veraltetes Fossil muss verdraengt sein");
@@ -263,10 +271,10 @@ mod tests {
 
     #[test]
     fn fresh_deep_fossil_still_survives_shallow_collision() {
-        // Gegenprobe: ohne Alterung (nur 1 Generation Abstand, Strafe 8)
+        // Gegenprobe: ohne Alterung (Generations-Abstand 0, beide gen 1)
         // ueberlebt ein depth-8-Eintrag eine depth-1-Kollision weiterhin
-        // (8 - 8*1 = 0 >= 1? nein -> new_depth 1 > 0 -> wuerde ersetzen).
-        // Daher hier Generations-Abstand 0: klassisches depth-preferred.
+        // (effective_old_depth == 8, new_depth 1 verdraengt nicht) — reines
+        // depth-preferred, unabhaengig von PENALTY.
         let mut tt = one_slot_tt();
         tt.new_search(); // gen 1
         tt.store(1, Some(mv()), 40, 8, TtFlag::Lower); // gen 1, depth 8
