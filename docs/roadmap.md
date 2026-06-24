@@ -10,6 +10,41 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**24.06.2026 — Auswertung `analyse-22.06.2026.json` + Punkt-2-Hot-Path 2A+2B AUSGEROLLT (TT-Gen/Age K=3 = +22.6 Elo).**
+- **Analyse: kein neuer Hebel** — Bild diffus wie 18.06. B/P Blitz 1.56 / Rapid 1.51 / Bullet 1.37.
+  Die schlimmsten „Blunder" (eb=+1100…+1600, positional_collapse) stammen aus EINER gewonnenen
+  Partie (Martuni–Axiom_BOT 5+0, **1-0** Matt im 96. Zug, am Ende 18 s übrig) → König-Wander-
+  Konversion = DTZ-Overflag, kein Defekt. **Syzygy sauber:** nur 4 ≤5-Steiner, alle WDL-korrekt
+  (Stellung bleibt gewonnen). Entscheidende Kipper (Equal→Loss 69 / Win→non-Win 54) bleiben
+  diffus (`<none>`+positional_collapse) → kein Ein-Feature-Fix (deckt sich mit 05.–18.06.).
+- **2A — TT-Lock einmal pro Suche statt per-Knoten** (`dev/tt-hotpath` f094736): SearchState hält
+  `&mut TranspositionTable` (Guard 1× pro `go` gehalten), Mutex bleibt für Thread-Sicherheit.
+  94 Tests, **bit-exakt** (Node-Counts 8 Stellungen × alle Tiefen byte-identisch). **NPS-Messung
+  ehrlich = flat** (verschränkt best-of-10: −0.6 %, median −1.2 %, Streuung −1.9…+5.8 %).
+  Grund: im Single-Thread KEINE Lock-Contention → uncontended std::Mutex ist im Fast-Path quasi
+  gratis; die Doc-Schätzung 2–8 % setzte Contention voraus, die hier nicht existiert. Wert: reine
+  bit-exakte Hot-Path-Vereinfachung, **kein Elo-Hebel**.
+- **2B — TT-Generation/Age (Relevanz-Score, SF-Stil)** (`dev/tt-hotpath` f8c5008): `generation: u8`
+  pro Eintrag (passt ins Padding, size_of unverändert), Zähler +1 pro `go` (`new_search()` nach
+  Lock — 2A liefert den Ort), Kollisions-Ersetzung wertet alte Einträge ab:
+  `effective_depth = depth − 8·generations_abstand`. **Bit-exakt im Fresh-Search** (age==0 →
+  identisch zur depth-preferred Baseline, Node-Counts byte-gleich), 98 Tests (+4). Verhaltens-
+  änderung NUR über Züge hinweg → **A/B nötig**. `GENERATION_AGE_PENALTY` getunt (s. u.).
+- **A/B-Ergebnis (je 1000 P, vs pures master, 5+0.05, UHO, Hash=64, conc=2):** Der Penalty-Wert
+  entscheidet alles:
+  - **K=8 (Erstwert): −12.86 ± 17.70 Elo, LOS 92 % GEGEN 2B** → zu aggressiv, warf warmen Cache
+    aus Nachbarzügen (Suchbaum-Überlappung) weg. (`matches/baseline_vs_tt_genage`)
+  - **K=3: +22.62 ± 18.09 Elo, LOS 99.3 % FÜR 2B** (baseline 46.75 %, LLR −2.64 [0,10],
+    CI [+4.5, +40.7] > 0). (`matches/baseline_vs_tt_genage_k3`) Commit 882aa08.
+  - Saubere K-Monotonie (aggressiv schadet, sanft hilft stark) → Signal belastbar, kein Rauschen.
+- **AUSGEROLLT 24.06.** ~17:5x CEST: FF-Merge `dev/tt-hotpath` → master (2A f094736 + 2B f8c5008
+  + K=3-Tune 882aa08), `cargo build --release`, `lichess-bot.service` Neustart (keine Live-Partie
+  lief → hard restart sicher). Smoke grün. Live-Binary = `target/release/martuni`.
+- **OFFEN:** Lichess-Lookback (Anker Rapid 2236 / Blitz 2045 / Bullet 2443) — erwartet +Rating durch
+  K=3. `git push origin master` weiterhin offen (seit MovePicker). Verbleibend Punkt 2:
+  **C (Quiescence stille Checks)**. Optionale 2B-Verfeinerung: Generation auf TT-Hit in `probe()`
+  auffrischen. Rollback: `git reset --hard 5a97058` (Pre-Branch) + Build + Neustart.
+
 **20.06.2026 — MovePicker AUSGEROLLT + Auswertung `analyse-18.06.2026.json` (898 P, 1507 Blunder).**
 - **Rollout:** `dev/engine-arbeit` (38841a5 Staged MovePicker) per Fast-Forward in `master` gemergt,
   `cargo build --release`, `lichess-bot.service` neugestartet (20.06. 19:28 CEST). Smoke grün.
