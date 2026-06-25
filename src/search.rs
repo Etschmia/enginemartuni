@@ -1092,7 +1092,16 @@ fn quiescence(
     }
 
     // Tiefenlimit: bei ruhigen Stellungen nicht endlos suchen.
-    if ply >= MAX_QPLY {
+    //
+    // WICHTIG: gemessen gegen `qply` (quiescence-RELATIV, 0 beim Eintritt),
+    // nicht gegen den absoluten Root-`ply`. Vorher kappte `ply >= 12` die
+    // Quiescence am absoluten ply 12 — bei tiefen Hauptsuchen (Rapid d14–18)
+    // startete sie also schon jenseits des Caps und gab sofort `stand_pat`
+    // zurueck, ohne Captures aufzuloesen (gemessen 5–9 % der Q-Knoten am
+    // Cap, skalierend mit der Suchtiefe). Relativ gemessen bekommt jedes
+    // Blatt dieselbe Aufloesungstiefe, unabhaengig davon, wie tief die
+    // Hauptsuche schon ist. Der Name MAX_QPLY passt damit zur Bedeutung.
+    if qply >= MAX_QPLY {
         return stand_pat;
     }
 
