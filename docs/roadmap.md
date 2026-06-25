@@ -10,8 +10,8 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
-**25.06.2026 — Punkt 2C (Quiescence stille Checks) A/B POSITIV (+19.8 Elo), ROLLOUT-KANDIDAT.
-Nebenbefund: `MAX_QPLY` ist ein ABSOLUTER ply-Cap (eigener Folge-Hebel).**
+**25.06.2026 — Punkt 2C (stille Checks, +19.8 Elo) UND Cap-Fix (MAX_QPLY qply-relativ, +26 Elo)
+— beide A/B-positiv, ZUSAMMEN ROLLOUT-BEREIT (`dev/qsearch-cap`).**
 - **Implementierung** (`src/search.rs`, uncommitted im master-Working-Tree): Quiescence bekommt einen
   quiescence-*relativen* Zähler `qply` (0 beim Eintritt). Bei `qply == 0` (nicht im Schach) werden nach
   den Captures zusätzlich **nicht-schlagende Schachgebote** gesucht. Erkennung per **Check-Maske**
@@ -44,14 +44,20 @@ Nebenbefund: `MAX_QPLY` ist ein ABSOLUTER ply-Cap (eigener Folge-Hebel).**
   Suchtiefe** (bei Rapid d14–18 startet die Quiescence oft schon jenseits ply 12). Der Schach-Pfad umgeht
   den Cap bewusst (max_qply 14–16 > 12 → Matt-Drohungen unverkürzt). **Konsequenz für 2C:** die stillen
   Checks greifen nur an Eintrittsknoten mit absolutem `ply < 12`; bei tiefen Suchen kappt der Cap vorher.
-  → Cap-Fix (qply-relativ) ist ein **eigener, vermutlich größerer Hebel** — Tobias-Entscheid: **separat
-  nach 2C** (saubere Attribution), eigener A/B.
-- **Stand:** committet auf `dev/qsearch-checks` (e534c30); master + Live-Binary unberührt
-  (`target/release/martuni` ist Baseline, laufender Service hält ohnehin alten Inode 24.06. 17:49).
-  **OFFEN: Rollout-Entscheid (Tobias).** Bei Go: FF-Merge `dev/qsearch-checks` → master,
-  `cargo build --release`, `lichess-bot.service`-Neustart (nur wenn keine Live-Partie läuft).
-  **Danach: Cap-Fix (qply-relativ)** als nächster, eigener A/B (`qply`-Zähler liegt schon vor).
-  Rollback Live nach Rollout: `git reset --hard 4ca0b65` + Build + Neustart.
+  → Cap-Fix (qply-relativ) als **eigener, vermutlich größerer Hebel** umgesetzt (`dev/qsearch-cap`
+  25168e8, auf 2C aufgesetzt): Einzeiler `if qply >= MAX_QPLY` statt `if ply >= …` — der Name MAX_QPLY
+  passt jetzt zur Bedeutung. 98 Tests, Mikro-Messung keine Node-Explosion (Tiefe stabil/tiefer).
+- **A/B Cap-Fix ISOLIERT (capfix=2C+Cap vs qchecks=2C-allein, 984 P, SPRT formal abgeschlossen
+  LLR −2.96 < −2.94): capfix +26.18 ± 18.02 Elo, LOS 99.79 %, CI [+8.2, +44.2] > 0.** PGN-farbkorrekt:
+  capfix **53.76 %** (438 S / 364 N / 182 R); Ptnml qchecks-Sicht [80,82,217,58,55]. **Größer als 2C
+  selbst** → der absolute Cap hatte die Quiescence im Rapid-Regime (d14–18) lahmgelegt; relativ
+  gemessen löst sie wieder auf. Kombiniert (2C+Cap) vs master grob ~+45 Elo. `matches/qchecks_vs_cap`.
+- **Stand:** Rollout-Stapel `dev/qsearch-cap` = e534c30 (2C) + eb6ec0a (Doku) + 25168e8 (Cap-Fix);
+  master + Live-Binary unberührt (`target/release/martuni` ist Baseline, Service hält alten Inode
+  24.06. 17:49). **OFFEN: Rollout-Entscheid (Tobias) — beide zusammen.** Bei Go: FF-Merge
+  `dev/qsearch-cap` → master, `cargo build --release`, `lichess-bot.service`-Neustart (graceful oder
+  nur wenn keine Live-Partie läuft). Rollback Live nach Rollout: `git reset --hard 4ca0b65` + Build +
+  Neustart.
 
 **24.06.2026 — Auswertung `analyse-22.06.2026.json` + Punkt-2-Hot-Path 2A+2B AUSGEROLLT (TT-Gen/Age K=3 = +22.6 Elo).**
 - **Analyse: kein neuer Hebel** — Bild diffus wie 18.06. B/P Blitz 1.56 / Rapid 1.51 / Bullet 1.37.
