@@ -11,7 +11,7 @@ Einzeldokumenten:
 ## Aktueller Status
 
 **25.06.2026 — Punkt 2C (stille Checks, +19.8 Elo) UND Cap-Fix (MAX_QPLY qply-relativ, +26 Elo)
-— beide A/B-positiv, ZUSAMMEN ROLLOUT-BEREIT (`dev/qsearch-cap`).**
+— beide A/B-positiv, ZUSAMMEN AUSGEROLLT 25.06. 19:48 CEST (~+45 Elo kombiniert).**
 - **Implementierung** (`src/search.rs`, uncommitted im master-Working-Tree): Quiescence bekommt einen
   quiescence-*relativen* Zähler `qply` (0 beim Eintritt). Bei `qply == 0` (nicht im Schach) werden nach
   den Captures zusätzlich **nicht-schlagende Schachgebote** gesucht. Erkennung per **Check-Maske**
@@ -52,12 +52,14 @@ Einzeldokumenten:
   capfix **53.76 %** (438 S / 364 N / 182 R); Ptnml qchecks-Sicht [80,82,217,58,55]. **Größer als 2C
   selbst** → der absolute Cap hatte die Quiescence im Rapid-Regime (d14–18) lahmgelegt; relativ
   gemessen löst sie wieder auf. Kombiniert (2C+Cap) vs master grob ~+45 Elo. `matches/qchecks_vs_cap`.
-- **Stand:** Rollout-Stapel `dev/qsearch-cap` = e534c30 (2C) + eb6ec0a (Doku) + 25168e8 (Cap-Fix);
-  master + Live-Binary unberührt (`target/release/martuni` ist Baseline, Service hält alten Inode
-  24.06. 17:49). **OFFEN: Rollout-Entscheid (Tobias) — beide zusammen.** Bei Go: FF-Merge
-  `dev/qsearch-cap` → master, `cargo build --release`, `lichess-bot.service`-Neustart (graceful oder
-  nur wenn keine Live-Partie läuft). Rollback Live nach Rollout: `git reset --hard 4ca0b65` + Build +
-  Neustart.
+- **AUSGEROLLT 25.06. 19:48 CEST:** FF-Merge `dev/qsearch-cap` → master (e534c30 2C + eb6ec0a/f3f5abc
+  Doku + 25168e8 Cap-Fix), `cargo build --release`, **hard** `lichess-bot.service`-Neustart (Tobias-
+  Entscheid). Smoke grün (smothered `Nf7#` depth2 → `mate 4` = 2C aktiv), Bot sauber verbunden
+  („Engine configuration OK / Welcome Martuni / awaiting challenges"). Live-Binary = `target/release/martuni`.
+- **OFFEN:** Lichess-Lookback (Anker Rapid 2236 / Blitz 2045 / Bullet 2443) — erwartet +Rating durch
+  ~+45 Elo. `git push origin master` weiterhin offen (seit MovePicker; master nun **8** Commits voraus).
+  Rollback Live: `git reset --hard 4ca0b65` + Build + Neustart. Mögliche Folgeschritte: Cap-Wert tunen
+  (MAX_QPLY relativ ≠ 12 testen) und 2C-v2 Abzugschachs.
 
 **24.06.2026 — Auswertung `analyse-22.06.2026.json` + Punkt-2-Hot-Path 2A+2B AUSGEROLLT (TT-Gen/Age K=3 = +22.6 Elo).**
 - **Analyse: kein neuer Hebel** — Bild diffus wie 18.06. B/P Blitz 1.56 / Rapid 1.51 / Bullet 1.37.
