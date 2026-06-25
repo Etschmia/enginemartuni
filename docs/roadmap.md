@@ -10,6 +10,40 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**25.06.2026 — Punkt 2C (Quiescence stille Checks) IMPLEMENTIERT + verifiziert, A/B ausstehend.
+Nebenbefund: `MAX_QPLY` ist ein ABSOLUTER ply-Cap (eigener Hebel).**
+- **Implementierung** (`src/search.rs`, uncommitted im master-Working-Tree): Quiescence bekommt einen
+  quiescence-*relativen* Zähler `qply` (0 beim Eintritt). Bei `qply == 0` (nicht im Schach) werden nach
+  den Captures zusätzlich **nicht-schlagende Schachgebote** gesucht. Erkennung per **Check-Maske**
+  (Stockfish-Stil, Tobias-Entscheid): Felder, von denen aus Springer/Läufer/Turm/Dame/Bauer den
+  gegn. König *direkt* bedrohen, hängen nur von Königsfeld + Belegung ab → einmal vorberechnet
+  (`get_{knight,bishop,rook}_moves`, `get_pawn_attacks`), dann billiger Bitboard-Test pro Zug, kein
+  `make_move`. Filter: `see_quiet(board, mv) >= 0` (neue Funktion, spiegelt `see()` mit `gain[0]=0` für
+  Nicht-Captures — das getestete Capture-`see()` bleibt unangetastet) → nur sichere Checks. Checks tragen
+  `see_val = None` (kein Bad-Capture-/Delta-Pruning) und Ordnungsschlüssel 1 (hinter alle Captures).
+  **Abzugschachs bewusst ausgelassen** (sauberes v2). Bei `qply > 0` keine Check-Generierung →
+  Check-auf-Check-Ketten terminieren.
+- **Verifikation:** Build grün, **98/98 Tests** (keine Regression). Auf Stellungen, die die Hauptsuche
+  ohnehin löst: identische Bestmoves/Scores, NPS-Overhead ~0–4 %; WAC.001 sogar **weniger** Knoten
+  (292k vs 492k — stille Checks lösen das Mattnetz schneller auf). **Entscheidender Beweis** (erstickt
+  Matt `5r1k/6pp/8/6N1/8/1Q6/6PP/6K1 w`, Mattzug = stiller `Nf7#`): bei **Tiefe 2** meldet 2C `mate 4`,
+  Baseline nur `cp 740`; bei Tiefe 3 holt Baseline es ein → 2C sieht das Mattnetz **eine Iteration früher**,
+  korrekt. Harness: `scratchpad/cmp.sh`, Binaries `scratchpad/martuni.{base,2c}`.
+- **Nicht bit-exakt** → **A/B nötig** (anders als 2A/2B/MovePicker). Vorschlag: `martuni.base` vs
+  `martuni.2c`, 5+0.05, UHO, Hash=64, conc=2, ~1000 P (`matches/baseline_vs_qchecks`).
+- **Nebenbefund (instrumentiert gemessen, danach revertiert):** `MAX_QPLY = 12` wird gegen den
+  **absoluten Root-`ply`** geprüft, nicht qply-relativ. Schon bei Root-Tiefe 8 geben **5,4–9,3 %** der
+  Quiescence-Knoten am Cap `stand_pat` zurück, ohne Captures aufzulösen — und das **skaliert mit der
+  Suchtiefe** (bei Rapid d14–18 startet die Quiescence oft schon jenseits ply 12). Der Schach-Pfad umgeht
+  den Cap bewusst (max_qply 14–16 > 12 → Matt-Drohungen unverkürzt). **Konsequenz für 2C:** die stillen
+  Checks greifen nur an Eintrittsknoten mit absolutem `ply < 12`; bei tiefen Suchen kappt der Cap vorher.
+  → Cap-Fix (qply-relativ) ist ein **eigener, vermutlich größerer Hebel** — Tobias-Entscheid: **separat
+  nach 2C** (saubere Attribution), eigener A/B.
+- **Live geschützt:** `target/release/martuni` per Rename wieder auf **Baseline** zurückgesetzt (verifiziert
+  `cp 740` statt `mate 4`); das laufende `lichess-bot.service` hält ohnehin den alten Inode (24.06. 17:49).
+  **OFFEN:** A/B starten; bei Erfolg dev-Branch + FF-Merge + Build + Service-Neustart. Rollback der
+  Arbeitskopie: `git checkout src/search.rs`.
+
 **24.06.2026 — Auswertung `analyse-22.06.2026.json` + Punkt-2-Hot-Path 2A+2B AUSGEROLLT (TT-Gen/Age K=3 = +22.6 Elo).**
 - **Analyse: kein neuer Hebel** — Bild diffus wie 18.06. B/P Blitz 1.56 / Rapid 1.51 / Bullet 1.37.
   Die schlimmsten „Blunder" (eb=+1100…+1600, positional_collapse) stammen aus EINER gewonnenen

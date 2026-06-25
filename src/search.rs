@@ -555,9 +555,9 @@ fn alpha_beta(
         }
     }
 
-    // Blattknoten: Quiescence-Suche
+    // Blattknoten: Quiescence-Suche (qply = 0 beim Eintritt)
     if depth <= 0 {
-        return quiescence(board, alpha, beta, ply, state);
+        return quiescence(board, alpha, beta, ply, 0, state);
     }
 
     // Transposition Table Probe
@@ -1036,7 +1036,14 @@ const MAX_QPLY: i32 = 12;
 // gestiegen, weil 200cp gute Captures fälschlicherweise prunte.
 const DELTA_MARGIN: i32 = 150;
 
-fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, state: &mut SearchState<'_>) -> i32 {
+fn quiescence(
+    board: &Board,
+    mut alpha: i32,
+    beta: i32,
+    ply: i32,
+    qply: i32,
+    state: &mut SearchState<'_>,
+) -> i32 {
     state.nodes += 1;
 
     if state.should_stop() {
@@ -1056,7 +1063,7 @@ fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, state: &mut Se
         let mut best = -INF;
         for mv in legal_moves {
             let nb = board.make_move_new(mv);
-            let score = -quiescence(&nb, -beta, -alpha, ply + 1, state);
+            let score = -quiescence(&nb, -beta, -alpha, ply + 1, qply + 1, state);
 
             if state.stop.load(Ordering::Relaxed) {
                 return 0;
@@ -1108,11 +1115,61 @@ fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, state: &mut Se
     }
 
     // Nach der maskierten Iteration liefert die Crate mit `!EMPTY` die
-    // verbleibenden Zuege. Davon nehmen wir nur stille Queen-Promotions.
+    // verbleibenden (nicht-schlagenden) Zuege. Davon nehmen wir stille
+    // Queen-Promotions und — NUR am Quiescence-Eintritt (qply == 0) —
+    // stille Schachgebote (2C). Letztere fangen forcierte Mattnetze,
+    // Dauerschach und Koenigsjagd-Motive, die reine Capture-Quiescence am
+    // Horizont uebersieht.
+    //
+    // Check-Maske (Stockfish-Stil): die Felder, von denen aus eine Figur des
+    // jeweiligen Typs den gegnerischen Koenig DIREKT bedroht, haengen nur vom
+    // Koenigsfeld und der Belegung ab — einmal vorberechnet, danach ein
+    // billiger Bitboard-Test pro Zug (kein make_move noetig). Abzugschachs
+    // sind hier bewusst NICHT erfasst (separates v2). Bei qply > 0 entfaellt
+    // die Check-Generierung, damit Check-auf-Check-Ketten terminieren.
+    let quiet_checks = qply == 0;
+    let (knight_chk, bishop_chk, rook_chk, pawn_chk) = if quiet_checks {
+        use chess::{get_bishop_moves, get_knight_moves, get_pawn_attacks, get_rook_moves};
+        let occ = *board.combined();
+        let stm = board.side_to_move();
+        let ksq = board.king_square(!stm);
+        (
+            get_knight_moves(ksq),
+            get_bishop_moves(ksq, occ),
+            get_rook_moves(ksq, occ),
+            // Felder, von denen ein EIGENER Bauer den Koenig bedroht =
+            // Angriffsfelder eines GEGNERISCHEN Bauern auf dem Koenigsfeld
+            // (gespiegelte Richtung; vgl. all_attackers_to).
+            get_pawn_attacks(ksq, !stm, !EMPTY),
+        )
+    } else {
+        (EMPTY, EMPTY, EMPTY, EMPTY)
+    };
+
     legal_moves.set_iterator_mask(!EMPTY);
     for mv in legal_moves {
         if is_quiet_queen_promotion(board, mv) {
             tactical.push((mv, None, -10_000));
+            continue;
+        }
+        // Stilles Schachgebot? Nur am Eintritt, keine Promotions (separat).
+        if quiet_checks && mv.get_promotion().is_none() {
+            let dest_bb = BitBoard::from_square(mv.get_dest());
+            let is_direct_check = match board.piece_on(mv.get_source()) {
+                Some(Piece::Knight) => knight_chk & dest_bb != EMPTY,
+                Some(Piece::Bishop) => bishop_chk & dest_bb != EMPTY,
+                Some(Piece::Rook) => rook_chk & dest_bb != EMPTY,
+                Some(Piece::Queen) => (bishop_chk | rook_chk) & dest_bb != EMPTY,
+                Some(Piece::Pawn) => pawn_chk & dest_bb != EMPTY,
+                _ => false, // Koenig kann nicht direkt Schach bieten
+            };
+            // Nur SICHERE Schachgebote: die Checkfigur darf auf dem Zielfeld
+            // nicht per statischem Abtausch verloren gehen (see_quiet >= 0).
+            if is_direct_check && see_quiet(board, mv) >= 0 {
+                // see_val = None -> unten kein Bad-Capture-/Delta-Pruning.
+                // Ordnungsschluessel 1 sortiert Checks hinter alle Captures.
+                tactical.push((mv, None, 1));
+            }
         }
     }
     tactical.sort_by_key(|(_, _, order_key)| *order_key);
@@ -1133,7 +1190,7 @@ fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, state: &mut Se
         }
 
         let nb = board.make_move_new(mv);
-        let score = -quiescence(&nb, -beta, -alpha, ply + 1, state);
+        let score = -quiescence(&nb, -beta, -alpha, ply + 1, qply + 1, state);
 
         if state.stop.load(Ordering::Relaxed) {
             return 0;
@@ -1767,6 +1824,57 @@ pub fn see(board: &Board, mv: ChessMove) -> i32 {
     }
 
     // Minimax rückwärts: jede Seite wählt max(aufhören, weiterschlagen)
+    while depth > 0 {
+        gain[depth - 1] = -((-gain[depth - 1]).max(gain[depth]));
+        depth -= 1;
+    }
+
+    gain[0]
+}
+
+/// Static Exchange Evaluation für einen NICHT-schlagenden Zug (2C-Filter für
+/// stille Schachgebote): Materialsaldo, wenn die eigene Figur auf das leere
+/// Zielfeld zieht und der Gegner dort den Abtausch eröffnet. `>= 0` heißt: die
+/// Figur steht auf dem Zielfeld sicher und geht per statischem Abtausch nicht
+/// verloren. Spiegelt `see()` exakt, nur mit `gain[0] = 0` (es wird nichts
+/// geschlagen) und der Gegenseite zuerst am Zug.
+fn see_quiet(board: &Board, mv: ChessMove) -> i32 {
+    let to = mv.get_dest();
+    let src = mv.get_source();
+    let mover = board.side_to_move();
+    let moving_piece = board.piece_on(src).unwrap_or(Piece::Pawn);
+
+    // Quellfigur steht jetzt auf `to`; `src` wird frei und deckt dabei ggf.
+    // einen dahinterstehenden gegnerischen Gleiter auf (X-Ray korrekt).
+    let mut occupied = *board.combined() ^ BitBoard::from_square(src);
+    let mut attackers = all_attackers_to(board, to, occupied) & occupied;
+
+    let mut gain: [i32; 33] = [0; 33]; // gain[0] = 0: der stille Zug schlägt nichts
+    let mut side = !mover; // der Gegner eröffnet den Abtausch auf `to`
+    let mut current_value = see_piece_value(moving_piece);
+    let mut depth = 0;
+
+    loop {
+        let Some((att_sq, _att_piece, att_value)) =
+            least_valuable_attacker(board, attackers, side, occupied)
+        else {
+            break;
+        };
+
+        depth += 1;
+        gain[depth] = current_value - gain[depth - 1];
+
+        occupied ^= BitBoard::from_square(att_sq);
+        attackers = all_attackers_to(board, to, occupied) & occupied;
+
+        current_value = att_value;
+        side = !side;
+
+        if depth >= 32 {
+            break;
+        }
+    }
+
     while depth > 0 {
         gain[depth - 1] = -((-gain[depth - 1]).max(gain[depth]));
         depth -= 1;
