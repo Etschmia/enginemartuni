@@ -10,8 +10,8 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
-**25.06.2026 — Punkt 2C (Quiescence stille Checks) IMPLEMENTIERT + verifiziert, A/B ausstehend.
-Nebenbefund: `MAX_QPLY` ist ein ABSOLUTER ply-Cap (eigener Hebel).**
+**25.06.2026 — Punkt 2C (Quiescence stille Checks) A/B POSITIV (+19.8 Elo), ROLLOUT-KANDIDAT.
+Nebenbefund: `MAX_QPLY` ist ein ABSOLUTER ply-Cap (eigener Folge-Hebel).**
 - **Implementierung** (`src/search.rs`, uncommitted im master-Working-Tree): Quiescence bekommt einen
   quiescence-*relativen* Zähler `qply` (0 beim Eintritt). Bei `qply == 0` (nicht im Schach) werden nach
   den Captures zusätzlich **nicht-schlagende Schachgebote** gesucht. Erkennung per **Check-Maske**
@@ -29,8 +29,15 @@ Nebenbefund: `MAX_QPLY` ist ein ABSOLUTER ply-Cap (eigener Hebel).**
   Matt `5r1k/6pp/8/6N1/8/1Q6/6PP/6K1 w`, Mattzug = stiller `Nf7#`): bei **Tiefe 2** meldet 2C `mate 4`,
   Baseline nur `cp 740`; bei Tiefe 3 holt Baseline es ein → 2C sieht das Mattnetz **eine Iteration früher**,
   korrekt. Harness: `scratchpad/cmp.sh`, Binaries `scratchpad/martuni.{base,2c}`.
-- **Nicht bit-exakt** → **A/B nötig** (anders als 2A/2B/MovePicker). Vorschlag: `martuni.base` vs
-  `martuni.2c`, 5+0.05, UHO, Hash=64, conc=2, ~1000 P (`matches/baseline_vs_qchecks`).
+- **A/B-Ergebnis (1000 P, baseline vs qchecks, 5+0.05, UHO, Hash=64, conc=2, 1h42):
+  qchecks +19.83 ± 18.48 Elo, LOS 98.25 %, CI [+1.35, +38.3] > 0.** PGN-farbkorrekt geprüft:
+  qchecks 528.5/1000 = **52.85 %** (449 S / 392 N / 159 R); Ptnml baseline-Sicht [88,70,216,63,63];
+  LLR −2.32. Auf Augenhöhe mit TT-Gen-K=3 (+22.62). **Attributions-Falle:** Zeile „Results of
+  *baseline* vs qchecks" → die −19.83 gehören baseline ⇒ +19.83 für qchecks; der Interim-Trend wurde
+  zuerst im Vorzeichen falsch gedeutet, erst die PGN-Auszählung nach Farbe stellte es klar
+  (vgl. feedback_ab_attribution_check — Lehre: bei jedem A/B sofort PGN nach Farbe auszählen).
+  **Bemerkenswert: 2C gewinnt TROTZ absolutem Cap** (wirkt nur ply<12) → Cap-Fix umso attraktiver.
+  `matches/baseline_vs_qchecks`.
 - **Nebenbefund (instrumentiert gemessen, danach revertiert):** `MAX_QPLY = 12` wird gegen den
   **absoluten Root-`ply`** geprüft, nicht qply-relativ. Schon bei Root-Tiefe 8 geben **5,4–9,3 %** der
   Quiescence-Knoten am Cap `stand_pat` zurück, ohne Captures aufzulösen — und das **skaliert mit der
@@ -39,10 +46,12 @@ Nebenbefund: `MAX_QPLY` ist ein ABSOLUTER ply-Cap (eigener Hebel).**
   Checks greifen nur an Eintrittsknoten mit absolutem `ply < 12`; bei tiefen Suchen kappt der Cap vorher.
   → Cap-Fix (qply-relativ) ist ein **eigener, vermutlich größerer Hebel** — Tobias-Entscheid: **separat
   nach 2C** (saubere Attribution), eigener A/B.
-- **Live geschützt:** `target/release/martuni` per Rename wieder auf **Baseline** zurückgesetzt (verifiziert
-  `cp 740` statt `mate 4`); das laufende `lichess-bot.service` hält ohnehin den alten Inode (24.06. 17:49).
-  **OFFEN:** A/B starten; bei Erfolg dev-Branch + FF-Merge + Build + Service-Neustart. Rollback der
-  Arbeitskopie: `git checkout src/search.rs`.
+- **Stand:** committet auf `dev/qsearch-checks` (e534c30); master + Live-Binary unberührt
+  (`target/release/martuni` ist Baseline, laufender Service hält ohnehin alten Inode 24.06. 17:49).
+  **OFFEN: Rollout-Entscheid (Tobias).** Bei Go: FF-Merge `dev/qsearch-checks` → master,
+  `cargo build --release`, `lichess-bot.service`-Neustart (nur wenn keine Live-Partie läuft).
+  **Danach: Cap-Fix (qply-relativ)** als nächster, eigener A/B (`qply`-Zähler liegt schon vor).
+  Rollback Live nach Rollout: `git reset --hard 4ca0b65` + Build + Neustart.
 
 **24.06.2026 — Auswertung `analyse-22.06.2026.json` + Punkt-2-Hot-Path 2A+2B AUSGEROLLT (TT-Gen/Age K=3 = +22.6 Elo).**
 - **Analyse: kein neuer Hebel** — Bild diffus wie 18.06. B/P Blitz 1.56 / Rapid 1.51 / Bullet 1.37.
