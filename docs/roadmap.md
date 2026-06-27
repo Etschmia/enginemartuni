@@ -35,7 +35,9 @@ Einzeldokumenten:
   einen Gewinn. **Optionaler Folgehebel (A/B-testbar, niedrige Priorität):** TB-Win-gefilterte
   Wurzelsuche statt Direkt-Return (Stockfish-Stil → schnelleres Matt in ≤5-Steinern) und/oder
   König-Aktivität-/Freibauer-Push-Nudge in gewonnenen Bauern-/Turmendspielen. **Tobias entscheidet.**
-- **OFFEN:** `git push origin master` weiterhin offen (master mehrere Commits voraus seit MovePicker).
+- **Sync:** Code-Push war bereits 25.06. durch (`origin/master = f5f1b8e`); die alte „push offen"-Notiz
+  war veraltet. 30.06. ist auch dieser Auswertungs-Commit gepusht → **`master == origin/master` (2fdb57c)**,
+  keine offenen Pushes mehr.
 
 **25.06.2026 — Punkt 2C (stille Checks, +19.8 Elo) UND Cap-Fix (MAX_QPLY qply-relativ, +26 Elo)
 — beide A/B-positiv, ZUSAMMEN AUSGEROLLT 25.06. 19:48 CEST (~+45 Elo kombiniert).**
