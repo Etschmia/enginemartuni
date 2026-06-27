@@ -10,6 +10,33 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**30.06.2026 — Lichess-Lookback GRÜN + Auswertung `analyse-30.06.2026.json` (kein neuer Hebel).**
+- **Rollout 25.06. (2C+Cap+TT, ~+45 Elo) live bestätigt.** Anker waren Blitz 2045 / Rapid 2236.
+  Jetzt **Blitz 2170 (+125)**, **Rapid 2284 (+48)** — vor allem im Blitz ein deutlicher Sprung,
+  konsistent mit dem A/B (+45 Elo). Der „Lichess-Lookback OFFEN" aus dem 25.06.-Eintrag ist damit
+  **geschlossen (positiv)**.
+- **Auswertung `analyse-30.06.2026.json`** (195 Partien, 255 Blunder, Skript `/tmp/cluster_analyze_30.py`):
+  **B/P nach Klasse — Rapid 0.51 (45 P, sauberstes Signal, exzellent)**, Blitz 1.30 (106 P),
+  Bullet 2.28 (36 P), UB 2.50. Das Rapid-Signal (echte Bedenkzeit) bestätigt: die Engine ist gesund
+  und stark, der Großteil der Blunder ist **Blitz/Bullet-Zeitnot** und steht oft in **gewonnenen** Partien.
+- **Syzygy ≤5-Steiner „Blunder" = Analyzer-False-Positives** (wie 22.06.). 4 Fälle, alle reproduziert:
+  Engine meldet `syzygy root hit` und spielt den **DTZ-beweisbar-gewinnenden** (nur kosmetisch lahmen)
+  Zug, z. B. Kb2 in `8/8/1p6/3k4/3P4/2K5/4R3/8 w` (turmüberlegen). SF flaggt −597 cp, weil es Matt-Distanz
+  misst — die Stellung bleibt gewonnen, Partien `1-0`. Syzygy arbeitet korrekt.
+- **`hangs_knight`-Rapid-Cluster (4×) reproduziert NICHT** bei 5 s realistischer Bedenkzeit: aktuelle
+  Engine spielt f3/f4/f3/a3 statt der Springer-Schläge (Nxe6/Qf6/Nxa5/Nxc4) → Zeit-Scramble bzw.
+  Vor-Rollout-Binaries (die 195 Partien umspannen mehrere Engine-Stände). Kein systematischer Eval-Bug.
+- **AetherBot = Top-Hotspot nur durch Volumen** (Challenge-Cron): **Score 79.8 % (36 S / 8 N / 3 R)**,
+  viele „Blunder" in gewonnenen Partien. Kein Matchup-Defizit.
+- **Einziges mildes reales Thema: langsame-aber-trotzdem-gewinnende Endspiel-Konvertierung.** „Aus
+  Gewinn verspielt"-Cluster (eb≥+150, loss≥250): 17/24 **Blitz**, überwiegend Endspiel. Bei 2 s spielt
+  die aktuelle Engine in 4/5 getesteten Stellungen „lahm-aber-gewinnend" (h3/c3/f3/a3; alle Partien `1-0`),
+  in 1/5 sogar den Bestzug (b2). Meist kosmetisch (Partien gewonnen), in Zeit-Scrambles kostet es selten
+  einen Gewinn. **Optionaler Folgehebel (A/B-testbar, niedrige Priorität):** TB-Win-gefilterte
+  Wurzelsuche statt Direkt-Return (Stockfish-Stil → schnelleres Matt in ≤5-Steinern) und/oder
+  König-Aktivität-/Freibauer-Push-Nudge in gewonnenen Bauern-/Turmendspielen. **Tobias entscheidet.**
+- **OFFEN:** `git push origin master` weiterhin offen (master mehrere Commits voraus seit MovePicker).
+
 **25.06.2026 — Punkt 2C (stille Checks, +19.8 Elo) UND Cap-Fix (MAX_QPLY qply-relativ, +26 Elo)
 — beide A/B-positiv, ZUSAMMEN AUSGEROLLT 25.06. 19:48 CEST (~+45 Elo kombiniert).**
 - **Implementierung** (`src/search.rs`, uncommitted im master-Working-Tree): Quiescence bekommt einen
