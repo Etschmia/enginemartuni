@@ -10,6 +10,30 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**04.07.2026 — Auswertung `analyse-30.06.2026.json` (kumulativ, 773 Partien, 1109 Blunder seit 25.06.-Rollout) — kein neuer Hebel, Projekt weitgehend ausentwickelt.**
+- **Rating weiter gestiegen:** Blitz 2170→**2278**, Rapid 2284→**2325** — Rollout vom 25.06. trägt weiter,
+  keine Regression.
+- **B/P nach Klasse:** Rapid 0.89 (171 P, weiterhin sauberstes Signal), Blitz 1.46 (395 P),
+  Bullet 1.88 (177 P), Classical 0.80 (10 P). Anstieg gegenüber 30.06. (Rapid 0.51) ist reiner
+  Stichproben-Effekt (195→773 P, größere Grundgesamtheit derselben Engine-Version, kein Code-Wechsel
+  im Zeitraum) — kein Regressions-Signal.
+- **Middlegame-Blunder (Blitz) reproduzieren NICHT** bei 5 s realer Bedenkzeit (`Qxb7+` verpasst →
+  bei 5 s `Qh2`; `Be4`-Fehlgriff → bei 5 s `Bg5`) → klassisches **Zeitnot**, kein Such-/Eval-Bug.
+- **Syzygy ≤5-Steiner „Blunder" reproduzieren weiterhin** (z. B. Kb2 statt Re1 in
+  `8/8/1p6/3k4/3P4/2K5/4R3/8 w`), aber `syzygy root hit` aktiv + Eval bleibt bei +579 cp
+  gewonnen → **DTZ-suboptimal, aber WDL-erhaltend**, rein kosmetisch, exakt der bekannte
+  False-Positive-Typ vom 30.06./22.06.
+- **Motiv-Verteilung weiterhin diffus** (`positional_collapse` + `<none>` dominieren), kein
+  Einzel-Term als Treiber erkennbar.
+- **Gegner-Hotspots:** AetherBot (325 Blunder/162 Partien) bleibt reines Volumen. PiCade (B/P 3.76)
+  und einzelne Bots mit 6–13 Partien sind zu kleine Stichproben für eine Maßnahme.
+- **Fazit (Tobias-Entscheid, gemeinsam getroffen):** Kein konkreter, umsetzbarer Hebel mehr aus
+  dieser Blunder-Cluster-Diagnose — verbleibende Fälle sind Zeitnot oder ergebnisirrelevante
+  Tablebase-Kosmetik. Diese Art der Auswertung wird **vorerst nicht weiter fortgesetzt**; weitere
+  Elo-Gewinne müssten aus Suchtiefe/NPS-Optimierung oder neuen Suchtechniken kommen, nicht mehr aus
+  Blunder-Jagd. Skript: `/tmp/claude-1000/.../cluster_analyze_04jul.py` (Kopie von
+  `/tmp/cluster_analyze_30.py`, gleiche Methodik, keine Logikänderung).
+
 **30.06.2026 — Lichess-Lookback GRÜN + Auswertung `analyse-30.06.2026.json` (kein neuer Hebel).**
 - **Rollout 25.06. (2C+Cap+TT, ~+45 Elo) live bestätigt.** Anker waren Blitz 2045 / Rapid 2236.
   Jetzt **Blitz 2170 (+125)**, **Rapid 2284 (+48)** — vor allem im Blitz ein deutlicher Sprung,
