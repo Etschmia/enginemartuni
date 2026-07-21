@@ -28,3 +28,6 @@ tools/analyze_cron.config.json
 
 # A/B-Test-Output (lokal, kann gross werden)
 matches/
+
+# lokale Cron-/Probe-Logs
+logs/
