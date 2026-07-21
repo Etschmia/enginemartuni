@@ -10,6 +10,31 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**21.07.2026 — Chess960 implementiert (Branch `dev/chess960`, A/B läuft).**
+- **Auftrag:** Engine soll die Variante Chess960 spielen. Befund: die jordanbray-`chess`-Crate
+  kann kein 960 (keine Shredder-FEN-Rochaderechte, MoveGen kennt nur die Standard-Rochade).
+  **Tobias-Entscheid:** Crate NICHT ersetzen, sondern shakmaty **zusätzlich** einbauen;
+  Absicherung Perft + A/B 1000P.
+- **Architektur:** neues Trait `EngineBoard` ([backend.rs](../src/backend.rs)) spiegelt die
+  benutzte `chess::Board`-API; Suche/Eval/Endgame/Syzygy sind jetzt generisch (monomorphisiert,
+  kein Laufzeit-Dispatch). Backend 1 = `chess::Board` (dünne Durchreichung, Live-Pfad),
+  Backend 2 = `Board960` ([board960.rs](../src/board960.rs)) auf shakmaty 0.29: shakmaty hält
+  Spielzustand/960-Rochaderechte/Zobrist und generiert Züge, beim Board-Bau werden Bitboards &
+  Zugliste einmalig in `chess`-Typen gespiegelt — alle Eval-Terme/PSTs/SEE rechnen unverändert.
+- **Rochade-Codierung** = „König x eigener Turm" (`e1h1`) = UCI_Chess960-Notation; deshalb ist
+  `is_capture` Backend-Methode. Neue UCI-Option `UCI_Chess960` (check) schaltet das Backend um.
+  Im 960-Modus: Polyglot-Buch aus (`as_std() == None`), Syzygy bleibt aktiv (generische Probe).
+- **Verifikation:** 104 Tests grün (Perft Startpos 20/400/8902/197281, Adapter-Perft == shakmaty
+  auf 4 FRC-FENs, Rochade-/EP-/Notations-Tests); Standard-Pfad **bit-exakt** (Node-Counts auf
+  8 Mittelspiel-FENs identisch master vs. Refactor, `scratchpad/nodecount.py`); 960-Smoke grün
+  (FRC-Startpos d8 in 2 s, ~1,5 M NPS; Standard ungebremst). v1-Vereinfachungen: 960-Backend
+  eager MoveGen + volle Zobrist-Neuberechnung pro Knoten (Korrektheit vor NPS).
+- **OFFEN:** (a) A/B `matches/baseline_vs_chess960` (master vs. Refactor, Standard, SPRT [0,10],
+  max 1000 P) läuft seit 21.07. — bei Nicht-Regression: FF-Merge → master, Build, Restart;
+  (b) Rollout-Schritt lichess-bot: in `~/lichess-bot/config.yml` unter `challenge.variants`
+  `- chess960` einkommentieren + Restart (erst nach (a));
+  (c) optional später: 960-NPS-Tuning (inkrementeller Hash, Lazy-MoveGen), Polyglot-960-Bücher.
+
 **04.07.2026 — Auswertung `analyse-30.06.2026.json` (kumulativ, 773 Partien, 1109 Blunder seit 25.06.-Rollout) — kein neuer Hebel, Projekt weitgehend ausentwickelt.**
 - **Rating weiter gestiegen:** Blitz 2170→**2278**, Rapid 2284→**2325** — Rollout vom 25.06. trägt weiter,
   keine Regression.
