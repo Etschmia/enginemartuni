@@ -10,6 +10,7 @@ chess = "3.2"
 rand = "0.8"
 toml = "0.8"
 pyrrhic-rs = "0.2"
+shakmaty = "0.29"
 
 [profile.release]
 opt-level = 3

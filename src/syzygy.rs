@@ -23,9 +23,10 @@
 //!   dieser Version aus (die `chess`-EP-Semantik weicht vom Fathom-Zielfeld ab)
 //!   — Auslassen ist immer korrekt, es fällt nur auf die normale Suche zurück.
 
+use crate::backend::EngineBoard;
 use chess::{
     get_bishop_moves, get_king_moves, get_knight_moves, get_pawn_attacks, get_rook_moves,
-    BitBoard, Board, CastleRights, ChessMove, Color, File, MoveGen, Piece, Rank, Square, EMPTY,
+    BitBoard, ChessMove, Color, File, Piece, Rank, Square, EMPTY,
 };
 use pyrrhic_rs::{
     Color as TbColor, DtzProbeValue, EngineAdapter, Piece as TbPiece, TableBases, WdlProbeResult,
@@ -154,7 +155,7 @@ impl Syzygy {
     /// Gibt `None` zurück, wenn nicht probebar: zu viele Steine, bestehende
     /// Rochaderechte, en-passant-Stellung oder fehlende Tabelle für das
     /// Material. In allen `None`-Fällen sucht der Aufrufer normal weiter.
-    pub fn probe_wdl_score(&self, board: &Board, ply: i32) -> Option<i32> {
+    pub fn probe_wdl_score<B: EngineBoard>(&self, board: &B, ply: i32) -> Option<i32> {
         if !self.probeable(board) {
             return None;
         }
@@ -190,7 +191,7 @@ impl Syzygy {
     /// Der Legalitätscheck am Ende ist ein Sicherheitsnetz gegen eine
     /// Fehlabbildung (Index/Promotion): findet sich der Zug nicht unter den
     /// legalen Wurzelzügen, geben wir `None` zurück und suchen normal weiter.
-    pub fn probe_root_move(&self, board: &Board, halfmove: u8) -> Option<(ChessMove, i32)> {
+    pub fn probe_root_move<B: EngineBoard>(&self, board: &B, halfmove: u8) -> Option<(ChessMove, i32)> {
         if !self.probeable(board) {
             return None;
         }
@@ -224,7 +225,7 @@ impl Syzygy {
         };
         let mv = ChessMove::new(from, to, promo);
 
-        if !MoveGen::new_legal(board).any(|m| m == mv) {
+        if !board.legal_gen().any(|m| m == mv) {
             return None;
         }
 
@@ -238,10 +239,9 @@ impl Syzygy {
 
     /// Gemeinsame Probe-Vorbedingungen (Syzygy): Steinzahl ≤ `max_pieces`, keine
     /// Rochaderechte, kein en passant (v1). Genutzt von WDL- und DTZ-Probe.
-    fn probeable(&self, board: &Board) -> bool {
+    fn probeable<B: EngineBoard>(&self, board: &B) -> bool {
         board.combined().popcnt() <= self.max_pieces
-            && board.castle_rights(Color::White) == CastleRights::NoRights
-            && board.castle_rights(Color::Black) == CastleRights::NoRights
+            && !board.has_castle_rights()
             && board.en_passant().is_none()
     }
 }
@@ -249,7 +249,7 @@ impl Syzygy {
 /// Extrahiert die acht u64-Bitboards (Reihenfolge wie von Pyrrhic erwartet:
 /// white, black, kings, queens, rooks, bishops, knights, pawns) plus
 /// Seite-am-Zug (`true` = Weiß) aus dem `chess::Board`.
-fn position_bitboards(board: &Board) -> ([u64; 8], bool) {
+fn position_bitboards<B: EngineBoard>(board: &B) -> ([u64; 8], bool) {
     (
         [
             board.color_combined(Color::White).0,
@@ -370,6 +370,7 @@ fn table_name_piece_count(stem: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chess::{Board, CastleRights, MoveGen};
     use std::str::FromStr;
 
     /// Index→Square-Mapping muss zur a1=0-Konvention passen.

@@ -1,9 +1,10 @@
+use crate::backend::EngineBoard;
 use crate::endgame;
 use crate::eval_config::EvalParams;
 use crate::pst::{pst_index, BISHOP_PST, KING_PST, KNIGHT_PST, PAWN_PST, QUEEN_PST, ROOK_PST};
 use chess::{
     get_adjacent_files, get_bishop_moves, get_file, get_king_moves, get_knight_moves,
-    get_rook_moves, BitBoard, Board, Color, File, Piece, Rank, Square,
+    get_rook_moves, BitBoard, Color, File, Piece, Rank, Square,
 };
 
 const MAX_PHASE: i32 = 24;
@@ -14,7 +15,7 @@ const MAX_PHASE: i32 = 24;
 /// Besteht aus zwei Teilen:
 ///  - Nicht-getaperte Terme (Material, Bauernstruktur, Laeuferpaar, King Safety, ...)
 ///  - Getaperter PST-Beitrag (mg/eg interpoliert nach Spielphase)
-pub fn evaluate(board: &Board, p: &EvalParams) -> i32 {
+pub fn evaluate<B: EngineBoard>(board: &B, p: &EvalParams) -> i32 {
     // Bekannte Endspiele uebernehmen die Bewertung komplett.
     if let Some(s) = endgame::endgame_score(board, p) {
         return s;
@@ -65,7 +66,7 @@ pub fn taper(mg: i32, eg: i32, phase: i32) -> i32 {
 /// Phase-Berechnung nach klassischer Gewichtung: Springer 1, Laeufer 1,
 /// Turm 2, Dame 4. Startpos = 24, reines KvK-Endspiel = 0.
 #[inline]
-pub fn game_phase(board: &Board) -> i32 {
+pub fn game_phase<B: EngineBoard>(board: &B) -> i32 {
     let knights = board.pieces(Piece::Knight).popcnt() as i32;
     let bishops = board.pieces(Piece::Bishop).popcnt() as i32;
     let rooks = board.pieces(Piece::Rook).popcnt() as i32;
@@ -82,7 +83,7 @@ pub fn game_phase(board: &Board) -> i32 {
 /// Leichtfiguren-Mehrheits-Seite, phase-getapert (MG > EG, da zwei Leichtfiguren
 /// mit Damen am Brett gefaehrlicher sind). Rueckgabe in Weiss-Sicht (positiv =
 /// gut fuer Weiss). Code-Default der Parameter = 0 → Term inaktiv.
-fn material_imbalance(board: &Board, phase: i32, p: &EvalParams) -> i32 {
+fn material_imbalance<B: EngineBoard>(board: &B, phase: i32, p: &EvalParams) -> i32 {
     let white = *board.color_combined(Color::White);
     let black = *board.color_combined(Color::Black);
     let knights = *board.pieces(Piece::Knight);
@@ -119,8 +120,8 @@ fn material_imbalance(board: &Board, phase: i32, p: &EvalParams) -> i32 {
 /// `w_pst_eg`/`b_pst_eg` sind die bereits in `evaluate()` berechneten Roh-PST-eg-
 /// Summen je Seite (kein zweites `pst_score`). Beide Prozentsaetze 100 (Default)
 /// → Rueckgabe 0 → verhaltensgleich. Code-Default damit inaktiv.
-fn material_deficit_damping(
-    board: &Board,
+fn material_deficit_damping<B: EngineBoard>(
+    board: &B,
     phase: i32,
     p: &EvalParams,
     w_pst_eg: i32,
@@ -174,7 +175,7 @@ fn material_deficit_damping(
 /// aus `pawn_bonus` (gleiche Advancement-Formel, gleiche `pawn_passed_rank_bonuses`),
 /// hier separat fuer `material_deficit_damping`. Bei Aenderung der Formel beide
 /// Stellen anpassen.
-fn side_passed_bonus_sum(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn side_passed_bonus_sum<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     let our_bb = *board.color_combined(us);
     let our_pawns = *board.pieces(Piece::Pawn) & our_bb;
     let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
@@ -194,7 +195,7 @@ fn side_passed_bonus_sum(board: &Board, us: Color, p: &EvalParams) -> i32 {
 }
 
 /// Akkumuliert den PST-Beitrag einer Seite in (mg, eg).
-fn pst_score(board: &Board, us: Color) -> (i32, i32) {
+fn pst_score<B: EngineBoard>(board: &B, us: Color) -> (i32, i32) {
     let our_bb = *board.color_combined(us);
     let mut mg = 0;
     let mut eg = 0;
@@ -217,7 +218,7 @@ fn pst_score(board: &Board, us: Color) -> (i32, i32) {
     (mg, eg)
 }
 
-fn evaluate_side(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
+fn evaluate_side<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, phase: i32) -> i32 {
     let mut score: i32 = 0;
 
     let our_bb = *board.color_combined(us);
@@ -303,11 +304,11 @@ fn evaluate_side(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
 ///  - `exposure` (-): Malus für König zu weit vom Heimrand, wenn der Gegner
 ///                    noch Schwergewicht-Material hat (siehe king_exposure_penalty)
 #[cfg(test)]
-fn king_safety(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn king_safety<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     king_safety_with_phase(board, us, p, game_phase(board))
 }
 
-fn king_safety_with_phase(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
+fn king_safety_with_phase<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, phase: i32) -> i32 {
     let king_sq = board.king_square(us);
     let zone = king_zone(king_sq);
 
@@ -358,7 +359,7 @@ fn king_safety_with_phase(board: &Board, us: Color, p: &EvalParams, phase: i32) 
 /// Endspielphase wieder `king_activity_endgame`.
 ///
 /// Rückgabewert ist positiv (als "abzuziehender Malus" im Aufrufer gedacht).
-fn king_exposure_penalty(board: &Board, us: Color, p: &EvalParams, phase: i32) -> i32 {
+fn king_exposure_penalty<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, phase: i32) -> i32 {
     // Abstand des Königs zu seiner Grundreihe
     let king_sq = board.king_square(us);
     let rank = king_sq.get_rank().to_index() as i32;
@@ -413,7 +414,7 @@ fn king_zone(sq: Square) -> BitBoard {
 
 /// Summiert Angriffsgewichte gegnerischer Offiziere auf die King-Zone,
 /// indiziert SafetyTable und liefert die Strafe in cp.
-fn king_danger(board: &Board, us: Color, zone: BitBoard, p: &EvalParams) -> i32 {
+fn king_danger<B: EngineBoard>(board: &B, us: Color, zone: BitBoard, p: &EvalParams) -> i32 {
     let enemy = !us;
     let enemy_bb = *board.color_combined(enemy);
     let occ = *board.combined();
@@ -476,7 +477,7 @@ fn king_danger(board: &Board, us: Color, zone: BitBoard, p: &EvalParams) -> i32 
 /// Grundreihe abseits d/e wie ein rochierter Koenig bewertet — sxphia-
 /// Patzer 9...Nxc4 (Bz0YIF49) trat auf, weil Martuni dem Kf8-nach-Bb5+
 /// einen +30cp Shield-Bonus gab.
-fn pawn_shield_score(board: &Board, us: Color, king_sq: Square, p: &EvalParams) -> i32 {
+fn pawn_shield_score<B: EngineBoard>(board: &B, us: Color, king_sq: Square, p: &EvalParams) -> i32 {
     let king_file = king_sq.get_file().to_index() as i32;
     let king_rank = king_sq.get_rank().to_index() as i32;
 
@@ -751,7 +752,7 @@ fn score_run(len: usize, p: &EvalParams) -> i32 {
     }
 }
 
-fn rooks_connected(board: &Board, our_rooks: BitBoard) -> bool {
+fn rooks_connected<B: EngineBoard>(board: &B, our_rooks: BitBoard) -> bool {
     if our_rooks.popcnt() < 2 {
         return false;
     }
@@ -858,7 +859,7 @@ fn rook_is_behind_pawn(rook_rank: i32, pawn_rank: i32, pawn_color: Color) -> boo
 /// Turm auf 7. Reihe aus eigener Sicht. Extra-Bonus, wenn der gegnerische
 /// König auf der 8. (Grund-)Reihe eingesperrt steht — dann schneidet der
 /// Turm eine Fluchtlinie ab ("pig on the seventh").
-fn rook_seventh_rank_bonus(board: &Board, us: Color, our_rooks: BitBoard, p: &EvalParams) -> i32 {
+fn rook_seventh_rank_bonus<B: EngineBoard>(board: &B, us: Color, our_rooks: BitBoard, p: &EvalParams) -> i32 {
     let (seventh_rank, eighth_rank) = match us {
         Color::White => (6, 7),
         Color::Black => (1, 0),
@@ -886,7 +887,7 @@ fn rook_seventh_rank_bonus(board: &Board, us: Color, our_rooks: BitBoard, p: &Ev
 /// das Tapern erledigt der Aufrufer in `evaluate()`. Im vollen Mittelspiel
 /// trägt der Term damit nichts bei — der Bauer dient dort der King-Safety
 /// oder der Eröffnungsstruktur. Im Endspiel zieht sie den Turm aktiv heraus.
-fn rook_trapped_endgame_malus(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn rook_trapped_endgame_malus<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     let our_bb = *board.color_combined(us);
     let our_rooks = *board.pieces(Piece::Rook) & our_bb;
     let our_pawns = *board.pieces(Piece::Pawn) & our_bb;
@@ -925,7 +926,7 @@ fn rook_trapped_endgame_malus(board: &Board, us: Color, p: &EvalParams) -> i32 {
 /// und skaliert linear mit `(threshold - phase) / threshold`, analog zu
 /// `king_activity_endgame`. So verhindern wir, dass der König schon im
 /// Mittelspiel vor seinen Bauern herläuft und die Rochadesicherheit aufgibt.
-fn king_passed_pawn_synergy(board: &Board, phase: i32, p: &EvalParams) -> i32 {
+fn king_passed_pawn_synergy<B: EngineBoard>(board: &B, phase: i32, p: &EvalParams) -> i32 {
     if phase >= p.king_activity_phase_threshold {
         return 0;
     }
@@ -935,7 +936,7 @@ fn king_passed_pawn_synergy(board: &Board, phase: i32, p: &EvalParams) -> i32 {
     (w - b) * eg_weight / p.king_activity_phase_threshold
 }
 
-fn side_king_passed_synergy(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn side_king_passed_synergy<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     let king_sq = board.king_square(us);
     let our_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(us);
     let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
@@ -980,7 +981,7 @@ fn side_king_passed_synergy(board: &Board, us: Color, p: &EvalParams) -> i32 {
 
 /// Top-Level-Aufruf in `evaluate()`. Liefert die Diff (Weiss - Schwarz)
 /// schon getapert in den Endspielpol.
-fn pawn_endgame_guard(board: &Board, phase: i32, p: &EvalParams) -> i32 {
+fn pawn_endgame_guard<B: EngineBoard>(board: &B, phase: i32, p: &EvalParams) -> i32 {
     if !is_simple_pawn_endgame(board, p) {
         return 0;
     }
@@ -997,13 +998,13 @@ fn pawn_endgame_guard(board: &Board, phase: i32, p: &EvalParams) -> i32 {
 /// statischen Anker-Werten (p.knight, p.bishop, p.rook, p.queen). Beide
 /// Seiten muessen unter dem Gate liegen, damit der Guard greift — sonst
 /// ist es kein einfaches Pawn-Endgame mehr.
-fn is_simple_pawn_endgame(board: &Board, p: &EvalParams) -> bool {
+fn is_simple_pawn_endgame<B: EngineBoard>(board: &B, p: &EvalParams) -> bool {
     p.npm_endgame_gate > 0
         && side_npm(board, Color::White, p) <= p.npm_endgame_gate
         && side_npm(board, Color::Black, p) <= p.npm_endgame_gate
 }
 
-fn side_npm(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn side_npm<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     let bb = *board.color_combined(us);
     let n = (*board.pieces(Piece::Knight) & bb).popcnt() as i32;
     let bp = (*board.pieces(Piece::Bishop) & bb).popcnt() as i32;
@@ -1013,7 +1014,7 @@ fn side_npm(board: &Board, us: Color, p: &EvalParams) -> i32 {
 }
 
 /// Aufaddierter Guard-Beitrag einer Seite (ohne Phase-Skalierung).
-fn side_pawn_endgame_guard(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn side_pawn_endgame_guard<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     let mut score = 0;
     score += opposition_bonus(board, us, p);
     score += key_square_bonus(board, us, p);
@@ -1031,7 +1032,7 @@ fn side_pawn_endgame_guard(board: &Board, us: Color, p: &EvalParams) -> i32 {
 /// Hinweis zur Konvention: in der klassischen Schach-Theorie heisst "die
 /// Opposition haben" = "der andere ist am Zug". Der Bonus geht also an die
 /// Seite, die NICHT am Zug ist (sofern die Geometrie passt).
-fn opposition_bonus(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn opposition_bonus<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     if p.opposition_bonus == 0 {
         return 0;
     }
@@ -1050,7 +1051,7 @@ fn opposition_bonus(board: &Board, us: Color, p: &EvalParams) -> i32 {
 /// Geometrische Pruefung: gleiche Linie/Reihe/Diagonale, ungerade Anzahl
 /// leerer Felder dazwischen. "Leer" heisst hier "keine Figur" — Bauern auf
 /// der Linie/Reihe zwischen den Koenigen brechen die Opposition.
-fn has_opposition_geometry(board: &Board, a: Square, b: Square) -> bool {
+fn has_opposition_geometry<B: EngineBoard>(board: &B, a: Square, b: Square) -> bool {
     let af = a.get_file().to_index() as i32;
     let ar = a.get_rank().to_index() as i32;
     let bf = b.get_file().to_index() as i32;
@@ -1137,7 +1138,7 @@ fn rank_from_index(i: i32) -> Rank {
 ///
 /// Rook-Pawns (a-/h-File) bekommen KEINEN Key-Square-Bonus — die Promo-
 /// Ecke ist immer vom Verteidiger erreichbar; Sub-Konzept 3 uebernimmt.
-fn key_square_bonus(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn key_square_bonus<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     if p.key_square_bonus_by_rank.iter().all(|&x| x == 0) {
         return 0;
     }
@@ -1232,7 +1233,7 @@ fn key_square_bonus(board: &Board, us: Color, p: &EvalParams) -> i32 {
 /// ≤ 1) → Daempfung in Form einer fixen Strafe. Der Term ist als negative
 /// Konstante gedacht; er reduziert den ueberschaetzten Optimismus des
 /// Passbauer-Bonus, ohne den Materialwert des Bauern selbst anzutasten.
-fn rook_pawn_correction(board: &Board, us: Color, p: &EvalParams) -> i32 {
+fn rook_pawn_correction<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     if p.rook_pawn_drawish_penalty == 0 {
         return 0;
     }
@@ -1297,7 +1298,7 @@ fn pawn_attacks_of(pawns: BitBoard, us: Color) -> BitBoard {
 /// Zielfelder, die (a) eine eigene Figur belegen oder (b) von einem
 /// gegnerischen Bauern angegriffen werden, zählen nicht mit.
 /// Rückgabe: (mg, eg) Beitrag aus Sicht von `us`.
-fn mobility_score(board: &Board, us: Color, p: &EvalParams) -> (i32, i32) {
+fn mobility_score<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> (i32, i32) {
     let our_bb = *board.color_combined(us);
     let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
     let occ = *board.combined();
@@ -1341,7 +1342,7 @@ fn mobility_score(board: &Board, us: Color, p: &EvalParams) -> (i32, i32) {
 /// endgame `allows_mate`-Fälle mit R+Minor (z.B. Martuni vs WolfuhfuhBot
 /// 40.Kc2, simbelmyne 41.Kc2). Deshalb triggert der Guard jetzt auch bei
 /// Turm + Leichtfigur. KRvK, KBvK, KNvK und KBBvK bleiben unberührt.
-fn king_activity_endgame(board: &Board, phase: i32, p: &EvalParams) -> i32 {
+fn king_activity_endgame<B: EngineBoard>(board: &B, phase: i32, p: &EvalParams) -> i32 {
     if phase >= p.king_activity_phase_threshold {
         return 0;
     }
@@ -1361,7 +1362,7 @@ fn king_activity_endgame(board: &Board, phase: i32, p: &EvalParams) -> i32 {
 
 /// Bedrohung für den gegnerischen König durch Mattmaterial von `side`:
 /// Dame, zwei Türme oder ein Turm + mindestens eine Leichtfigur.
-fn heavy_piece_threat(board: &Board, side: Color) -> bool {
+fn heavy_piece_threat<B: EngineBoard>(board: &B, side: Color) -> bool {
     let side_bb = *board.color_combined(side);
     let queens = (*board.pieces(Piece::Queen) & side_bb).popcnt();
     if queens > 0 {
@@ -1449,8 +1450,8 @@ pub struct EvalBreakdown {
 
 /// Spiegelt evaluate_side, schreibt aber jeden Beitrag separat in eine
 /// PerSideBreakdown statt sie zu einer Summe zu addieren.
-fn evaluate_side_breakdown(
-    board: &Board,
+fn evaluate_side_breakdown<B: EngineBoard>(
+    board: &B,
     us: Color,
     p: &EvalParams,
     phase: i32,
@@ -1516,7 +1517,7 @@ fn evaluate_side_breakdown(
 
 /// Liefert eine komponentenweise Aufschluesselung der Stellungsbewertung.
 /// Das Total stimmt mit `evaluate()` ueberein (Sanity-Check unten).
-pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
+pub fn evaluate_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) -> EvalBreakdown {
     let mut bd = EvalBreakdown::default();
     bd.phase = game_phase(board);
 
@@ -1600,7 +1601,7 @@ pub fn evaluate_breakdown(board: &Board, p: &EvalParams) -> EvalBreakdown {
 /// Druckt die EvalBreakdown als `info string`-Zeilen — UCI-konform, sodass
 /// das Kommando `eval` aus jedem UCI-Tool / Skript sauber gelesen werden kann.
 /// Vorzeichen-Konvention: Diff = White - Black (positiv = gut fuer Weiss).
-pub fn print_eval_breakdown(board: &Board, p: &EvalParams) {
+pub fn print_eval_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) {
     let bd = evaluate_breakdown(board, p);
 
     println!("info string ===== eval breakdown (Sicht: Weiss) =====");

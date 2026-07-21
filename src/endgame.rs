@@ -12,12 +12,13 @@
 //! Phase C: KBNK mit laeuferfarbigen Mattecken.
 
 use crate::eval_config::EvalParams;
-use chess::{BitBoard, Board, Color, Piece, Rank, Square};
+use crate::backend::EngineBoard;
+use chess::{BitBoard, Color, Piece, Rank, Square};
 
 /// Erkennt eine bekannte Material-Signatur und liefert die Bewertung
 /// in Centipawns aus Sicht von Weiss. `None` bedeutet "keine Spezialregel
 /// zustaendig" — die normale Eval uebernimmt.
-pub fn endgame_score(board: &Board, p: &EvalParams) -> Option<i32> {
+pub fn endgame_score<B: EngineBoard>(board: &B, p: &EvalParams) -> Option<i32> {
     match signature(board)? {
         Signature::Mopup { strong } => Some(mop_up_score(board, strong, p)),
         Signature::Kpk { strong, pawn_sq } => kpk_score(board, strong, pawn_sq, p),
@@ -27,7 +28,7 @@ pub fn endgame_score(board: &Board, p: &EvalParams) -> Option<i32> {
 
 /// Cheap-Check fuer den Suchhebel: gilt die Stellung als bekanntes
 /// Endspiel? Wird in der Suche genutzt, um Extensions zu vergeben.
-pub fn is_recognized(board: &Board) -> bool {
+pub fn is_recognized<B: EngineBoard>(board: &B) -> bool {
     signature(board).is_some()
 }
 
@@ -47,7 +48,7 @@ enum Signature {
     },
 }
 
-fn signature(board: &Board) -> Option<Signature> {
+fn signature<B: EngineBoard>(board: &B) -> Option<Signature> {
     let w_pawns = count(board, Piece::Pawn, Color::White);
     let b_pawns = count(board, Piece::Pawn, Color::Black);
     let pawn_total = w_pawns + b_pawns;
@@ -139,7 +140,7 @@ fn is_mopup_force(n: u32, b: u32, r: u32, q: u32) -> bool {
     r >= 1 || q >= 1
 }
 
-fn mop_up_score(board: &Board, strong: Color, p: &EvalParams) -> i32 {
+fn mop_up_score<B: EngineBoard>(board: &B, strong: Color, p: &EvalParams) -> i32 {
     let weak = !strong;
     let weak_king = board.king_square(weak);
     let strong_king = board.king_square(strong);
@@ -162,7 +163,7 @@ fn mop_up_score(board: &Board, strong: Color, p: &EvalParams) -> i32 {
 
 /// Phase C: KBNK. Mattsetzen ist nur in einer Ecke der Laeuferfarbe
 /// moeglich — der Mop-up-Gradient zieht den Verteidiger gezielt dorthin.
-fn kbnk_score(board: &Board, strong: Color, bishop_sq: Square, p: &EvalParams) -> i32 {
+fn kbnk_score<B: EngineBoard>(board: &B, strong: Color, bishop_sq: Square, p: &EvalParams) -> i32 {
     let weak = !strong;
     let weak_king = board.king_square(weak);
     let strong_king = board.king_square(strong);
@@ -196,7 +197,7 @@ fn is_light_square(sq: Square) -> bool {
 /// Phase B: Rule of the Square. Wenn der Bauer nicht mehr einholbar ist,
 /// liefert die Funktion die Spezial-Bewertung. Sonst `None`, damit die
 /// normale Eval die KPK-Stellung uebernimmt.
-fn kpk_score(board: &Board, strong: Color, pawn_sq: Square, p: &EvalParams) -> Option<i32> {
+fn kpk_score<B: EngineBoard>(board: &B, strong: Color, pawn_sq: Square, p: &EvalParams) -> Option<i32> {
     if is_pawn_unstoppable(board, strong, pawn_sq) {
         let cp = p.pawn + p.eg_passed_unstoppable_bonus;
         return Some(signed(cp, strong));
@@ -204,7 +205,7 @@ fn kpk_score(board: &Board, strong: Color, pawn_sq: Square, p: &EvalParams) -> O
     None
 }
 
-fn is_pawn_unstoppable(board: &Board, strong: Color, pawn_sq: Square) -> bool {
+fn is_pawn_unstoppable<B: EngineBoard>(board: &B, strong: Color, pawn_sq: Square) -> bool {
     let weak = !strong;
     let weak_king = board.king_square(weak);
 
@@ -258,7 +259,7 @@ fn first_square(bb: BitBoard) -> Option<Square> {
     bb.into_iter().next()
 }
 
-fn strong_material(board: &Board, strong: Color, p: &EvalParams) -> i32 {
+fn strong_material<B: EngineBoard>(board: &B, strong: Color, p: &EvalParams) -> i32 {
     let bb = *board.color_combined(strong);
     let mut total = 0;
     total += (*board.pieces(Piece::Pawn) & bb).popcnt() as i32 * p.pawn;
@@ -269,7 +270,7 @@ fn strong_material(board: &Board, strong: Color, p: &EvalParams) -> i32 {
     total
 }
 
-fn count(board: &Board, piece: Piece, color: Color) -> u32 {
+fn count<B: EngineBoard>(board: &B, piece: Piece, color: Color) -> u32 {
     (*board.pieces(piece) & *board.color_combined(color)).popcnt()
 }
 
@@ -321,6 +322,7 @@ const DARK_CORNERS: [Square; 2] = [Square::A1, Square::H8];
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chess::Board;
     use std::str::FromStr;
 
     fn p() -> EvalParams {

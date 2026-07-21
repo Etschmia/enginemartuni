@@ -1,3 +1,5 @@
+mod backend;
+mod board960;
 mod config;
 mod endgame;
 mod eval;

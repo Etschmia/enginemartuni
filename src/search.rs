@@ -5,7 +5,8 @@ use crate::polyglot::BookSet;
 use crate::position::move_to_uci;
 use crate::syzygy::Syzygy;
 use crate::tt::{TranspositionTable, TtFlag};
-use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, MoveGen, Piece, Square, EMPTY};
+use crate::backend::{EngineBoard, MoveGenLike};
+use chess::{BitBoard, BoardStatus, ChessMove, Color, Piece, Square, EMPTY};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -143,8 +144,8 @@ pub struct SearchResult {
     pub score: i32,
 }
 
-pub struct SearchRequest {
-    pub board: Board,
+pub struct SearchRequest<B: EngineBoard> {
+    pub board: B,
     pub history: Vec<u64>,
     pub halfmove_clock: u8,
     pub params: GoParams,
@@ -270,7 +271,7 @@ impl SearchState<'_> {
     }
 }
 
-pub fn search(req: SearchRequest) -> Option<SearchResult> {
+pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
     if req.board.status() != BoardStatus::Ongoing {
         return None;
     }
@@ -286,8 +287,10 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
     tt_guard.new_search();
 
     // Eroeffnungsbuch zuerst — auch im Ponder-Modus erlaubt
+    // Polyglot-Buecher sind Standard-Schach — nur probieren, wenn das
+    // Backend eine Standard-Sicht hat (960-Backend: as_std() == None).
     if !req.book.is_empty() {
-        if let Some(m) = req.book.probe(&req.board) {
+        if let Some(m) = req.board.as_std().and_then(|b| req.book.probe(b)) {
             println!("info string book hit");
             let ponder = ponder_move_from_tt(&req.board, m, &tt_guard);
             return Some(SearchResult { best: m, ponder, score: 0 });
@@ -299,7 +302,7 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
     // Fallback last_move). MoveGen ist deterministisch, daher bit-identisch
     // zu drei separaten new_legal-Aufrufen — spart aber zwei MoveGen-Laeufe
     // pro `go` (Effizienz-Review Cursor-Auto 13.06.).
-    let root_moves: Vec<ChessMove> = MoveGen::new_legal(&req.board).collect();
+    let root_moves: Vec<ChessMove> = req.board.legal_gen().collect();
 
     // Forcierter Zug: nur eine legale Antwort → ohne Suche spielen.
     // Im Ponder-Modus muessen wir weiterdenken, bis ponderhit/stop kommt,
@@ -450,8 +453,8 @@ pub fn search(req: SearchRequest) -> Option<SearchResult> {
 /// Sucht einen Pondermove: Mache den besten Zug, schaue in der TT nach,
 /// welcher Zug fuer die Antwortstellung gespeichert ist. Verifiziere
 /// Legalitaet, falls die TT-Position eine Kollision war.
-fn ponder_move_from_tt(
-    board: &Board,
+fn ponder_move_from_tt<B: EngineBoard>(
+    board: &B,
     best: ChessMove,
     tt: &TranspositionTable,
 ) -> Option<ChessMove> {
@@ -461,7 +464,7 @@ fn ponder_move_from_tt(
     }
     let key = next.get_hash();
     let mv = tt.probe(key).and_then(|e| e.best_move)?;
-    if MoveGen::new_legal(&next).any(|m| m == mv) {
+    if next.legal_gen().any(|m| m == mv) {
         Some(mv)
     } else {
         None
@@ -498,8 +501,8 @@ fn emit_info(
     );
 }
 
-fn alpha_beta(
-    board: &Board,
+fn alpha_beta<B: EngineBoard>(
+    board: &B,
     depth: i32,
     ply: i32,
     mut alpha: i32,
@@ -638,8 +641,8 @@ fn alpha_beta(
     // erzeugen die legalen Zuege deshalb genau einmal: erst nachdem TT-Cutoffs
     // die Arbeit eventuell vermeiden konnten, aber noch vor NMP, damit
     // Stalemate/Checkmate nicht faelschlich durch Null-Move-Pruning laufen.
-    let legal_moves = MoveGen::new_legal(board);
-    if legal_moves.len() == 0 {
+    let legal_moves = board.legal_gen();
+    if legal_moves.count_remaining() == 0 {
         return if in_check { -MATE + ply } else { 0 };
     }
 
@@ -1036,8 +1039,8 @@ const MAX_QPLY: i32 = 12;
 // gestiegen, weil 200cp gute Captures fälschlicherweise prunte.
 const DELTA_MARGIN: i32 = 150;
 
-fn quiescence(
-    board: &Board,
+fn quiescence<B: EngineBoard>(
+    board: &B,
     mut alpha: i32,
     beta: i32,
     ply: i32,
@@ -1051,8 +1054,8 @@ fn quiescence(
     }
 
     let in_check = board.checkers().popcnt() > 0;
-    let mut legal_moves = MoveGen::new_legal(board);
-    if legal_moves.len() == 0 {
+    let mut legal_moves = board.legal_gen();
+    if legal_moves.count_remaining() == 0 {
         return if in_check { -MATE + ply } else { 0 };
     }
 
@@ -1116,7 +1119,7 @@ fn quiescence(
 
     let mut tactical: Vec<(ChessMove, Option<i32>, i32)> = Vec::new();
     for mv in legal_moves.by_ref() {
-        if !is_capture(board, mv) {
+        if !board.is_capture(mv) {
             continue;
         }
         let v = see(board, mv);
@@ -1216,7 +1219,7 @@ fn quiescence(
     alpha
 }
 
-fn eval_stm(board: &Board, params: &EvalParams) -> i32 {
+fn eval_stm<B: EngineBoard>(board: &B, params: &EvalParams) -> i32 {
     let score = evaluate(board, params);
     if board.side_to_move() == Color::White {
         score
@@ -1274,7 +1277,7 @@ fn is_repetition_draw(history: &[u64], root_history_len: usize, key: u64) -> boo
 /// in reinen Bauernendspielen (nur König und Bauern) ist die NMP-Annahme
 /// "ein Zug zu machen ist mindestens so gut wie zu passen" oft falsch — dort
 /// wird NMP deshalb deaktiviert. Deckt 95% der praktischen Zugzwang-Faelle ab.
-fn has_non_pawn_material(board: &Board, side: Color) -> bool {
+fn has_non_pawn_material<B: EngineBoard>(board: &B, side: Color) -> bool {
     let side_bb = *board.color_combined(side);
     let non_pawns = *board.pieces(Piece::Knight)
         | *board.pieces(Piece::Bishop)
@@ -1284,23 +1287,8 @@ fn has_non_pawn_material(board: &Board, side: Color) -> bool {
 }
 
 #[inline]
-fn is_capture(board: &Board, mv: ChessMove) -> bool {
-    if board.piece_on(mv.get_dest()).is_some() {
-        return true;
-    }
-    // en passant
-    if board.piece_on(mv.get_source()) == Some(Piece::Pawn)
-        && mv.get_source().get_file() != mv.get_dest().get_file()
-        && board.piece_on(mv.get_dest()).is_none()
-    {
-        return true;
-    }
-    false
-}
-
-#[inline]
-fn is_quiet_queen_promotion(board: &Board, mv: ChessMove) -> bool {
-    mv.get_promotion() == Some(Piece::Queen) && !is_capture(board, mv)
+fn is_quiet_queen_promotion<B: EngineBoard>(board: &B, mv: ChessMove) -> bool {
+    mv.get_promotion() == Some(Piece::Queen) && !board.is_capture(mv)
 }
 
 /// Late-Move-Reductions-Stufenformel (Variante A).
@@ -1334,10 +1322,10 @@ Offene Idee (LMR): späte Quiet-Moves könnten reduziert statt extended werden,
 um der wachsenden Suchbreite Herr zu werden. Wartet auf eigene Sitzung.
 */
 
-fn is_candidate_move(
-    board: &Board,
+fn is_candidate_move<B: EngineBoard>(
+    board: &B,
     mv: ChessMove,
-    new_board: &Board,
+    new_board: &B,
     see_val: Option<i32>,
 ) -> bool {
     // Der Aufrufer ruft diesen Helfer nur fuer Nicht-Schachzuege auf. Das
@@ -1351,7 +1339,7 @@ fn is_candidate_move(
     if let Some(v) = see_val {
         return v >= 0;
     }
-    if is_capture(board, mv) {
+    if board.is_capture(mv) {
         return see(board, mv) >= 0;
     }
     // Bekanntes Endspiel: aggressiver verlaengern, damit lange Mattsequenzen
@@ -1411,8 +1399,8 @@ struct ScoredMove {
 ///   - Die Klassifikation in `new()` folgt exakt der alten if-else-Priorität
 ///     (tt > capture > Dame-Umwandlung > Killer > Unterumwandlung > quiet);
 ///     jeder Zug landet in genau einer Kategorie → kein Doppel-Ausgeben.
-struct MovePicker<'a> {
-    board: &'a Board,
+struct MovePicker<'a, B: EngineBoard> {
+    board: &'a B,
     /// aktuelle Stufe (0..=8); 8 = erschöpft
     stage: u8,
     /// Index innerhalb der gerade ausgegebenen Stufenliste
@@ -1434,10 +1422,10 @@ struct MovePicker<'a> {
     quiets_sorted: bool,
 }
 
-impl<'a> MovePicker<'a> {
+impl<'a, B: EngineBoard> MovePicker<'a, B> {
     fn new(
-        board: &'a Board,
-        moves: MoveGen,
+        board: &'a B,
+        moves: B::Gen,
         tt_move: Option<ChessMove>,
         killers: [Option<ChessMove>; 2],
         move_history: &[i32],
@@ -1459,7 +1447,7 @@ impl<'a> MovePicker<'a> {
         // gespeichert; danach hält der Picker keinen State-Borrow mehr.
         for mv in moves {
             if Some(mv) == tt_move {
-                let see_val = if is_capture(board, mv) {
+                let see_val = if board.is_capture(mv) {
                     Some(see(board, mv))
                 } else {
                     None
@@ -1469,7 +1457,7 @@ impl<'a> MovePicker<'a> {
                     order_key: -100_000,
                     see_val,
                 });
-            } else if is_capture(board, mv) {
+            } else if board.is_capture(mv) {
                 captures.push(mv);
             } else if mv.get_promotion() == Some(Piece::Queen) {
                 queen_promos.push(mv);
@@ -1537,7 +1525,7 @@ impl<'a> MovePicker<'a> {
     }
 }
 
-impl<'a> Iterator for MovePicker<'a> {
+impl<'a, B: EngineBoard> Iterator for MovePicker<'a, B> {
     type Item = ScoredMove;
 
     fn next(&mut self) -> Option<ScoredMove> {
@@ -1643,7 +1631,7 @@ impl<'a> Iterator for MovePicker<'a> {
     }
 }
 
-fn mvv_lva_key(board: &Board, mv: ChessMove) -> i32 {
+fn mvv_lva_key<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
     let target = board.piece_on(mv.get_dest()).map(piece_rank).unwrap_or(1); // en passant schlaegt einen Bauern
     let attacker = board.piece_on(mv.get_source()).map(piece_rank).unwrap_or(0);
     // Hoher Target-Wert, niedriger Attacker-Wert → niedrigster Key
@@ -1690,7 +1678,7 @@ fn see_piece_value(p: Piece) -> i32 {
 /// Alle Figuren (beider Seiten), die `target` angreifen, gegeben das
 /// aktuelle `occupied`-Bitboard. Gleiter werden korrekt berechnet, sodass
 /// X-Ray-Angriffe nach Entfernung einer Figur automatisch auftauchen.
-fn all_attackers_to(board: &Board, target: Square, occupied: BitBoard) -> BitBoard {
+fn all_attackers_to<B: EngineBoard>(board: &B, target: Square, occupied: BitBoard) -> BitBoard {
     use chess::{get_bishop_moves, get_king_moves, get_knight_moves, get_rook_moves};
 
     let knights = *board.pieces(Piece::Knight) & occupied;
@@ -1723,8 +1711,8 @@ fn all_attackers_to(board: &Board, target: Square, occupied: BitBoard) -> BitBoa
 
 /// Billigsten Angreifer einer Seite aus dem `attackers`-Bitboard finden.
 /// Gibt (Square, Piece, Wert) zurück.
-fn least_valuable_attacker(
-    board: &Board,
+fn least_valuable_attacker<B: EngineBoard>(
+    board: &B,
     attackers: BitBoard,
     side: Color,
     occupied: BitBoard,
@@ -1758,7 +1746,7 @@ fn least_valuable_attacker(
 /// Der Algorithmus baut ein Gain-Array auf (wer gewinnt was in jedem Schritt)
 /// und faltet es am Ende per Minimax zurück: jede Seite wählt das Maximum aus
 /// "aufhören" und "weiterschlagen".
-pub fn see(board: &Board, mv: ChessMove) -> i32 {
+pub fn see<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
     let target = mv.get_dest();
     let source = mv.get_source();
     let mover = board.side_to_move();
@@ -1847,7 +1835,7 @@ pub fn see(board: &Board, mv: ChessMove) -> i32 {
 /// Figur steht auf dem Zielfeld sicher und geht per statischem Abtausch nicht
 /// verloren. Spiegelt `see()` exakt, nur mit `gain[0] = 0` (es wird nichts
 /// geschlagen) und der Gegenseite zuerst am Zug.
-fn see_quiet(board: &Board, mv: ChessMove) -> i32 {
+fn see_quiet<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
     let to = mv.get_dest();
     let src = mv.get_source();
     let mover = board.side_to_move();
@@ -1917,6 +1905,7 @@ fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Du
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chess::{Board, MoveGen};
 
     // Repetition-Helper: pruefe die vier relevanten Faelle einzeln.
 

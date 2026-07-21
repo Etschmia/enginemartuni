@@ -6,6 +6,10 @@ pub struct EngineOptions {
     /// Pfad(e) zu den Syzygy-Tablebases. Leer = aus. Wird in uci.rs zum
     /// (Neu-)Laden des Tablebase-Handles ausgewertet.
     pub syzygy_path: String,
+    /// Chess960-Modus (UCI_Chess960). Schaltet in uci.rs auf das
+    /// shakmaty-Backend um: Shredder-FEN-Parsing, Rochade als
+    /// "Koenig x eigener Turm" (e1h1), kein Polyglot-Buch.
+    pub chess960: bool,
 }
 
 impl EngineOptions {
@@ -14,6 +18,7 @@ impl EngineOptions {
             hash: cfg.hash_size_mb as u64,
             move_overhead: 10,
             syzygy_path: cfg.syzygy_path.clone(),
+            chess960: false,
         }
     }
 
@@ -24,6 +29,7 @@ impl EngineOptions {
         );
         println!("option name MoveOverhead type spin default 10 min 0 max 5000");
         println!("option name Ponder type check default false");
+        println!("option name UCI_Chess960 type check default false");
         println!(
             "option name SyzygyPath type string default {}",
             if self.syzygy_path.is_empty() {
@@ -45,6 +51,9 @@ impl EngineOptions {
                 if let Ok(v) = value.parse::<u64>() {
                     self.move_overhead = v.clamp(0, 5000);
                 }
+            }
+            "uci_chess960" => {
+                self.chess960 = value.trim().eq_ignore_ascii_case("true");
             }
             "syzygypath" => {
                 // UCI-Konvention: "<empty>" bedeutet kein Pfad.

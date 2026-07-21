@@ -1,3 +1,5 @@
+use crate::backend::EngineBoard;
+use crate::board960::Board960;
 use crate::config::Config;
 use crate::eval_config::EvalParams;
 use crate::options::EngineOptions;
@@ -6,6 +8,7 @@ use crate::position::{move_to_uci, Position};
 use crate::search::{search, GoParams, SearchRequest};
 use crate::syzygy::Syzygy;
 use crate::tt::TranspositionTable;
+use chess::Board;
 use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,7 +20,9 @@ pub fn uci_loop() {
     let eval_params = Arc::new(EvalParams::load());
     let tt = Arc::new(Mutex::new(TranspositionTable::new(cfg.hash_size_mb)));
 
-    let mut position = Position::new();
+    // Aktives Spiel je nach Modus: Standard (chess-Crate) oder Chess960
+    // (shakmaty-Backend). Umschalten via `setoption UCI_Chess960`.
+    let mut position = GamePos::Std(Position::new());
     let mut options = EngineOptions::from_config(&cfg);
     // Tablebase-Handle: None solange kein SyzygyPath gesetzt ist (→ Engine
     // verhält sich exakt wie ohne Tablebases). Wird bei setoption SyzygyPath
@@ -60,7 +65,18 @@ pub fn uci_loop() {
                 if let Some((name, value)) = parse_setoption(&tokens) {
                     let old_hash = options.hash;
                     let old_syzygy_path = options.syzygy_path.clone();
+                    let old_960 = options.chess960;
                     options.set_option(&name, &value);
+                    if options.chess960 != old_960 {
+                        // Backend-Wechsel: Position auf Startstellung des neuen
+                        // Modus zuruecksetzen (die konkrete Stellung kommt per
+                        // `position`-Kommando ohnehin neu).
+                        position = if options.chess960 {
+                            GamePos::Frc(Position::new())
+                        } else {
+                            GamePos::Std(Position::new())
+                        };
+                    }
                     if options.hash != old_hash {
                         let mut t = tt.lock().unwrap();
                         t.resize(options.hash as usize);
@@ -76,11 +92,17 @@ pub fn uci_loop() {
                 }
             }
             "ucinewgame" => {
-                position.set_startpos();
+                match &mut position {
+                    GamePos::Std(p) => p.set_startpos(),
+                    GamePos::Frc(p) => p.set_startpos(),
+                }
                 tt.lock().unwrap().clear();
             }
             "position" => {
-                handle_position(&mut position, &tokens);
+                match &mut position {
+                    GamePos::Std(p) => handle_position(p, &tokens),
+                    GamePos::Frc(p) => handle_position(p, &tokens),
+                }
             }
             "go" => {
                 if let Some(h) = search_handle.take() {
@@ -91,40 +113,29 @@ pub fn uci_loop() {
                 let params = parse_go_params(&tokens);
                 pondering.store(params.ponder, Ordering::Relaxed);
 
-                let req = SearchRequest {
-                    board: *position.board(),
-                    history: position.hash_history().to_vec(),
-                    halfmove_clock: position.halfmove_clock(),
-                    params,
-                    tt: Arc::clone(&tt),
-                    book: Arc::clone(&book),
-                    eval: Arc::clone(&eval_params),
-                    stop: Arc::clone(&stop),
-                    pondering: Arc::clone(&pondering),
-                    move_overhead: options.move_overhead,
-                    syzygy: syzygy.as_ref().map(Arc::clone),
-                };
-
-                search_handle = Some(thread::spawn(move || {
-                    if let Some(result) = search(req) {
-                        match result.ponder {
-                            Some(p) => println!(
-                                "bestmove {} ponder {}",
-                                move_to_uci(result.best),
-                                move_to_uci(p)
-                            ),
-                            None => println!("bestmove {}", move_to_uci(result.best)),
-                        }
-                    } else {
-                        println!("bestmove 0000");
-                    }
-                }));
+                search_handle = Some(match &position {
+                    GamePos::Std(p) => spawn_search(
+                        p, params, &tt, &book, &eval_params, &stop, &pondering,
+                        options.move_overhead, &syzygy,
+                    ),
+                    GamePos::Frc(p) => spawn_search(
+                        p, params, &tt, &book, &eval_params, &stop, &pondering,
+                        options.move_overhead, &syzygy,
+                    ),
+                });
             }
             "eval" => {
                 // Debug-Kommando: druckt die komponentenweise Aufschluesselung
                 // der statischen Bewertung der aktuell gesetzten Stellung.
                 // Greift NICHT in die laufende Suche ein.
-                crate::eval::print_eval_breakdown(position.board(), &eval_params);
+                match &position {
+                    GamePos::Std(p) => {
+                        crate::eval::print_eval_breakdown(p.board(), &eval_params)
+                    }
+                    GamePos::Frc(p) => {
+                        crate::eval::print_eval_breakdown(p.board(), &eval_params)
+                    }
+                }
             }
             "ponderhit" => {
                 // Gegner hat den vorhergesagten Zug gespielt: aus dem Ponder-Modus
@@ -181,7 +192,58 @@ fn load_syzygy(path: &str) -> Option<Arc<Syzygy>> {
     }
 }
 
-fn handle_position(position: &mut Position, tokens: &[&str]) {
+/// Aktives Spiel: Standard- oder Chess960-Backend. Ein Enum statt eines
+/// Trait-Objekts, weil die Suche generisch (monomorphisiert) laeuft und die
+/// wenigen Dispatch-Stellen hier im UCI-Loop liegen.
+enum GamePos {
+    Std(Position<Board>),
+    Frc(Position<Board960>),
+}
+
+/// Startet den Such-Thread fuer ein beliebiges Backend.
+#[allow(clippy::too_many_arguments)]
+fn spawn_search<B: EngineBoard>(
+    position: &Position<B>,
+    params: GoParams,
+    tt: &Arc<Mutex<TranspositionTable>>,
+    book: &Arc<BookSet>,
+    eval_params: &Arc<EvalParams>,
+    stop: &Arc<AtomicBool>,
+    pondering: &Arc<AtomicBool>,
+    move_overhead: u64,
+    syzygy: &Option<Arc<Syzygy>>,
+) -> thread::JoinHandle<()> {
+    let req = SearchRequest {
+        board: position.board().clone(),
+        history: position.hash_history().to_vec(),
+        halfmove_clock: position.halfmove_clock(),
+        params,
+        tt: Arc::clone(tt),
+        book: Arc::clone(book),
+        eval: Arc::clone(eval_params),
+        stop: Arc::clone(stop),
+        pondering: Arc::clone(pondering),
+        move_overhead,
+        syzygy: syzygy.as_ref().map(Arc::clone),
+    };
+
+    thread::spawn(move || {
+        if let Some(result) = search(req) {
+            match result.ponder {
+                Some(p) => println!(
+                    "bestmove {} ponder {}",
+                    move_to_uci(result.best),
+                    move_to_uci(p)
+                ),
+                None => println!("bestmove {}", move_to_uci(result.best)),
+            }
+        } else {
+            println!("bestmove 0000");
+        }
+    })
+}
+
+fn handle_position<B: EngineBoard>(position: &mut Position<B>, tokens: &[&str]) {
     if tokens.len() < 2 {
         return;
     }
