@@ -37,9 +37,22 @@ Einzeldokumenten:
   Hard Restart 16:23 — Bot wieder verbunden, laufende Partie nahtlos fortgesetzt.
   GEPUSHT origin/master=8ef7501. Rollback: chess960 aus variants + `git reset --hard 968cee0`
   + Build + Restart.
+- **Challenge-Cron auf 960 umgestellt (21.07. ~16:45, Tobias-Auftrag):** `challenge_cron.py`
+  hat jetzt `--variant {standard,chess960}` (Payload-Variant, Rating-Fenster nutzt die
+  chess960-Perf mit Fallback auf die MODE-Perf, solange keine 960-Historie existiert;
+  Tracking-Einträge tragen ein `variant`-Feld; Backup `challenge_cron.py.bak_20260721`).
+  Die zuvor komplett auskommentierten Crontab-Zeilen (rapid X:46, blitz X:24/:35, jeweils
+  außerhalb 17–19 Uhr) sind wieder aktiv — **alle mit `--variant chess960`** (Crontab-Backup
+  im Session-Scratchpad). Erster automatischer Lauf: 19:25 (blitz) / 19:46 (rapid).
+- **Analyse-Cron ist 960-ready (geprüft 21.07.):** `analyze_blunders.py` nutzt `game.board()`
+  — python-chess setzt bei `[Variant "Chess960"]` + FEN-Header automatisch `chess960=True`
+  und reicht `UCI_Chess960` an Stockfish durch (empirisch verifiziert: 960-PGN geparst,
+  Züge angewandt, SF-Analyse ok). 960-Partien landen wie alle im `game_records/`-Ordner und
+  werden im Nachtfenster (2–3 Uhr) automatisch mitanalysiert — **kein ToDo**. Nice-to-have
+  später: `variant`-Feld in den Blunder-Records, um 960/Standard in Auswertungen zu trennen.
 - **OFFEN:** Lichess-Lookback nach ersten 960-Partien (spielt der Bot 960 korrekt an? Rating-
   Anker Blitz 2278 / Rapid 2325); optional später: 960-NPS-Tuning (inkrementeller Hash,
-  Lazy-MoveGen), Polyglot-960-Bücher.
+  Lazy-MoveGen), Polyglot-960-Bücher, variant-Feld im Blunder-Analyzer.
 
 **04.07.2026 — Auswertung `analyse-30.06.2026.json` (kumulativ, 773 Partien, 1109 Blunder seit 25.06.-Rollout) — kein neuer Hebel, Projekt weitgehend ausentwickelt.**
 - **Rating weiter gestiegen:** Blitz 2170→**2278**, Rapid 2284→**2325** — Rollout vom 25.06. trägt weiter,
