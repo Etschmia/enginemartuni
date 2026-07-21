@@ -29,11 +29,17 @@ Einzeldokumenten:
   8 Mittelspiel-FENs identisch master vs. Refactor, `scratchpad/nodecount.py`); 960-Smoke grün
   (FRC-Startpos d8 in 2 s, ~1,5 M NPS; Standard ungebremst). v1-Vereinfachungen: 960-Backend
   eager MoveGen + volle Zobrist-Neuberechnung pro Knoten (Korrektheit vor NPS).
-- **OFFEN:** (a) A/B `matches/baseline_vs_chess960` (master vs. Refactor, Standard, SPRT [0,10],
-  max 1000 P) läuft seit 21.07. — bei Nicht-Regression: FF-Merge → master, Build, Restart;
-  (b) Rollout-Schritt lichess-bot: in `~/lichess-bot/config.yml` unter `challenge.variants`
-  `- chess960` einkommentieren + Restart (erst nach (a));
-  (c) optional später: 960-NPS-Tuning (inkrementeller Hash, Lazy-MoveGen), Polyglot-960-Bücher.
+- **A/B ABGESCHLOSSEN + AUSGEROLLT 21.07. 16:23:** `matches/baseline_vs_chess960`, 1000 P,
+  5+0.05, UHO: Refactor **+6.95 ± 16.97 Elo** (PGN-farbverifiziert: 51.00 %, 416W/396L/188D
+  aus Refactor-Sicht) — CI deckt 0, **regressionsfrei** wie erwartet (bit-exakt). Rollout:
+  FF-Merge → master (6872f11), Build, Smoke (Standard + 960) grün, `- chess960` in
+  `~/lichess-bot/config.yml` `challenge.variants` aktiviert (Backup config.yml.bak_20260721),
+  Hard Restart 16:23 — Bot wieder verbunden, laufende Partie nahtlos fortgesetzt.
+  GEPUSHT origin/master=8ef7501. Rollback: chess960 aus variants + `git reset --hard 968cee0`
+  + Build + Restart.
+- **OFFEN:** Lichess-Lookback nach ersten 960-Partien (spielt der Bot 960 korrekt an? Rating-
+  Anker Blitz 2278 / Rapid 2325); optional später: 960-NPS-Tuning (inkrementeller Hash,
+  Lazy-MoveGen), Polyglot-960-Bücher.
 
 **04.07.2026 — Auswertung `analyse-30.06.2026.json` (kumulativ, 773 Partien, 1109 Blunder seit 25.06.-Rollout) — kein neuer Hebel, Projekt weitgehend ausentwickelt.**
 - **Rating weiter gestiegen:** Blitz 2170→**2278**, Rapid 2284→**2325** — Rollout vom 25.06. trägt weiter,
