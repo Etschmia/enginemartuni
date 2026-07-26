@@ -49,9 +49,14 @@ Einzeldokumenten:
   Setup `matches/std_gate_dev960`: gleiche Binaries, Standard-Schach, UHO, 5+0.05,
   SPRT [0,10] (lief bis zum 1000er-Limit, LLR blieb mittig). Die (a)-Terme sind damit im
   Standard neutral ((b) betrifft nur Board960 — das Match isolierte Hebel (a)).
-  **Idealkonstellation: +74 Elo im FRC, ±0 im Standard → Rollout-Kandidat, Tobias
-  entscheidet** (FF-Merge dev/960-opening-nps + eval.toml-Keys in Repo-toml + Build +
-  Bot-Restart; Rollback = Keys raus + git reset auf e8af251 + Build + Restart).
+  **Idealkonstellation: +74 Elo im FRC, ±0 im Standard.**
+- **AUSGEROLLT 26.07. 21:59 (Tobias-Entscheid):** FF-Merge dev/960-opening-nps → master
+  (c704d80), eval.toml-Keys aktiviert (fbef68e), Build, Smoke Standard+960 grün (Params
+  verifiziert: bishop_backrank −40/−40 startpos, king_safety inkl. Rochade-Anreiz),
+  Hard Restart 21:59 — Bot verbunden („Welcome Martuni!"). GEPUSHT origin/master.
+  Rollback: eval.toml-Keys raus + `git reset --hard e8af251` + Build + Restart.
+  **OFFEN: 960-Lookback nach den nächsten ~100 Live-960-Partien** (Anker 26.07.:
+  Chess960 ~1650, Blitz 2278, Rapid 2325).
 - Hinweis Messtechnik: gepiptes `quit` direkt nach `go` killt die Suche („fallback nodes=1")
   — bei Smoke-/NPS-Tests `sleep` zwischen `go` und `quit` einbauen.
 
