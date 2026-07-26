@@ -62,6 +62,16 @@ pub struct EvalParams {
 
     // Piece bonuses/penalties
     pub knight_backrank_penalty: i32,
+    /// Entwicklungs-Malus pro Laeufer auf der EIGENEN Grundreihe, nur
+    /// Mittelspiel-Pol (`taper(x, 0, phase)`), negativer Wert.
+    /// Eingefuehrt nach dem 960-Lookback 26.07.2026: ohne Buch driftete
+    /// Martuni in der Eroeffnung still ab (66 Opening-Blunder in 960 vs. 5
+    /// im Standard) — die PSTs allein erzeugen auf den 960-Startaufstellungen
+    /// keinen Entwicklungsdruck. Anders als `knight_backrank_penalty`
+    /// (flat, beide Grundreihen) bewusst nur die eigene Heimreihe und
+    /// phase-getapert, damit im Endspiel ein Laeufer auf der Grundreihe
+    /// (z. B. als Verteidiger) nicht bestraft wird. Default 0 = inaktiv.
+    pub bishop_backrank_penalty_mg: i32,
     /// **Statischer Anker (16.05.2026, Step 3 ausgerollt):** wird von der
     /// Eval-Logik nicht mehr direkt verwendet — `evaluate_side` taperiert
     /// jetzt ueber `bishop_pair_mg`, `bishop_pair_eg`, `bp_open_scale`
@@ -147,6 +157,18 @@ pub struct EvalParams {
     pub ks_shield_rank2_bonus: i32,
     pub ks_shield_missing_penalty: i32,
     pub ks_exposed_center_penalty: i32,
+    /// Malus fuer den Koenig auf der a- oder f-Linie der Heimreihe —
+    /// die Faelle, die `pawn_shield_score` bisher mit 0 durchwinkte
+    /// (dorthin kommt der Koenig nur ohne/nach verspielter Rochade).
+    /// Negativer Wert, Default 0 = inaktiv. 960-Lookback 26.07.2026:
+    /// `exposed_king` war Motiv #2 (53×), Rochadequote nur 46 % vs. 65 %.
+    pub ks_uncastled_flank_penalty: i32,
+    /// Rochade-Anreiz: Mittelspiel-Malus (`taper(x, 0, phase)`), solange
+    /// die Seite noch Rochaderechte hat — rochieren laesst die Rechte und
+    /// damit den Malus verschwinden, Koenig-Stehenlassen kostet dauerhaft
+    /// Tempo-Aequivalent. Negativer Wert, Default 0 = inaktiv.
+    /// Siehe `EngineBoard::has_castle_rights_for` (960-Lookback 26.07.2026).
+    pub ks_castle_rights_penalty_mg: i32,
     pub safety_table: Vec<i32>,
     /// Gewichtungsfaktor für die König-Expositions-Strafe (cp pro
     /// Expositions-Punkt). Wirkt nur, wenn der König mindestens 3 Reihen
@@ -275,6 +297,7 @@ impl Default for EvalParams {
             pawn_passed_rank_bonuses: vec![5, 15, 30, 55, 100, 170],
 
             knight_backrank_penalty: -50,
+            bishop_backrank_penalty_mg: 0,
             // Anker — wird von evaluate_side nicht mehr genutzt (siehe oben),
             // bleibt fuer Kompatibilitaet/Konsistenz.
             bishop_pair_each: 15,
@@ -319,6 +342,8 @@ impl Default for EvalParams {
             ks_shield_rank2_bonus: 5,
             ks_shield_missing_penalty: -15,
             ks_exposed_center_penalty: -30,
+            ks_uncastled_flank_penalty: 0,
+            ks_castle_rights_penalty_mg: 0,
             safety_table: DEFAULT_SAFETY_TABLE.to_vec(),
             // Default 12 (von 20 reduziert am 26.04.2026 nach 167-Partien-Auswertung):
             // king_exposure war zu pessimistisch im Endspiel-Übergang, Endgame-
@@ -467,6 +492,11 @@ impl EvalParams {
 
         let pc = section(v, "pieces");
         p.knight_backrank_penalty = i(&pc, "knight_backrank_penalty", p.knight_backrank_penalty);
+        p.bishop_backrank_penalty_mg = i(
+            &pc,
+            "bishop_backrank_penalty_mg",
+            p.bishop_backrank_penalty_mg,
+        );
         p.bishop_pair_each = i(&pc, "bishop_pair_each", p.bishop_pair_each);
         p.connected_rooks_pair = i(&pc, "connected_rooks_pair", p.connected_rooks_pair);
         p.rook_open_file_bonus = i(&pc, "rook_open_file_bonus", p.rook_open_file_bonus);
@@ -507,6 +537,16 @@ impl EvalParams {
         p.ks_shield_rank2_bonus = i(&ks, "shield_rank2_bonus", p.ks_shield_rank2_bonus);
         p.ks_shield_missing_penalty = i(&ks, "shield_missing_penalty", p.ks_shield_missing_penalty);
         p.ks_exposed_center_penalty = i(&ks, "exposed_center_penalty", p.ks_exposed_center_penalty);
+        p.ks_uncastled_flank_penalty = i(
+            &ks,
+            "uncastled_flank_penalty",
+            p.ks_uncastled_flank_penalty,
+        );
+        p.ks_castle_rights_penalty_mg = i(
+            &ks,
+            "castle_rights_penalty_mg",
+            p.ks_castle_rights_penalty_mg,
+        );
         p.king_exposure_weight = i(&ks, "exposure_weight", p.king_exposure_weight);
 
         if let Some(arr) = ks

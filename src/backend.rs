@@ -75,6 +75,14 @@ pub trait EngineBoard: Clone + Send + Sync + 'static {
     /// Hat irgendeine Seite noch Rochaderechte? (Syzygy-Gate)
     fn has_castle_rights(&self) -> bool;
 
+    /// Hat DIESE Seite noch Rochaderechte? Fuer den Eval-Rochade-Anreiz
+    /// (960-Lookback 26.07.2026): solange die Rechte bestehen, wurde noch
+    /// nicht rochiert → kleiner MG-Malus als Tempo-Nudge. Fuehrt die Seite
+    /// die Rochade aus, verschwinden die Rechte und damit der Malus.
+    /// (Verliert sie die Rechte durch Koenigs-/Turmzuege, faengt stattdessen
+    /// die Zentrums-/Flanken-Strafe in `pawn_shield_score` den Koenig ab.)
+    fn has_castle_rights_for(&self, color: Color) -> bool;
+
     /// Standard-Sicht auf die Stellung, falls das Backend eine hat.
     /// Wird fuer die Polyglot-Buchsuche genutzt (Buecher sind Standard-
     /// Schach); das 960-Backend liefert `None` → kein Buchzugriff.
@@ -172,6 +180,11 @@ impl EngineBoard for Board {
     fn has_castle_rights(&self) -> bool {
         self.castle_rights(Color::White) != chess::CastleRights::NoRights
             || self.castle_rights(Color::Black) != chess::CastleRights::NoRights
+    }
+
+    #[inline]
+    fn has_castle_rights_for(&self, color: Color) -> bool {
+        self.castle_rights(color) != chess::CastleRights::NoRights
     }
 
     #[inline]

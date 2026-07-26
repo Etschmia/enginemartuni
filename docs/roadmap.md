@@ -10,6 +10,69 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**26.07.2026 (abends) — Hebel (a)+(b) implementiert (Branch `dev/960-opening-nps`), FRC-A/B LÄUFT.**
+- **(a) Eröffnungs-/Königs-Terme** (Tobias-Auftrag nach dem 960-Lookback, s. u.). Drei neue,
+  variantenneutrale Eval-Parameter, Code-Defaults 0 = inaktiv, Werte via eval.toml:
+  - `bishop_backrank_penalty_mg = -20` ([pieces]): Entwicklungs-Malus pro Läufer auf der
+    EIGENEN Grundreihe, nur MG-Pol (`taper(x,0,phase)`). Ergänzt den bestehenden flachen
+    `knight_backrank_penalty = -50`.
+  - `uncastled_flank_penalty = -25` ([king_safety]): König auf a-/f-Linie der Heimreihe —
+    die Fälle, die `pawn_shield_score` bisher mit 0 durchwinkte.
+  - `castle_rights_penalty_mg = -15` ([king_safety]): Rochade-Anreiz — MG-Malus solange die
+    Seite noch Rochaderechte hat; Rochieren löscht Rechte + Malus (Tempo-Bonus-Wirkung).
+    Dafür neue Trait-Methode `EngineBoard::has_castle_rights_for(color)` (beide Backends).
+  - Breakdown/`eval`-Kommando gespiegelt (neues Feld `bishop_backrank`), Sanity grün
+    (startpos symmetrisch 0; nach Rochade +76 Diff für die rochierte Seite, kein WARN).
+- **(b) Board960-NPS:** Profiling (Mikro-Bench `bench_from_pos`, #[ignore]) widerlegte die
+  Zobrist-Vermutung aus der v1-Doku (~12 ns, <5 %); echte Kosten waren (1) die Listen-Kopie
+  in `legal_gen` (2 Vec-Allocs pro Aufruf, teurer als der ganze Board-Bau) und (2) O(n²)-
+  Scan in `Gen960::next` (jeder Aufruf ab Index 0; der Staged MovePicker konsumiert in bis
+  zu 8 Masken-Phasen). Fix: Zugliste im `Arc` geteilt + 256-Bit-yielded-Maske + Cursor pro
+  Maskenphase. **Bit-exakt** (Node-Counts identisch zu master auf 5 FRC- + 2 Standard-FENs,
+  `scratchpad/nodecount960.py`), 104 Tests grün, **+17,5 % NPS** im 960-Modus (1,27→1,49 M;
+  Rest der Lücke zum Standard-Backend ~2,4 M liegt in shakmatys `legal_moves` selbst).
+- **FRC-A/B GESTARTET 26.07. ~19:15** (`matches/frc_baseline_vs_dev960`): master (Binary
+  `martuni.master_20260726`) vs (a)+(b) (`martuni.dev960_20260726`), `-variant fischerandom`,
+  Openings = ALLE 960 Startstellungen (Scharnagl-korrekt generiert, SP518 = Standard-Startpos
+  verifiziert, `~/tools/openings/frc_all960.epd`), 5+0.05, SPRT [0,10], max 1000 P,
+  concurrency 2. Die aktivierte eval.toml liegt im MATCH-Verzeichnis (cwd-Kaskade); die
+  Repo-eval.toml wurde auf master-Stand zurückgesetzt → **Live-Bot unberührt** (neue Keys
+  erst beim Rollout wieder in die Repo-toml). Ergebnis: `run.log` im Match-Verzeichnis;
+  Attributions-Regel beachten (PGN farbkorrekt auszählen, [[feedback-ab-attribution-check]]).
+- Hinweis Messtechnik: gepiptes `quit` direkt nach `go` killt die Suche („fallback nodes=1")
+  — bei Smoke-/NPS-Tests `sleep` zwischen `go` und `quit` einbauen.
+
+**26.07.2026 — Auswertung analyse-22.08.2026.json: erster Chess960-Lookback (446 P seit 21.07., davon 248 × 960).**
+- **Befund Kernzahlen (Split über PGN-`Variant`-Tag):** 960-Blitz Score **29,7 %** (158 P,
+  B/P 1.36), 960-Rapid **39,2 %** (82 P, B/P 0.98) — Standard im selben Zeitraum: Blitz 51,0 %,
+  Rapid 58,8 %. Lichess-960-Rating auf **~1650** eingependelt (ein Rating-Pool für alle TCs);
+  Gegnerschnitt 960 = 1850 → Performance ~1730. Vergleich Standard-Anker Blitz 2278/Rapid 2325:
+  reale Lücke ~500+ Punkte (Pool-Unterschiede eingerechnet immer noch groß). Standard-Werte
+  selbst unauffällig (kein Regress durch den Trait-Umbau, konsistent mit bit-exaktem A/B).
+- **Diagnose 1 — Eröffnung ohne Buch ist der Haupthebel:** 66 Eröffnungs-Blunder in 960 vs.
+  **5** in Standard (ply≤16: 44 vs. 2). Es sind KEINE Hänger, sondern stille positionelle
+  Drifts (~170 cp median, motifs fast leer), und Martunis Eigen-Eval ist dabei systematisch
+  ~60 cp optimistischer als Stockfish. Deutung: PSTs/Eval geben auf den 960-Startaufstellungen
+  keine brauchbare Entwicklungs-Führung; im Standard hat das bisher das Buch kaschiert.
+- **Diagnose 2 — König bleibt stehen:** Rochadequote 960 nur 46 % (Ø Zug 18.8) vs. 65 %
+  (Ø Zug 11.0) im Standard; `exposed_king` ist Motiv #2 (53×), `allows_mate` #1 (81×) —
+  Mattmuster großteils Folgeschaden des unrochierten/entblößten Königs. Der Pawn-Shield-Term
+  belohnt nur Rochade-Endfelder und kennt keinerlei Rochade-Anreiz/Zentrumskönig-Strafe.
+- **Diagnose 3 — NPS-Handicap gemessen:** Board960-Backend ~**1,43 M NPS** vs. ~2,38 M im
+  Standard-Backend auf identischer Stellung (−40 %; erwartbar durch die dokumentierten
+  v1-Vereinfachungen eager MoveGen + volle Zobrist-Neuberechnung). Grob ~40–50 Elo wert —
+  real, aber klar sekundär gegenüber Diagnose 1+2.
+- **Einordnung:** 195 der 311 960-Blunder passieren bei eval ≤ −300 (schon verloren) —
+  Bodensatz, kein eigenes Signal. Kein Hinweis auf Backend-Bugs (Terminations normal,
+  nur 2 Time forfeits in 248 P).
+- **Vorgeschlagene Hebel (Tobias entscheidet, Reihenfolge = erwarteter Effekt):**
+  (a) Entwicklungs-/Königs-Term in der Eval (MG-getapert): Rochade-Anreiz bzw. Strafe für
+  unrochierten Zentrumskönig + einfacher Entwicklungsbonus (Leichtfiguren von der Grundreihe);
+  variantenneutral, hilft potenziell auch Standard-Mittelspiel. A/B via fastchess-FRC-Startpositionen.
+  (b) Board960-NPS: inkrementeller Zobrist / lazy MoveGen (bekannte v1-Schuld).
+  (c) Optional 960-Eröffnungsbuch (Selfplay-generiert) — bewusst als Option, falls „ohne Buch"
+  als ehrlicher Härtetest gewollt bleibt. Analyse-Skripte: scratchpad analyze960/deep960/castle960.
+
 **21.07.2026 — Chess960 implementiert (Branch `dev/chess960`, A/B läuft).**
 - **Auftrag:** Engine soll die Variante Chess960 spielen. Befund: die jordanbray-`chess`-Crate
   kann kein 960 (keine Shredder-FEN-Rochaderechte, MoveGen kennt nur die Standard-Rochade).

@@ -232,6 +232,10 @@ fn evaluate_side<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, phase: i3
     // sie einmal pro Seite zu zählen statt in jedem Schleifendurchlauf neu.
     let own_pawn_count = our_pawns.popcnt() as i32;
     let total_pawn_count = own_pawn_count + their_pawns.popcnt() as i32;
+    let home_rank = match us {
+        Color::White => Rank::First,
+        Color::Black => Rank::Eighth,
+    };
 
     // Pro Figur: Materialwert + figurenspezifische Boni
     for sq in our_bb {
@@ -253,6 +257,14 @@ fn evaluate_side<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, phase: i3
                 // Springer auf vorgeschobenem Feld. Code-Default 0 → inaktiv.
                 if is_knight_outpost(sq, us, our_pawns, their_pawns) {
                     score += taper(p.outpost_knight_mg, p.outpost_knight_eg, phase);
+                }
+            }
+            Piece::Bishop => {
+                // Entwicklungs-Malus (960-Lookback 26.07.2026): Laeufer auf der
+                // eigenen Grundreihe kostet im Mittelspiel Tempo-Aequivalent.
+                // Nur MG-Pol getapert — im Endspiel ist die Grundreihe legitim.
+                if sq.get_rank() == home_rank {
+                    score += taper(p.bishop_backrank_penalty_mg, 0, phase);
                 }
             }
             _ => {}
@@ -316,7 +328,20 @@ fn king_safety_with_phase<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, 
     let danger = king_danger(board, us, zone, p);
     let exposure = king_exposure_penalty(board, us, p, phase);
 
-    shield - danger - exposure
+    // Rochade-Anreiz (960-Lookback 26.07.2026): solange die Seite noch
+    // Rochaderechte hat, wurde nicht rochiert → kleiner MG-Malus. Die
+    // Rochade selbst loescht die Rechte und damit den Malus — sie "verdient"
+    // den Betrag also als Tempo-Bonus. Verliert die Seite die Rechte durch
+    // Koenigs-/Turmzuege, faellt der Malus zwar auch weg, aber dann greifen
+    // Zentrums- (d/e) bzw. Flanken-Strafe (a/f) in `pawn_shield_score`.
+    // Negativer Parameter, Default 0 = inaktiv.
+    let castle_nudge = if board.has_castle_rights_for(us) {
+        taper(p.ks_castle_rights_penalty_mg, 0, phase)
+    } else {
+        0
+    };
+
+    shield - danger - exposure + castle_nudge
 }
 
 /// König-Expositions-Strafe (eingeführt 2026-04-22, entschärft 2026-04-26).
@@ -498,11 +523,13 @@ fn pawn_shield_score<B: EngineBoard>(board: &B, us: Color, king_sq: Square, p: &
     //   file 2 (c) = lang rochiert / file 1 (b) = Kb1 nach OOO
     //   file 6 (g) = kurz rochiert / file 7 (h) = Kh1 nach OO
     // Auf der f-Linie oder a-Linie steht der Koenig typischerweise nur
-    // nach erzwungenem Schach (verlorene Rochaderechte) — kein Bonus.
+    // nach erzwungenem Schach (verlorene Rochaderechte) — kein Bonus,
+    // seit 26.07.2026 stattdessen ein eigener Malus (960-Lookback:
+    // unrochierte Koenige waren Blunder-Motiv #2; vorher 0).
     let (file_lo, file_hi) = match king_file {
         1 | 2 => (0, 2),
         6 | 7 => (5, 7),
-        _ => return 0,
+        _ => return p.ks_uncastled_flank_penalty,
     };
     let (r1, r2) = match us {
         Color::White => (1, 2),
@@ -1407,6 +1434,9 @@ pub struct PerSideBreakdown {
     /// Knight-Outpost-Bonus (bereits phase-getapert, summiert ueber alle
     /// Outpost-Springer der Seite). Siehe `is_knight_outpost`.
     pub knight_outpost: i32,
+    /// Entwicklungs-Malus fuer Laeufer auf der eigenen Grundreihe
+    /// (bereits phase-getapert, summiert). Siehe `bishop_backrank_penalty_mg`.
+    pub bishop_backrank: i32,
     pub bishop_pair: i32,
     pub connected_rooks: i32,
     pub rook_file: i32,
@@ -1463,6 +1493,10 @@ fn evaluate_side_breakdown<B: EngineBoard>(
     let our_pawns = *board.pieces(Piece::Pawn) & our_bb;
     let own_pawn_count = our_pawns.popcnt() as i32;
     let total_pawn_count = own_pawn_count + their_pawns.popcnt() as i32;
+    let home_rank = match us {
+        Color::White => Rank::First,
+        Color::Black => Rank::Eighth,
+    };
 
     for sq in our_bb {
         let Some(piece) = board.piece_on(sq) else {
@@ -1479,6 +1513,11 @@ fn evaluate_side_breakdown<B: EngineBoard>(
                 }
                 if is_knight_outpost(sq, us, our_pawns, their_pawns) {
                     b.knight_outpost += taper(p.outpost_knight_mg, p.outpost_knight_eg, phase);
+                }
+            }
+            Piece::Bishop => {
+                if sq.get_rank() == home_rank {
+                    b.bishop_backrank += taper(p.bishop_backrank_penalty_mg, 0, phase);
                 }
             }
             _ => {}
@@ -1566,6 +1605,7 @@ pub fn evaluate_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) -> EvalBrea
         + bd.white.pawn_bonus
         + bd.white.knight_backrank
         + bd.white.knight_outpost
+        + bd.white.bishop_backrank
         + bd.white.bishop_pair
         + bd.white.connected_rooks
         + bd.white.rook_file
@@ -1577,6 +1617,7 @@ pub fn evaluate_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) -> EvalBrea
         + bd.black.pawn_bonus
         + bd.black.knight_backrank
         + bd.black.knight_outpost
+        + bd.black.bishop_backrank
         + bd.black.bishop_pair
         + bd.black.connected_rooks
         + bd.black.rook_file
@@ -1632,6 +1673,11 @@ pub fn print_eval_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) {
         "knight_outpost",
         bd.white.knight_outpost,
         bd.black.knight_outpost,
+    );
+    line(
+        "bishop_backrank",
+        bd.white.bishop_backrank,
+        bd.black.bishop_backrank,
     );
     line("bishop_pair", bd.white.bishop_pair, bd.black.bishop_pair);
     line(

@@ -18,8 +18,17 @@
 //!
 //! Bewusste v1-Vereinfachungen (Kosten nur im 960-Modus):
 //!   - Zugliste wird pro Knoten eager erzeugt (kein Lazy-Staging wie die
-//!     chess-Crate-MoveGen) und der Zobrist-Hash pro Stellung komplett neu
-//!     berechnet — Korrektheit vor NPS.
+//!     chess-Crate-MoveGen); Lazy lohnt nicht, weil die Suche an JEDEM
+//!     Knoten vor Stand-Pat die Zugliste fuer die Matt-/Patt-Erkennung
+//!     braucht (search.rs::quiescence, count_remaining).
+//!   - Zobrist-Hash wird pro Stellung komplett neu berechnet. Mikro-Bench
+//!     26.07.2026 (bench_from_pos): ~12 ns/Stellung, <5 % der from_pos-
+//!     Kosten — inkrementelles Update lohnt NICHT. Teuer waren stattdessen
+//!     die Allokationen: `moves` liegt deshalb in einem `Arc` (legal_gen
+//!     teilt die Liste statt sie zu kopieren) und `Gen960` arbeitet mit
+//!     einer festen Bitmaske statt eines `Vec<bool>` — beide Aenderungen
+//!     sind reine Kopier-/Alloc-Ersparnis, Zugreihenfolge unveraendert
+//!     (bit-exakt, Node-Count-Verifikation siehe Roadmap 26.07.2026).
 //!   - Polyglot-Buch bleibt aus (`as_std() == None`), Syzygy funktioniert
 //!     ueber die generische Probe (Endspiele sind in 960 identisch).
 
@@ -32,6 +41,7 @@ use shakmaty::{
     CastlingMode, Chess, Color as ShakColor, EnPassantMode, Move as ShakMove,
     Position as ShakPositionTrait, Role, Square as ShakSquare,
 };
+use std::sync::Arc;
 
 // --- Typ-Konvertierungen ---------------------------------------------------
 // Beide Crates nummerieren Felder identisch (A1=0 … H8=63, zeilenweise),
@@ -86,8 +96,11 @@ pub struct Board960 {
     /// nicht das Zielfeld (e6).
     ep_pawn: Option<Square>,
     hash: u64,
-    /// Legale Zuege dieser Stellung (eager, s. Modulkopf).
-    moves: Vec<MoveEntry>,
+    /// Legale Zuege dieser Stellung (eager, s. Modulkopf). Im `Arc`, damit
+    /// `legal_gen` und `Board960::clone` die Liste teilen statt kopieren —
+    /// die Kopie war im Mikro-Bench teurer als der gesamte restliche
+    /// Board-Bau (26.07.2026).
+    moves: Arc<Vec<MoveEntry>>,
 }
 
 impl Board960 {
@@ -117,11 +130,12 @@ impl Board960 {
             ALL_SQUARES[pawn_idx]
         });
         let hash = pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal).0;
-        let moves = pos
-            .legal_moves()
-            .iter()
-            .map(|m| MoveEntry { cm: cm_of(m), sm: *m })
-            .collect();
+        let moves = Arc::new(
+            pos.legal_moves()
+                .iter()
+                .map(|m| MoveEntry { cm: cm_of(m), sm: *m })
+                .collect::<Vec<_>>(),
+        );
 
         Board960 {
             checkers: BitBoard(pos.checkers().0),
@@ -222,13 +236,10 @@ impl EngineBoard for Board960 {
 
     fn legal_gen(&self) -> Gen960 {
         Gen960 {
-            moves: self
-                .moves
-                .iter()
-                .map(|e| (e.cm, BitBoard::from_square(e.cm.get_dest())))
-                .collect(),
-            yielded: vec![false; self.moves.len()],
+            moves: Arc::clone(&self.moves),
+            yielded: [0; 4],
             mask: !EMPTY,
+            cursor: 0,
         }
     }
 
@@ -249,6 +260,14 @@ impl EngineBoard for Board960 {
 
     fn has_castle_rights(&self) -> bool {
         self.pos.castles().any()
+    }
+
+    fn has_castle_rights_for(&self, color: Color) -> bool {
+        let shak = match color {
+            Color::White => ShakColor::White,
+            Color::Black => ShakColor::Black,
+        };
+        self.pos.castles().has_color(shak)
     }
 
     fn as_std(&self) -> Option<&Board> {
@@ -282,20 +301,38 @@ impl EngineBoard for Board960 {
 /// Zuggenerator im `chess::MoveGen`-Stil: Zielfeld-Maske nachtraeglich
 /// setzbar, bereits ausgegebene Zuege werden nach Maskenwechsel nicht
 /// wiederholt (Quiescence: erst Captures, dann `!EMPTY` fuer den Rest).
+///
+/// Teilt sich die Zugliste per `Arc` mit dem Board (keine Kopie) und merkt
+/// sich ausgegebene Zuege in einer 256-Bit-Maske (4 × u64 deckt das
+/// theoretische Zug-Maximum von 218 ab) — komplett allokationsfrei.
+/// Iterationsreihenfolge identisch zur alten Vec-Variante (bit-exakt).
 pub struct Gen960 {
-    moves: Vec<(ChessMove, BitBoard)>,
-    yielded: Vec<bool>,
+    moves: Arc<Vec<MoveEntry>>,
+    yielded: [u64; 4],
     mask: BitBoard,
+    /// Scan-Position fuer die AKTUELLE Maske: alles davor ist entweder
+    /// schon ausgegeben oder passt nicht zur Maske (und kann erst nach
+    /// einem Maskenwechsel wieder passen — der setzt den Cursor zurueck).
+    /// Ohne Cursor scannte jeder `next()`-Aufruf ab Index 0 → O(n²) pro
+    /// Knoten; das war im Profil der eigentliche Gen960-Kostenpunkt,
+    /// nicht die (ebenfalls entfernte) Listen-Kopie.
+    cursor: usize,
 }
 
 impl Iterator for Gen960 {
     type Item = ChessMove;
 
     fn next(&mut self) -> Option<ChessMove> {
-        for i in 0..self.moves.len() {
-            if !self.yielded[i] && self.moves[i].1 & self.mask != EMPTY {
-                self.yielded[i] = true;
-                return Some(self.moves[i].0);
+        while self.cursor < self.moves.len() {
+            let i = self.cursor;
+            self.cursor += 1;
+            if self.yielded[i / 64] & (1u64 << (i % 64)) != 0 {
+                continue;
+            }
+            let cm = self.moves[i].cm;
+            if BitBoard::from_square(cm.get_dest()) & self.mask != EMPTY {
+                self.yielded[i / 64] |= 1u64 << (i % 64);
+                return Some(cm);
             }
         }
         None
@@ -305,10 +342,12 @@ impl Iterator for Gen960 {
 impl MoveGenLike for Gen960 {
     fn set_iterator_mask(&mut self, mask: BitBoard) {
         self.mask = mask;
+        self.cursor = 0;
     }
 
     fn count_remaining(&self) -> usize {
-        self.yielded.iter().filter(|y| !**y).count()
+        let done: u32 = self.yielded.iter().map(|w| w.count_ones()).sum();
+        self.moves.len() - done as usize
     }
 }
 
@@ -421,5 +460,81 @@ mod tests {
         assert_ne!(b.get_hash(), nb.get_hash());
         assert_eq!(b.side_to_move(), Color::White);
         assert_eq!(nb.side_to_move(), Color::Black);
+    }
+}
+
+#[cfg(test)]
+mod bench_from_pos {
+    use super::*;
+    use std::time::Instant;
+
+    // Mikro-Benchmark der from_pos-Bestandteile (nur Diagnose, kein Assert).
+    // Aufruf: cargo test --release bench_from_pos -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn breakdown() {
+        let fens = [
+            "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+            "rkbqnbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RKBQNBNR w HAha - 0 9",
+            "r2q1rk1/pp2ppbp/2np1np1/8/3NP3/2N1BP2/PPPQ2PP/R3KB1R w KQ - 3 9",
+            "2rkr3/5pp1/8/1p2p3/1P2P3/3P4/5PP1/2RKR3 w ECec - 0 1",
+        ];
+        let positions: Vec<Chess> = fens
+            .iter()
+            .map(|f| {
+                Fen::from_ascii(f.as_bytes())
+                    .unwrap()
+                    .into_position(CastlingMode::Chess960)
+                    .unwrap()
+            })
+            .collect();
+        const N: usize = 200_000;
+
+        let t = Instant::now();
+        let mut acc = 0usize;
+        for _ in 0..N {
+            for pos in &positions {
+                acc += pos.legal_moves().len();
+            }
+        }
+        println!("legal_moves:  {:?}  (acc {})", t.elapsed(), acc);
+
+        let t = Instant::now();
+        let mut acc = 0u64;
+        for _ in 0..N {
+            for pos in &positions {
+                acc ^= pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal).0;
+            }
+        }
+        println!("zobrist:      {:?}  (acc {})", t.elapsed(), acc);
+
+        let t = Instant::now();
+        let mut acc = 0usize;
+        for _ in 0..N {
+            for pos in &positions {
+                acc += pos.ep_square(EnPassantMode::Legal).map_or(0, |s| s as usize);
+            }
+        }
+        println!("ep_square:    {:?}  (acc {})", t.elapsed(), acc);
+
+        let t = Instant::now();
+        let mut acc = 0usize;
+        for _ in 0..N {
+            for pos in &positions {
+                let b = Board960::from_pos(pos.clone());
+                acc += b.moves.len();
+            }
+        }
+        println!("from_pos:     {:?}  (acc {})", t.elapsed(), acc);
+
+        let t = Instant::now();
+        let mut acc = 0usize;
+        for _ in 0..N {
+            for pos in &positions {
+                let b = Board960::from_pos(pos.clone());
+                acc += b.legal_gen().count();
+            }
+        }
+        println!("from_pos+gen: {:?}  (acc {})", t.elapsed(), acc);
     }
 }
