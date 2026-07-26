@@ -31,14 +31,24 @@ Einzeldokumenten:
   Maskenphase. **Bit-exakt** (Node-Counts identisch zu master auf 5 FRC- + 2 Standard-FENs,
   `scratchpad/nodecount960.py`), 104 Tests grün, **+17,5 % NPS** im 960-Modus (1,27→1,49 M;
   Rest der Lücke zum Standard-Backend ~2,4 M liegt in shakmatys `legal_moves` selbst).
-- **FRC-A/B GESTARTET 26.07. ~19:15** (`matches/frc_baseline_vs_dev960`): master (Binary
-  `martuni.master_20260726`) vs (a)+(b) (`martuni.dev960_20260726`), `-variant fischerandom`,
-  Openings = ALLE 960 Startstellungen (Scharnagl-korrekt generiert, SP518 = Standard-Startpos
-  verifiziert, `~/tools/openings/frc_all960.epd`), 5+0.05, SPRT [0,10], max 1000 P,
+- **FRC-A/B ABGESCHLOSSEN 26.07. 20:05 — KLARER SIEG für (a)+(b):** SPRT nach 454 Partien
+  terminiert, **dev960 60,46 % ≈ +74 Elo** (fastchess: master −74.47 ± 31.33, LOS 0.00 %
+  aus master-Sicht; **PGN farbkorrekt ausgezählt**: dev960 274,5 / master 179,5 von 454).
+  Null Zeitverluste, alle Terminations „normal". Setup: `matches/frc_baseline_vs_dev960`,
+  master (`martuni.master_20260726`) vs (a)+(b) (`martuni.dev960_20260726`),
+  `-variant fischerandom`, Openings = ALLE 960 Startstellungen (Scharnagl-korrekt, SP518 =
+  Standard-Startpos verifiziert, `~/tools/openings/frc_all960.epd`), 5+0.05, SPRT [0,10],
   concurrency 2. Die aktivierte eval.toml liegt im MATCH-Verzeichnis (cwd-Kaskade); die
   Repo-eval.toml wurde auf master-Stand zurückgesetzt → **Live-Bot unberührt** (neue Keys
-  erst beim Rollout wieder in die Repo-toml). Ergebnis: `run.log` im Match-Verzeichnis;
-  Attributions-Regel beachten (PGN farbkorrekt auszählen, [[feedback-ab-attribution-check]]).
+  erst beim Rollout wieder in die Repo-toml). Kleiner Makel: die ersten ~8 Partien liefen
+  kurz parallel zu einer versehentlichen Duplikat-Instanz (gekillt, exit=143 im Log) —
+  am 60/40-Gesamtbild ändert das nichts.
+- **Standard-Gate GESTARTET 26.07. ~20:15** (`matches/std_gate_dev960`): gleiche Binaries,
+  Standard-Schach, UHO, 5+0.05, SPRT [0,10], max 1000 P. Zweck: die (a)-Terme sind
+  variantenneutral → vor Rollout Nicht-Regression im Standard absichern ((b) betrifft nur
+  Board960, das Match isoliert also Hebel (a)). Ergebnis → `run.log`, danach
+  **Tobias-Entscheid Rollout** (FF-Merge dev/960-opening-nps + eval.toml-Keys in Repo-toml
+  + Build + Bot-Restart).
 - Hinweis Messtechnik: gepiptes `quit` direkt nach `go` killt die Suche („fallback nodes=1")
   — bei Smoke-/NPS-Tests `sleep` zwischen `go` und `quit` einbauen.
 
