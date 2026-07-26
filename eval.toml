@@ -173,6 +173,14 @@ passed_rank_bonuses = [5, 15, 30, 55, 100, 170]
 # fruehen taktischen Fehlern oder Rand-Ausweichzuegen eher milder testen.
 knight_backrank_penalty = -50
 
+# Entwicklungs-Malus: Laeufer auf der EIGENEN Grundreihe, nur MG-Pol
+# (taper(x, 0, phase)). Eingefuehrt nach dem 960-Lookback 26.07.2026:
+# ohne Buch fehlte jeder Entwicklungsdruck, Martuni driftete in der
+# Eroeffnung still ab (66 Opening-Blunder in 960 vs. 5 im Standard).
+# Milder als der Springer-Malus (der ist flat -50 und phasenlos), weil
+# Laeufer auf der Grundreihe oefter legitim stehen (Fianchetto-Vorstufe).
+bishop_backrank_penalty_mg = -20
+
 # Laeuferpaar: solange beide Laeufer vorhanden sind, erhaelt jeder Laeufer
 # diesen Bonus (gesamt also +2 * bishop_pair_each)
 # Finding: Gesamt +30 ist plausibel. Der bessere Hebel ist dynamisch:
@@ -264,6 +272,19 @@ shield_missing_penalty = -15
 # Eroeffnungsproblemen mit Koenig auf d/e eher Richtung -40/-60 testen,
 # idealerweise material- oder phase-abhaengig.
 exposed_center_penalty = -30
+
+# Koenig auf a- oder f-Linie der Heimreihe (bisher neutral 0): dorthin
+# kommt er nur ohne bzw. nach verspielter Rochade. 960-Lookback 26.07.2026:
+# exposed_king war Blunder-Motiv #2 (53x), Rochadequote nur 46 % vs. 65 %
+# im Standard. Milder als exposed_center (-30), da die Flanke gedeckter ist.
+uncastled_flank_penalty = -25
+
+# Rochade-Anreiz: MG-Malus solange die Seite noch Rochaderechte hat —
+# Rochieren loescht die Rechte und "verdient" den Betrag als Tempo-Bonus.
+# Symmetrisch am Partieanfang (beide Seiten -15), wirkt also erst als
+# Differenz, sobald eine Seite rochiert hat. 960-Lookback 26.07.2026:
+# Martuni rochierte im Schnitt erst Zug 18.8 (Standard: 11.0).
+castle_rights_penalty_mg = -15
 
 # SafetyTable: non-lineare Zuordnung Angriffsscore → Strafe in cp.
 # Index = min(n_angreifer * summe_der_gewichte, 99).
