@@ -43,12 +43,15 @@ Einzeldokumenten:
   erst beim Rollout wieder in die Repo-toml). Kleiner Makel: die ersten ~8 Partien liefen
   kurz parallel zu einer versehentlichen Duplikat-Instanz (gekillt, exit=143 im Log) —
   am 60/40-Gesamtbild ändert das nichts.
-- **Standard-Gate GESTARTET 26.07. ~20:15** (`matches/std_gate_dev960`): gleiche Binaries,
-  Standard-Schach, UHO, 5+0.05, SPRT [0,10], max 1000 P. Zweck: die (a)-Terme sind
-  variantenneutral → vor Rollout Nicht-Regression im Standard absichern ((b) betrifft nur
-  Board960, das Match isoliert also Hebel (a)). Ergebnis → `run.log`, danach
-  **Tobias-Entscheid Rollout** (FF-Merge dev/960-opening-nps + eval.toml-Keys in Repo-toml
-  + Build + Bot-Restart).
+- **Standard-Gate GRÜN (26.07. 21:48, 1000 P voll):** dev960 **+5.56 ± 18.76 Elo — CI deckt
+  0, regressionsfrei** (PGN farbkorrekt: dev960 508 / master 492 = 50,80 %; fastchess-Zeile
+  „−5.56" gehört master=engine1). Null Zeitverluste, alle Terminations „normal".
+  Setup `matches/std_gate_dev960`: gleiche Binaries, Standard-Schach, UHO, 5+0.05,
+  SPRT [0,10] (lief bis zum 1000er-Limit, LLR blieb mittig). Die (a)-Terme sind damit im
+  Standard neutral ((b) betrifft nur Board960 — das Match isolierte Hebel (a)).
+  **Idealkonstellation: +74 Elo im FRC, ±0 im Standard → Rollout-Kandidat, Tobias
+  entscheidet** (FF-Merge dev/960-opening-nps + eval.toml-Keys in Repo-toml + Build +
+  Bot-Restart; Rollback = Keys raus + git reset auf e8af251 + Build + Restart).
 - Hinweis Messtechnik: gepiptes `quit` direkt nach `go` killt die Suche („fallback nodes=1")
   — bei Smoke-/NPS-Tests `sleep` zwischen `go` und `quit` einbauen.
 
