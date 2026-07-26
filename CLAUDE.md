@@ -14,18 +14,6 @@ Ausnahme: Infrastruktur (Board-Repräsentation, Zuggenerierung, UCI-Protokoll) d
 ## Architektur
 
 - **`chess`-Crate** (jordanbray, MIT) für Brettrepräsentation und legale Zuggenerierung — bewusste Entscheidung
-- Module:
-  - `uci.rs` — UCI-Protokoll inkl. Ponder-Handling
-  - `position.rs` — Board-Wrapper
-  - `search.rs` — Alpha-Beta mit iterativem Deepening, Quiescence, TT-Integration
-  - `eval.rs` — Stellungsbewertung (Material, PST, King Safety, Pawn Shield, Endspiel-Heuristiken)
-  - `pst.rs` — Piece-Square-Tables mit Tapered Eval (Midgame/Endgame-Interpolation)
-  - `endgame.rs` — spezialisierte Endspiel-Bewertung
-  - `eval_config.rs` — laufzeit-konfigurierbare Eval-Parameter (analog zu `.env`)
-  - `tt.rs` — Transposition Table (Zobrist-basiert)
-  - `polyglot/` — Polyglot-Buch-Reader (`book.rs`, `hash.rs`, `random.rs`)
-  - `config.rs` — `.env`-Loader mit kaskadierter Suche (CWD → Binary-Dir → Projekt-Root)
-  - `options.rs` — UCI-Optionen
 
 ## Aktueller Stand
 
