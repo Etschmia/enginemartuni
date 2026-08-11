@@ -10,6 +10,34 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**11.08.2026 (abends) — Low-Mobility-Staffel-Malus: A/B-Doppelgrün, AUSGEROLLT 18:08.**
+- **Hebel (aus dem Lookback unten):** die Eröffnungs-Drifts passieren TROTZ der seit
+  langem aktiven linearen Safe-Mobility (3 cp/Feld) — einer vergrabenen Figur von 0 auf
+  2 Felder zu helfen ist der Suche nur 6 cp wert, das ist kein Gradient. Neu:
+  `minor_low_mob_penalty_mg = [-30, -20, -10]` ([mobility]): konvexer Staffel-Malus pro
+  Springer/Läufer, indiziert mit seiner Safe-Feld-Anzahl (0 Felder = −30, ab 3 = 0).
+  Nur MG-Pol (im EG würde er Remis-Festungen doppelt bestrafen), bewusst ohne Türme
+  (vor der Rochade immer immobil = Rauschen) und Dame (keine Frühausflüge belohnen).
+  Code-Default leere Liste = inaktiv; **bit-exakt** gegen master verifiziert (Node-Counts
+  identisch auf 3 Standard- + 2 FRC-FENs, `scratchpad/nodecount.py`), 108 Tests (4 neue).
+- **FRC-A/B (matches/frc_baseline_vs_lowmob, 992 P, alle 960 Startstellungen, 5+0.05):**
+  lowmob **+28.4 ± 19.8 Elo** (PGN farbkorrekt: 536,5/992 = 54,08 %, W452 D169 L371),
+  LOS 99,76 %, CI deckt 0 NICHT, alle Terminations „normal". fastchess-Zeile „−28.43"
+  gehört master=engine1.
+- **Standard-Gate (matches/std_gate_lowmob, 1003 P, UHO, 5+0.05): +7.28 ± 21.5 — CI
+  deckt 0, regressionsfrei** (51,05 %). Lief in zwei Teilen (Teil 1 bei P. 623 extern
+  gekillt — Harness-Task-Stop, kein Engine-Problem; Teil 2 via setsid nachgefahren,
+  games.pgn + games2.pgn gemeinsam ausgezählt). Idealkonstellation erneut:
+  **+28 im FRC, ±0 im Standard.**
+- **AUSGEROLLT 11.08. 18:08 (Tobias-Freigabe vorab, „wenn A/B passt → live"):**
+  FF-Merge dev/minor-lowmob → master (7cac387 Term + f898479 Aktivierung), Build,
+  Smoke Standard+960 grün (mobility_mg −68 symmetrisch = Malus aktiv), Push
+  origin/master, Hard Restart 18:08 — Bot verbunden („Welcome Martuni!").
+  Rollback: eval.toml-Key auskommentieren + `git reset --hard a82e7e8` + Build + Restart.
+  **OFFEN: 960-Lookback nach ~100 weiteren Live-960-Partien** (Anker 11.08.: 960 1720,
+  Blitz 2159, Rapid 2290 — via rating-history-API verifiziert). Danach ggf. Hebel #2
+  (eskalierender Rochade-Malus, Ø Rochadezug 19 unverändert).
+
 **11.08.2026 — 960-Lookback post-Rollout GRÜN: Paket wirkt live (~+70 Elo 960), Eröffnungs-Drift bleibt Hebel #1.**
 - Datenbasis: 226 Live-960-Partien seit Rollout 26.07. 21:59 (215 davon Stockfish-analysiert
   via Analyse-Cron, `analyse-23.08.2026.json`), Skript `scratchpad/lookback960.py`.
