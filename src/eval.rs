@@ -1338,11 +1338,13 @@ fn mobility_score<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> (i32,
         let n = (get_knight_moves(sq) & safe).popcnt() as i32;
         mg += n * p.knight_mg_mobility;
         eg += n * p.knight_eg_mobility;
+        mg += minor_low_mob_penalty(n, p);
     }
     for sq in *board.pieces(Piece::Bishop) & our_bb {
         let n = (get_bishop_moves(sq, occ) & safe).popcnt() as i32;
         mg += n * p.bishop_mg_mobility;
         eg += n * p.bishop_eg_mobility;
+        mg += minor_low_mob_penalty(n, p);
     }
     for sq in *board.pieces(Piece::Rook) & our_bb {
         let n = (get_rook_moves(sq, occ) & safe).popcnt() as i32;
@@ -1357,6 +1359,22 @@ fn mobility_score<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> (i32,
     }
 
     (mg, eg)
+}
+
+/// Staffel-Malus fuer vergrabene Leichtfiguren (960-Lookback 11.08.2026).
+///
+/// `n` = Anzahl der SAFE-Zielfelder der Figur (siehe `mobility_score`).
+/// Die konfigurierte Liste wird mit `n` indiziert: Index 0 trifft eine
+/// voellig eingemauerte Figur, dahinter flacht der Malus ab; ab
+/// `n >= len` gibt es keinen Abzug mehr. Der Wert fliesst NUR in den
+/// MG-Pol ein — im Endspiel regelt die lineare eg-Mobility, und ein
+/// zusaetzlicher Malus wuerde dort z. B. den "schlechten Laeufer" in
+/// Remis-Festungen doppelt bestrafen.
+///
+/// Leere Liste (Code-Default) → immer 0, Eval bit-exakt wie vorher.
+#[inline]
+fn minor_low_mob_penalty(n: i32, p: &EvalParams) -> i32 {
+    *p.minor_low_mob_penalty_mg.get(n as usize).unwrap_or(&0)
 }
 
 /// König-Aktivitäts-Bonus im Endspiel (aus Sicht von Weiß).
@@ -2471,5 +2489,50 @@ mod tests {
         let b = Board::default();
         let p = p_guard_active();
         assert_eq!(pawn_endgame_guard(&b, game_phase(&b), &p), 0);
+    }
+
+    // --- Low-Mobility-Malus fuer Leichtfiguren (960-Lookback 11.08.2026) ---
+
+    #[test]
+    fn low_mob_penalty_default_inactive() {
+        // Code-Default = leere Liste → Malus immer 0, Eval bit-exakt wie vorher.
+        let p = EvalParams::default();
+        assert_eq!(minor_low_mob_penalty(0, &p), 0);
+        assert_eq!(minor_low_mob_penalty(5, &p), 0);
+    }
+
+    #[test]
+    fn low_mob_penalty_staffel_und_obergrenze() {
+        let mut p = EvalParams::default();
+        p.minor_low_mob_penalty_mg = vec![-30, -20, -10];
+        assert_eq!(minor_low_mob_penalty(0, &p), -30);
+        assert_eq!(minor_low_mob_penalty(1, &p), -20);
+        assert_eq!(minor_low_mob_penalty(2, &p), -10);
+        // Ab n >= Listenlaenge kein Abzug mehr — entwickelte Figur ist "frei".
+        assert_eq!(minor_low_mob_penalty(3, &p), 0);
+        assert_eq!(minor_low_mob_penalty(8, &p), 0);
+    }
+
+    #[test]
+    fn buried_bishop_gets_mg_malus_only() {
+        // Weisser Laeufer a1 hinter dem eigenen b2-Bauern: 0 Safe-Felder —
+        // das 960-Eckenlaeufer-Muster in Reinform.
+        let b = Board::from_str("4k3/8/8/8/8/8/1P6/B3K3 w - - 0 1").unwrap();
+        let base = EvalParams::default();
+        let (mg_before, eg_before) = mobility_score(&b, Color::White, &base);
+        let mut p = EvalParams::default();
+        p.minor_low_mob_penalty_mg = vec![-30, -20, -10];
+        let (mg_after, eg_after) = mobility_score(&b, Color::White, &p);
+        assert_eq!(mg_after, mg_before - 30, "0 Safe-Felder → Index 0 = -30");
+        assert_eq!(eg_after, eg_before, "Malus wirkt nur im MG-Pol");
+    }
+
+    #[test]
+    fn startpos_balanced_with_low_mob_penalty() {
+        // Beide Seiten symmetrisch vergraben → Malus hebt sich auf, Score 0.
+        let b = Board::default();
+        let mut p = EvalParams::default();
+        p.minor_low_mob_penalty_mg = vec![-30, -20, -10];
+        assert_eq!(evaluate(&b, &p), 0);
     }
 }

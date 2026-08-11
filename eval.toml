@@ -377,6 +377,11 @@ rook_eg   = 5
 # ueberbelohnt werden. Nur erhoehen, wenn die Dame dauerhaft zu passiv bleibt.
 queen_mg  = 1
 queen_eg  = 2
+# Staffel-Malus fuer vergrabene Leichtfiguren (960-Lookback 11.08.2026):
+# Liste wird mit der Safe-Feld-Anzahl der Figur indiziert (Index 0 = ganz
+# eingemauert), wirkt nur im MG-Pol, nur Springer/Laeufer. Fehlender Key /
+# leere Liste = Term inaktiv (bit-exakt). Aktivierung erst nach A/B-Gate:
+# minor_low_mob_penalty_mg = [-30, -20, -10]
 
 [endgame_guard]
 # Pawn-Endgame-Guard (23.05.2026, docs/pawn-endgame-guard.md). Drei klassische

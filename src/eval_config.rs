@@ -214,6 +214,23 @@ pub struct EvalParams {
     pub rook_eg_mobility: i32,
     pub queen_mg_mobility: i32,
     pub queen_eg_mobility: i32,
+    /// Low-Mobility-Malus fuer Leichtfiguren (960-Lookback 11.08.2026):
+    /// Staffel-Malus pro Springer/Laeufer, indiziert mit der Anzahl seiner
+    /// SAFE-Zielfelder (Index 0 = voellig vergraben). Zaehlt nur den MG-Pol.
+    ///
+    /// Motivation: die lineare Safe-Mobility (3 cp/Feld) gibt der Suche kaum
+    /// einen Gradienten, eine vergrabene Figur freizuspielen — der Sprung von
+    /// 0 auf 2 Felder ist ihr nur 6 cp wert. Genau das sind die "stillen
+    /// positionellen Drifts" der 960-Eroeffnungen (35/45 Eroeffnungs-Blunder
+    /// ohne Motiv, Eigen-Eval ~67 cp zu optimistisch). Ein konvexer Malus
+    /// (z. B. [-30, -20, -10]) macht Entwicklung unmittelbar wertvoll.
+    ///
+    /// Bewusst NUR Leichtfiguren: Tuerme haben vor der Rochade immer wenig
+    /// Mobilitaet (das wuerde nur Rauschen addieren), die Dame soll nicht
+    /// zu Fruehausfluegen ermuntert werden.
+    ///
+    /// Default: leere Liste = Term inaktiv, Eval bit-exakt wie ohne ihn.
+    pub minor_low_mob_penalty_mg: Vec<i32>,
 
     // ----------------------------------------------------------------------
     // Pawn-Endgame-Guard (23.05.2026, Konzept in docs/pawn-endgame-guard.md)
@@ -383,6 +400,7 @@ impl Default for EvalParams {
             rook_eg_mobility: 5,
             queen_mg_mobility: 1,
             queen_eg_mobility: 2,
+            minor_low_mob_penalty_mg: Vec::new(),
 
             // Pawn-Endgame-Guard: alle Boni 0 = verhaltensgleich zur alten
             // Eval, solange `[endgame_guard]` in eval.toml fehlt. Das Gate
@@ -596,6 +614,20 @@ impl EvalParams {
         p.rook_eg_mobility = i(&mob, "rook_eg", p.rook_eg_mobility);
         p.queen_mg_mobility = i(&mob, "queen_mg", p.queen_mg_mobility);
         p.queen_eg_mobility = i(&mob, "queen_eg", p.queen_eg_mobility);
+        // Staffel-Malus fuer vergrabene Leichtfiguren; fehlender Key oder
+        // leere Liste = Term inaktiv (Code-Default bleibt bestehen).
+        if let Some(arr) = mob
+            .and_then(|s| s.get("minor_low_mob_penalty_mg"))
+            .and_then(|v| v.as_array())
+        {
+            let parsed: Vec<i32> = arr
+                .iter()
+                .filter_map(|v| v.as_integer().map(|x| x as i32))
+                .collect();
+            if !parsed.is_empty() {
+                p.minor_low_mob_penalty_mg = parsed;
+            }
+        }
 
         // [endgame_guard] (23.05.2026, Pawn-Endgame-Guard). Optional; bei
         // fehlender Sektion bleiben die Boni auf 0 (Default in EvalParams),
