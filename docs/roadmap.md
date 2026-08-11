@@ -10,6 +10,30 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**11.08.2026 — 960-Lookback post-Rollout GRÜN: Paket wirkt live (~+70 Elo 960), Eröffnungs-Drift bleibt Hebel #1.**
+- Datenbasis: 226 Live-960-Partien seit Rollout 26.07. 21:59 (215 davon Stockfish-analysiert
+  via Analyse-Cron, `analyse-23.08.2026.json`), Skript `scratchpad/lookback960.py`.
+- **Rating/Score:** Chess960 1644 (25.07.) → **1720** (11.08., Peak 1726) ≈ **+76** — deckt
+  sich mit dem A/B-Befund (+74 Elo). Score 51,1 % gesamt (Blitz 46,5 % — vorher 29,7 %;
+  Rapid 66,7 % — vorher 39,2 %), Gegnerschnitt 1783, Performance ~1790.
+- **König:** Rochadequote 46 % → **56 %**; `exposed_king` 0.21 → **0.08 pro Partie**,
+  `allows_mate` 0.33 → 0.21/P. Der Rochade-Anreiz + Flank-Malus wirken. ABER: mittlerer
+  Rochadezug unverändert spät (Ø 19.1 vs 18.8; Standard 11.2) — Malus wirkt als „ob",
+  nicht als „wann".
+- **Eröffnung UNVERÄNDERT das Hauptproblem:** ply≤16-Blunder 0.21/P (vorher 0.18/P;
+  Standard 0.02/P = Faktor 10). Signatur identisch zur 26.07.-Diagnose: 35/45 ohne Motiv
+  (stille positionelle Drifts), Median 174 cp, Eigen-Eval ~+67 cp optimistischer als
+  Stockfish. Die drei neuen Terme fixen den König, nicht die Entwicklung → bestätigt
+  Mobility-/Entwicklungs-Term als nächsten Hebel.
+- **Standard-Sanity:** kein Rollout-Regress. Blitz stieg nach Rollout erst (2190→2223 bis
+  31.07.), rutschte ab 02.08. auf ~2159 (Pool/Schwankung, nicht Rollout-korreliert);
+  Rapid stabil ~2290. Hinweis: der 26.07.-Anker „Blitz 2278" passt nicht zur Lichess-
+  Rating-History (26.07. = 2190) — künftige Anker gegen `rating-history`-API prüfen.
+- **Nächste Hebel (Tobias entscheidet):** (1) Mobility-Term MG-getapert (aufstellungs-
+  neutrale Entwicklungs-Führung, adressiert die Drifts), (2) Rochade-Anreiz eskalierend
+  mit Zugzahl (adressiert Ø Zug 19), (3) eingesperrte-Läufer-Term, (4) 960-Zeitbudget
+  für die ersten ~10 Züge, (5) langfristig eigene 960-MoveGen (−40 % NPS-Lücke).
+
 **26.07.2026 (abends) — Hebel (a)+(b) implementiert (Branch `dev/960-opening-nps`), FRC-A/B LÄUFT.**
 - **(a) Eröffnungs-/Königs-Terme** (Tobias-Auftrag nach dem 960-Lookback, s. u.). Drei neue,
   variantenneutrale Eval-Parameter, Code-Defaults 0 = inaktiv, Werte via eval.toml:
