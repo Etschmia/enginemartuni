@@ -110,6 +110,22 @@ const NMP_MIN_DEPTH: i32 = 3;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_MOVE_INDEX: usize = 3;
 
+// --- Reverse Futility Pruning (RFP) ---------------------------------------
+// Idee: Stehen wir an einem Blatt-nahen Knoten (depth <= RFP_MAX_DEPTH) schon
+// statisch so weit ueber beta, dass selbst ein grosszuegiger Margin-Abzug pro
+// verbleibender Tiefe beta noch uebersteigt, schneiden wir den Teilbaum ohne
+// Suche ab (statischer Fail-High). Gegenstueck zum Null-Move-Pruning: NMP
+// beweist den Fail-High mit einer reduzierten Suche, RFP verzichtet bei
+// kleiner Resttiefe ganz darauf.
+//
+// 16.08.2026: implementiert, smoke-getestet (Node-Counts −69 % auf Tiefe 6,
+// W5AboGf0 +2 Plies bei gleichem Zeitbudget, identischer bestmove/Score),
+// ohne A/B-Match ausgerollt — Tobias' Entscheid: „die Praxis wird
+// entscheiden". Default AN — deaktiviert ueber MARTUNI_RFP_OFF=1
+// (Off-Schalter wie bei NMP).
+const RFP_MAX_DEPTH: i32 = 3;
+const RFP_MARGIN: i32 = 120; // cp pro verbleibender Tiefe
+
 pub struct GoParams {
     pub wtime: Option<u64>,
     pub btime: Option<u64>,
@@ -196,6 +212,9 @@ struct SearchState<'a> {
     debug_root: bool,
     // Diagnose-Schalter: NMP komplett aus, wenn MARTUNI_NMP_OFF=1.
     nmp_off: bool,
+    // Diagnose-Schalter: Reverse Futility Pruning aus, wenn MARTUNI_RFP_OFF=1
+    // (Default an seit 16.08.2026, Off-Schalter wie bei NMP).
+    rfp_on: bool,
     // Killer Moves: pro ply zwei Quiet-Züge, die zuletzt einen Beta-Cutoff
     // erzeugt haben. Werden in der Sortierung direkt hinter gewinnenden
     // Captures einsortiert.
@@ -372,6 +391,7 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
         forced_only_move,
         debug_root: std::env::var_os("MARTUNI_DEBUG_ROOT").is_some(),
         nmp_off: std::env::var_os("MARTUNI_NMP_OFF").is_some(),
+        rfp_on: std::env::var_os("MARTUNI_RFP_OFF").is_none(),
         killers: [[None; 2]; MAX_PLY],
         move_history: vec![0; 2 * 64 * 64],
         syzygy: req.syzygy,
@@ -644,6 +664,38 @@ fn alpha_beta<B: EngineBoard>(
     let legal_moves = board.legal_gen();
     if legal_moves.count_remaining() == 0 {
         return if in_check { -MATE + ply } else { 0 };
+    }
+
+    // --- Reverse Futility Pruning ----------------------------------------
+    // Statischer Fail-High ohne Suche. Bedingungen (alle muessen erfuellt
+    // sein):
+    //   - state.rfp_on: Diagnose-Schalter (aus via MARTUNI_RFP_OFF=1)
+    //   - ply > 0: an der Wurzel brauchen wir einen echten Best-Move
+    //   - !is_pv: Hauptvariante nicht durch Pruning verfaelschen
+    //   - !in_check: statische Eval ist im Schach unzuverlaessig
+    //   - depth <= RFP_MAX_DEPTH: nur Blatt-nah — der Margin pro Tiefe
+    //     begrenzt den maximalen Eval-Fehler, den wir riskieren
+    //   - beta ausserhalb des Mate-Bereichs: ein statischer Eval-Cutoff darf
+    //     niemals einen Mate-Score abschneiden (Eval kennt keine Matte)
+    //   - static_eval - RFP_MARGIN * depth >= beta: Stellung ist selbst nach
+    //     grosszuegigem Fehlerabzug noch gut genug fuer den Cutoff
+    //
+    // Steht bewusst NACH der Terminal-Erkennung oben: in Stalemate-/
+    // Mate-Stellungen (0 legale Zuege) darf die statische Eval keinen
+    // Cutoff behaupten. Rueckgabe des static_eval (fail-soft) statt beta,
+    // damit Elternknoten einen engeren Bound bekommen — analog zum
+    // NMP-Cutoff wird nichts in die TT geschrieben.
+    if state.rfp_on
+        && ply > 0
+        && !is_pv
+        && !in_check
+        && depth <= RFP_MAX_DEPTH
+        && beta.abs() < MATE_THRESHOLD
+    {
+        let static_eval = eval_stm(board, &state.eval);
+        if rfp_cutoff(static_eval, beta, depth) {
+            return static_eval;
+        }
     }
 
     if !state.nmp_off
@@ -1226,6 +1278,15 @@ fn eval_stm<B: EngineBoard>(board: &B, params: &EvalParams) -> i32 {
     } else {
         -score
     }
+}
+
+/// Reverse-Futility-Cutoff-Entscheidung (reine Funktion, testbar):
+/// statischer Fail-High, wenn die Stellung selbst nach Abzug von
+/// `RFP_MARGIN` pro verbleibender Tiefe noch mindestens `beta` wert ist.
+/// Aufrufer sichert die Kontextbedingungen (non-PV, nicht im Schach,
+/// depth <= RFP_MAX_DEPTH, beta ausserhalb Mate-Bereich, ply > 0).
+fn rfp_cutoff(static_eval: i32, beta: i32, depth: i32) -> bool {
+    static_eval - RFP_MARGIN * depth >= beta
 }
 
 /// Erkennt Stellungswiederholung mit Trennung zwischen Spielhistorie und
@@ -2165,5 +2226,37 @@ mod tests {
             dist0,
             dist1
         );
+    }
+
+    // --- Reverse Futility Pruning ----------------------------------------
+    // Grenzfaelle der Cutoff-Formel: Margin waechst linear mit der
+    // Resttiefe, exakt auf der Schwelle wird gepruned (>=).
+
+    #[test]
+    fn rfp_cutoff_fires_above_margin() {
+        // Tiefe 1: Margin 120 cp. Eval 130 ueber beta → Cutoff.
+        assert!(rfp_cutoff(130, 0, 1));
+        // Tiefe 3: Margin 360 cp. Eval 400 ueber beta → Cutoff.
+        assert!(rfp_cutoff(400, 0, 3));
+    }
+
+    #[test]
+    fn rfp_cutoff_boundary_is_inclusive() {
+        // Eval genau auf der Schwelle (beta + Margin*depth) → Cutoff.
+        assert!(rfp_cutoff(360, 0, 3));
+        assert!(rfp_cutoff(120, 0, 1));
+    }
+
+    #[test]
+    fn rfp_cutoff_holds_below_margin() {
+        // Ein cp unter der Schwelle → kein Cutoff.
+        assert!(!rfp_cutoff(359, 0, 3));
+        assert!(!rfp_cutoff(119, 0, 1));
+        // Eval unter beta → nie Cutoff, egal wie flach die Resttiefe.
+        assert!(!rfp_cutoff(-50, 0, 1));
+        // Beta beruecksichtigen: bei beta=200 reicht eval=300 bei Tiefe 2
+        // (Margin 240) nicht mehr.
+        assert!(!rfp_cutoff(300, 200, 2));
+        assert!(rfp_cutoff(440, 200, 2));
     }
 }

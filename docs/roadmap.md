@@ -10,6 +10,25 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**16.08.2026 — Reverse Futility Pruning implementiert und ausgerollt (Default AN, ohne A/B).**
+- Aus `docs/kimi-vorschlag.md` (Punkt „Futility Pruning / Razoring / Reverse
+  Futility") — nach Abgleich mit dem Code der letzte offene klassische
+  Search-Hebel aus dem Vorschlag (Aspiration verworfen, SEE/History/NMP/LMR
+  längst drin).
+- Umsetzung in `src/search.rs`: statischer Fail-High an Blatt-nahen Knoten
+  (`depth <= RFP_MAX_DEPTH = 3`, Margin 120 cp/Tiefe) — non-PV, nicht im
+  Schach, `beta` ausserhalb Mate-Bereich, nach der Terminal-Erkennung
+  (Stalemate/Mate dürfen nicht durch statische Eval abgeschnitten werden).
+  Fail-soft: Rückgabe `static_eval`, kein TT-Store (analog NMP).
+- **Verifikation vor Rollout:** Node-Counts Tiefe 6 auf Mittelspiel-FEN
+  11,04 M → 3,37 M Knoten (−69 %), identischer bestmove/Score; Schlüssel-
+  stellung W5AboGf0 bei 30 s Budget: +2 Plies (10 → 12), gleicher Zug,
+  gleicher Score. 3 neue Unit-Tests (`rfp_cutoff`), Suite 111 grün.
+- **Entscheid Tobias 16.08.: kein A/B-Match — „die Praxis wird entscheiden".**
+  Default AN, Off-Schalter `MARTUNI_RFP_OFF=1` (wie bei NMP). Live-Rollout
+  via Build + Service-Restart; Beobachtung über den üblichen Lichess-
+  Lookback (Blunder-Profil, Rating).
+
 **11.08.2026 (abends) — Low-Mobility-Staffel-Malus: A/B-Doppelgrün, AUSGEROLLT 18:08.**
 - **Hebel (aus dem Lookback unten):** die Eröffnungs-Drifts passieren TROTZ der seit
   langem aktiven linearen Safe-Mobility (3 cp/Feld) — einer vergrabenen Figur von 0 auf
@@ -1151,8 +1170,10 @@ Punkte 2/3 unten).
 
 ## Offene Themen — Search
 
-- **Futility / Reverse Futility Pruning** — Blattnähe-Pruning, wenn die
-  statische Bewertung selbst mit großzügigem Margin Alpha nicht erreicht.
+- **Futility / Reverse Futility Pruning** — RFP umgesetzt und ausgerollt
+  16.08.2026 (siehe „Aktueller Status"): `depth <= 3`, Margin 120 cp/Tiefe,
+  non-PV, Default an, Off-Schalter `MARTUNI_RFP_OFF=1`. (Klassisches
+  Futility-Pruning am Blatt / Razoring weiter offen.)
 - **Lazy MovePicker** — inkrementelle Zuggenerierung (Hash → Captures →
   Killer → Quiet) statt vorab vollständig sortierten Vektor; spart
   Rechenzeit bei frühen Cutoffs.
