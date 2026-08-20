@@ -10,6 +10,22 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**20.08.2026 — Atomic Chess implementiert.**
+- Neues `BoardAtomic`-Backend auf dem bereits fuer Chess960 genutzten
+  `shakmaty`: regelkonforme Explosionen, Koenigslegalitaet, Rochade, en passant,
+  FEN und UCI-Zugparsing; Aktivierung ueber `UCI_Variant atomic`.
+- Suche erkennt die Explosion des Koenigs als Matt. Orthodoxes SEE wird im
+  Atomic-Pfad durch den unmittelbaren Explosions-Materialsaldo ersetzt;
+  Standard-spezifische RFP-/NMP-/Endspiel-/Syzygy-Annahmen bleiben dort aus.
+- Polyglot und Syzygy sind fuer Atomic deaktiviert. Standard und Chess960
+  behalten ihre bisherigen Backends und Suchpfade.
+- Verifikation: Atomic-Adapter-Perft gegen shakmaty, Explosions-/Bauern-/
+  Rochadetests und Suche-Matt-in-1; Gesamtsuite 116 Tests gruen.
+- **Live 20.08. 10:59:** `atomic` in der ignorierten Operator-`config.yml`
+  des lichess-bot freigeschaltet, Hard-Restart wie beauftragt. Engine-Config
+  OK, Wiederverbindung innerhalb ~1 s; eine laufende Partie wurde wieder
+  aufgenommen.
+
 **16.08.2026 — Reverse Futility Pruning implementiert und ausgerollt (Default AN, ohne A/B).**
 - Aus `docs/kimi-vorschlag.md` (Punkt „Futility Pruning / Razoring / Reverse
   Futility") — nach Abgleich mit dem Code der letzte offene klassische

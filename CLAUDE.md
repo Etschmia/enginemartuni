@@ -20,6 +20,7 @@ Ausnahme: Infrastruktur (Board-Repräsentation, Zuggenerierung, UCI-Protokoll) d
 Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
 
 - **UCI:** vollständig, inkl. `go ponder` / `ponderhit` mit echter Ponder-Suche (offene Deadline, TT-basierter Pondermove)
+- **Varianten:** Standard, Chess960 (`UCI_Chess960`) und Atomic (`UCI_Variant atomic`); Varianten-Backends auf `shakmaty`, Standardpfad weiter auf `chess`
 - **Suche:** Alpha-Beta mit iterativem Deepening, PVS (Null-Window-Scout), Null-Move Pruning (R=2, min-depth 3, mit Zugzwang-Schutz), Late Move Reductions (Variante A: R=1 ab depth≥3 & Index≥3, R=2 ab depth≥6 & Index≥6; nur Non-PV, keine Captures/Promotions/Checks/Killer), Quiescence Search, Transposition Table, korrekte Repetition-Detection (Stockfish-Stil: 1-fold in Spielhistorie ≠ Remis)
 - **Evaluation:** Material + Piece-Square-Tables (Tapered Midgame/Endgame), King Safety (3×3-Zone, Angreifer-Gewichte, SafetyTable, Pawn Shield), Endspiel-Heuristiken
 - **Eröffnung:** Polyglot-Books (`.bin`) mit konfigurierbarer Prioritätsreihenfolge via `BOOK_FILES`, auch im Ponder-Modus aktiv

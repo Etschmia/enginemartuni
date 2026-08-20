@@ -663,7 +663,11 @@ fn alpha_beta<B: EngineBoard>(
     // Stalemate/Checkmate nicht faelschlich durch Null-Move-Pruning laufen.
     let legal_moves = board.legal_gen();
     if legal_moves.count_remaining() == 0 {
-        return if in_check { -MATE + ply } else { 0 };
+        return if in_check || board.is_variant_loss() {
+            -MATE + ply
+        } else {
+            0
+        };
     }
 
     // --- Reverse Futility Pruning ----------------------------------------
@@ -686,6 +690,7 @@ fn alpha_beta<B: EngineBoard>(
     // damit Elternknoten einen engeren Bound bekommen — analog zum
     // NMP-Cutoff wird nichts in die TT geschrieben.
     if state.rfp_on
+        && board.uses_standard_rules()
         && ply > 0
         && !is_pv
         && !in_check
@@ -699,6 +704,7 @@ fn alpha_beta<B: EngineBoard>(
     }
 
     if !state.nmp_off
+        && board.uses_standard_rules()
         && allow_null
         && !is_pv
         && !in_check
@@ -1108,7 +1114,11 @@ fn quiescence<B: EngineBoard>(
     let in_check = board.checkers().popcnt() > 0;
     let mut legal_moves = board.legal_gen();
     if legal_moves.count_remaining() == 0 {
-        return if in_check { -MATE + ply } else { 0 };
+        return if in_check || board.is_variant_loss() {
+            -MATE + ply
+        } else {
+            0
+        };
     }
 
     if in_check {
@@ -1191,7 +1201,7 @@ fn quiescence<B: EngineBoard>(
     // billiger Bitboard-Test pro Zug (kein make_move noetig). Abzugschachs
     // sind hier bewusst NICHT erfasst (separates v2). Bei qply > 0 entfaellt
     // die Check-Generierung, damit Check-auf-Check-Ketten terminieren.
-    let quiet_checks = qply == 0;
+    let quiet_checks = qply == 0 && board.uses_standard_rules();
     let (knight_chk, bishop_chk, rook_chk, pawn_chk) = if quiet_checks {
         use chess::{get_bishop_moves, get_knight_moves, get_pawn_attacks, get_rook_moves};
         let occ = *board.combined();
@@ -1808,6 +1818,15 @@ fn least_valuable_attacker<B: EngineBoard>(
 /// und faltet es am Ende per Minimax zurück: jede Seite wählt das Maximum aus
 /// "aufhören" und "weiterschlagen".
 pub fn see<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
+    // Orthodoxes SEE nimmt an, dass Schlag- und Rueckschlagfigur auf dem
+    // Zielfeld stehen bleiben. In Atomic explodiert die Schlagfigur und kann
+    // Nachbarfiguren (bis hin zum Koenig) mitnehmen. Dort ist der unmittelbare
+    // Materialsaldo nach shakmatys regelkonformem Zug die passende statische
+    // Ordnungs-/Pruning-Schaetzung.
+    if !board.uses_standard_rules() {
+        return atomic_capture_value(board, mv);
+    }
+
     let target = mv.get_dest();
     let source = mv.get_source();
     let mover = board.side_to_move();
@@ -1890,6 +1909,28 @@ pub fn see<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
     gain[0]
 }
 
+fn atomic_capture_value<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
+    fn material<B: EngineBoard>(board: &B, color: Color) -> i32 {
+        let ours = *board.color_combined(color);
+        [
+            Piece::Pawn,
+            Piece::Knight,
+            Piece::Bishop,
+            Piece::Rook,
+            Piece::Queen,
+            Piece::King,
+        ]
+        .iter()
+        .map(|&piece| (board.pieces(piece) & ours).popcnt() as i32 * see_piece_value(piece))
+        .sum()
+    }
+
+    let mover = board.side_to_move();
+    let before = material(board, mover) - material(board, !mover);
+    let after = board.make_move_new(mv);
+    material(&after, mover) - material(&after, !mover) - before
+}
+
 /// Static Exchange Evaluation für einen NICHT-schlagenden Zug (2C-Filter für
 /// stille Schachgebote): Materialsaldo, wenn die eigene Figur auf das leere
 /// Zielfeld zieht und der Gegner dort den Abtausch eröffnet. `>= 0` heißt: die
@@ -1966,6 +2007,7 @@ fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Du
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board_atomic::BoardAtomic;
     use chess::{Board, MoveGen};
 
     // Repetition-Helper: pruefe die vier relevanten Faelle einzeln.
@@ -2154,6 +2196,34 @@ mod tests {
         assert_eq!(mate_score_from_tt(-450, 9), -450);
         // Roundtrip am selben Knoten ist die Identitaet.
         assert_eq!(mate_score_from_tt(mate_score_to_tt(MATE - 11, 4), 4), MATE - 11);
+    }
+
+    #[test]
+    fn atomic_search_plays_immediate_king_explosion() {
+        let board = BoardAtomic::from_fen("4k3/4p3/8/8/8/8/8/4R1K1 w - - 0 1").unwrap();
+        let winning = board.parse_uci_move("e1e7").unwrap();
+        assert!(see(&board, winning) > MATE_THRESHOLD);
+
+        let req = SearchRequest {
+            history: vec![board.get_hash()],
+            board,
+            halfmove_clock: 0,
+            params: GoParams {
+                depth: Some(2),
+                movetime: Some(10_000),
+                ..GoParams::default()
+            },
+            tt: Arc::new(Mutex::new(TranspositionTable::new(1))),
+            book: Arc::new(BookSet::load(Path::new("."), &[])),
+            eval: Arc::new(EvalParams::default()),
+            stop: Arc::new(AtomicBool::new(false)),
+            pondering: Arc::new(AtomicBool::new(false)),
+            move_overhead: 0,
+            syzygy: None,
+        };
+        let result = search(req).expect("Atomic-Suche liefert einen Zug");
+        assert_eq!(result.best, winning);
+        assert!(result.score > MATE_THRESHOLD);
     }
 
     fn run_search_scored(

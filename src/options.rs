@@ -1,5 +1,11 @@
 use crate::config::Config;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UciVariant {
+    Chess,
+    Atomic,
+}
+
 pub struct EngineOptions {
     pub hash: u64,
     pub move_overhead: u64,
@@ -10,6 +16,9 @@ pub struct EngineOptions {
     /// shakmaty-Backend um: Shredder-FEN-Parsing, Rochade als
     /// "Koenig x eigener Turm" (e1h1), kein Polyglot-Buch.
     pub chess960: bool,
+    /// Regelvariante gemaess UCI_Variant. Chess960 bleibt als orthogonale
+    /// Brettaufstellungs-Option separat, wie vom UCI-Protokoll vorgesehen.
+    pub variant: UciVariant,
 }
 
 impl EngineOptions {
@@ -19,6 +28,7 @@ impl EngineOptions {
             move_overhead: 10,
             syzygy_path: cfg.syzygy_path.clone(),
             chess960: false,
+            variant: UciVariant::Chess,
         }
     }
 
@@ -30,6 +40,7 @@ impl EngineOptions {
         println!("option name MoveOverhead type spin default 10 min 0 max 5000");
         println!("option name Ponder type check default false");
         println!("option name UCI_Chess960 type check default false");
+        println!("option name UCI_Variant type combo default chess var chess var atomic");
         println!(
             "option name SyzygyPath type string default {}",
             if self.syzygy_path.is_empty() {
@@ -54,6 +65,13 @@ impl EngineOptions {
             }
             "uci_chess960" => {
                 self.chess960 = value.trim().eq_ignore_ascii_case("true");
+            }
+            "uci_variant" => {
+                self.variant = if value.trim().eq_ignore_ascii_case("atomic") {
+                    UciVariant::Atomic
+                } else {
+                    UciVariant::Chess
+                };
             }
             "syzygypath" => {
                 // UCI-Konvention: "<empty>" bedeutet kein Pfad.

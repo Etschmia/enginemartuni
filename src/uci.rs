@@ -1,8 +1,9 @@
 use crate::backend::EngineBoard;
+use crate::board_atomic::BoardAtomic;
 use crate::board960::Board960;
 use crate::config::Config;
 use crate::eval_config::EvalParams;
-use crate::options::EngineOptions;
+use crate::options::{EngineOptions, UciVariant};
 use crate::polyglot::BookSet;
 use crate::position::{move_to_uci, Position};
 use crate::search::{search, GoParams, SearchRequest};
@@ -20,8 +21,8 @@ pub fn uci_loop() {
     let eval_params = Arc::new(EvalParams::load());
     let tt = Arc::new(Mutex::new(TranspositionTable::new(cfg.hash_size_mb)));
 
-    // Aktives Spiel je nach Modus: Standard (chess-Crate) oder Chess960
-    // (shakmaty-Backend). Umschalten via `setoption UCI_Chess960`.
+    // Aktives Spiel je nach Modus: Standard, Chess960 oder Atomic.
+    // Umschalten via `UCI_Chess960` bzw. `UCI_Variant`.
     let mut position = GamePos::Std(Position::new());
     let mut options = EngineOptions::from_config(&cfg);
     // Tablebase-Handle: None solange kein SyzygyPath gesetzt ist (→ Engine
@@ -66,16 +67,16 @@ pub fn uci_loop() {
                     let old_hash = options.hash;
                     let old_syzygy_path = options.syzygy_path.clone();
                     let old_960 = options.chess960;
+                    let old_variant = options.variant;
                     options.set_option(&name, &value);
-                    if options.chess960 != old_960 {
+                    if options.chess960 != old_960 || options.variant != old_variant {
                         // Backend-Wechsel: Position auf Startstellung des neuen
                         // Modus zuruecksetzen (die konkrete Stellung kommt per
                         // `position`-Kommando ohnehin neu).
-                        position = if options.chess960 {
-                            GamePos::Frc(Position::new())
-                        } else {
-                            GamePos::Std(Position::new())
-                        };
+                        position = new_game_pos(&options);
+                        // Gleiche Brettbelegung hat zwischen Regelvarianten
+                        // denselben Zobrist-Key, aber nicht denselben Wert.
+                        tt.lock().unwrap().clear();
                     }
                     if options.hash != old_hash {
                         let mut t = tt.lock().unwrap();
@@ -95,6 +96,7 @@ pub fn uci_loop() {
                 match &mut position {
                     GamePos::Std(p) => p.set_startpos(),
                     GamePos::Frc(p) => p.set_startpos(),
+                    GamePos::Atomic(p) => p.set_startpos(),
                 }
                 tt.lock().unwrap().clear();
             }
@@ -102,6 +104,7 @@ pub fn uci_loop() {
                 match &mut position {
                     GamePos::Std(p) => handle_position(p, &tokens),
                     GamePos::Frc(p) => handle_position(p, &tokens),
+                    GamePos::Atomic(p) => handle_position(p, &tokens),
                 }
             }
             "go" => {
@@ -122,6 +125,10 @@ pub fn uci_loop() {
                         p, params, &tt, &book, &eval_params, &stop, &pondering,
                         options.move_overhead, &syzygy,
                     ),
+                    GamePos::Atomic(p) => spawn_search(
+                        p, params, &tt, &book, &eval_params, &stop, &pondering,
+                        options.move_overhead, &syzygy,
+                    ),
                 });
             }
             "eval" => {
@@ -133,6 +140,9 @@ pub fn uci_loop() {
                         crate::eval::print_eval_breakdown(p.board(), &eval_params)
                     }
                     GamePos::Frc(p) => {
+                        crate::eval::print_eval_breakdown(p.board(), &eval_params)
+                    }
+                    GamePos::Atomic(p) => {
                         crate::eval::print_eval_breakdown(p.board(), &eval_params)
                     }
                 }
@@ -192,12 +202,21 @@ fn load_syzygy(path: &str) -> Option<Arc<Syzygy>> {
     }
 }
 
-/// Aktives Spiel: Standard- oder Chess960-Backend. Ein Enum statt eines
+/// Aktives Spiel: Standard-, Chess960- oder Atomic-Backend. Ein Enum statt eines
 /// Trait-Objekts, weil die Suche generisch (monomorphisiert) laeuft und die
 /// wenigen Dispatch-Stellen hier im UCI-Loop liegen.
 enum GamePos {
     Std(Position<Board>),
     Frc(Position<Board960>),
+    Atomic(Position<BoardAtomic>),
+}
+
+fn new_game_pos(options: &EngineOptions) -> GamePos {
+    match (options.variant, options.chess960) {
+        (UciVariant::Atomic, _) => GamePos::Atomic(Position::new()),
+        (UciVariant::Chess, true) => GamePos::Frc(Position::new()),
+        (UciVariant::Chess, false) => GamePos::Std(Position::new()),
+    }
 }
 
 /// Startet den Such-Thread fuer ein beliebiges Backend.

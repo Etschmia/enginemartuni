@@ -1,4 +1,5 @@
 mod backend;
+mod board_atomic;
 mod board960;
 mod config;
 mod endgame;

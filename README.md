@@ -57,6 +57,15 @@ Martuni implements the full UCI protocol, including:
 - `uci`, `isready`, `ucinewgame`, `position`, `go`, `stop`, `quit`
 - `go ponder` / `ponderhit`
 - `setoption` for Hash, MoveOverhead, Ponder
+- `UCI_Chess960` for Fischer Random Chess
+- `UCI_Variant` with `chess` and `atomic`
+
+### Variants
+
+Martuni plays standard chess, Chess960, and Atomic Chess. Atomic move legality,
+explosions, checks, castling, en passant, and king-explosion wins use the
+`shakmaty` rules backend. Opening books and orthodox Syzygy tablebases are
+disabled automatically in Atomic mode.
 
 It works with any UCI-compatible GUI: [Arena](http://www.playwitharena.de/), [Cute Chess](https://cutechess.com/), [Lucas Chess](https://lucaschess.pythonanywhere.com/), [BanksiaGUI](https://banksiagui.com/), etc.
 

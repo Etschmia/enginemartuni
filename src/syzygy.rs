@@ -240,7 +240,8 @@ impl Syzygy {
     /// Gemeinsame Probe-Vorbedingungen (Syzygy): Steinzahl ≤ `max_pieces`, keine
     /// Rochaderechte, kein en passant (v1). Genutzt von WDL- und DTZ-Probe.
     fn probeable<B: EngineBoard>(&self, board: &B) -> bool {
-        board.combined().popcnt() <= self.max_pieces
+        board.uses_standard_rules()
+            && board.combined().popcnt() <= self.max_pieces
             && !board.has_castle_rights()
             && board.en_passant().is_none()
     }

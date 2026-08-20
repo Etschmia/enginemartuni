@@ -17,8 +17,10 @@ const MAX_PHASE: i32 = 24;
 ///  - Getaperter PST-Beitrag (mg/eg interpoliert nach Spielphase)
 pub fn evaluate<B: EngineBoard>(board: &B, p: &EvalParams) -> i32 {
     // Bekannte Endspiele uebernehmen die Bewertung komplett.
-    if let Some(s) = endgame::endgame_score(board, p) {
-        return s;
+    if board.uses_standard_rules() {
+        if let Some(s) = endgame::endgame_score(board, p) {
+            return s;
+        }
     }
 
     let (w_mg, w_eg) = pst_score(board, Color::White);

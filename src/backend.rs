@@ -68,6 +68,21 @@ pub trait EngineBoard: Clone + Send + Sync + 'static {
     fn null_move(&self) -> Option<Self>;
     fn legal_gen(&self) -> Self::Gen;
 
+    /// `true` fuer Varianten, deren Taktik/Endspiele nicht den orthodoxen
+    /// Schachregeln folgen. Damit koennen Suche, SEE und Tablebases ihre
+    /// Standard-Annahmen gezielt abschalten, ohne den Standard-/960-Pfad zu
+    /// veraendern.
+    fn uses_standard_rules(&self) -> bool {
+        true
+    }
+
+    /// Varianten-Niederlage der Seite am Zug (z. B. explodierter Koenig in
+    /// Atomic). Orthodoxes Matt wird weiterhin ueber `checkers + 0 Zuege`
+    /// erkannt.
+    fn is_variant_loss(&self) -> bool {
+        false
+    }
+
     /// Schlagzug? (inkl. en passant; Rochade zaehlt NICHT als Schlag,
     /// obwohl sie im 960-Backend als "Koenig x eigener Turm" codiert ist).
     fn is_capture(&self, mv: ChessMove) -> bool;
