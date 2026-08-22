@@ -4,6 +4,7 @@ use crate::config::Config;
 pub enum UciVariant {
     Chess,
     Atomic,
+    Crazyhouse,
 }
 
 pub struct EngineOptions {
@@ -40,7 +41,7 @@ impl EngineOptions {
         println!("option name MoveOverhead type spin default 10 min 0 max 5000");
         println!("option name Ponder type check default false");
         println!("option name UCI_Chess960 type check default false");
-        println!("option name UCI_Variant type combo default chess var chess var atomic");
+        println!("option name UCI_Variant type combo default chess var chess var atomic var crazyhouse");
         println!(
             "option name SyzygyPath type string default {}",
             if self.syzygy_path.is_empty() {
@@ -67,10 +68,10 @@ impl EngineOptions {
                 self.chess960 = value.trim().eq_ignore_ascii_case("true");
             }
             "uci_variant" => {
-                self.variant = if value.trim().eq_ignore_ascii_case("atomic") {
-                    UciVariant::Atomic
-                } else {
-                    UciVariant::Chess
+                self.variant = match value.trim().to_ascii_lowercase().as_str() {
+                    "atomic" => UciVariant::Atomic,
+                    "crazyhouse" => UciVariant::Crazyhouse,
+                    _ => UciVariant::Chess,
                 };
             }
             "syzygypath" => {

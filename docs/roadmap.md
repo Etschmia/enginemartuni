@@ -10,6 +10,22 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**22.08.2026 — Crazyhouse implementiert.**
+- Neues `BoardCrazyhouse`-Backend auf `shakmaty`: regelkonforme Taschen,
+  Drops (`N@f7`), Rueckverwandlung geschlagener Promotionsfiguren, FEN und
+  UCI-Zugparsing; Aktivierung ueber `UCI_Variant crazyhouse`.
+- Drops werden kollisionsfrei in Martunis bestehendem Zugtyp transportiert.
+  Suche und UCI-Ausgabe erkennen die Codierung; schachgebende Drops gehen in
+  die erste Quiescence-Lage ein.
+- Taschenmaterial fliesst in Bewertung, Spielphase und Varianten-SEE ein.
+  Orthodoxe Endspiel-, RFP-, NMP-, Polyglot- und Syzygy-Annahmen bleiben im
+  Crazyhouse-Pfad deaktiviert.
+- Verifikation: Adapter-Perft gegen shakmaty, Taschen-/Drop-/UCI-Tests,
+  Matt-in-1 per Damendrop und Gesamtsuite gruen.
+- **Live 22.08. 15:21:** `crazyhouse` in der ignorierten Operator-`config.yml`
+  des lichess-bot freigeschaltet und der spielfreie Dienst neu gestartet.
+  Engine-Config OK; Wiederverbindung zu Lichess innerhalb ~1 s.
+
 **20.08.2026 — Atomic Chess implementiert.**
 - Neues `BoardAtomic`-Backend auf dem bereits fuer Chess960 genutzten
   `shakmaty`: regelkonforme Explosionen, Koenigslegalitaet, Rochade, en passant,

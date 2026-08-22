@@ -83,9 +83,28 @@ pub trait EngineBoard: Clone + Send + Sync + 'static {
         false
     }
 
+    /// Crazyhouse-Drop? Drop-Zuege werden in der gemeinsamen `ChessMove`-
+    /// Sprache als `to -> to` mit der eingesetzten Figur im Promotion-Feld
+    /// codiert. Andere Backends liefern immer `false`.
+    fn is_drop(&self, _mv: ChessMove) -> bool {
+        false
+    }
+
+    /// Anzahl einer Figur in der Crazyhouse-Tasche. Orthodoxe Backends und
+    /// Atomic haben keine Taschen.
+    fn pocket_count(&self, _color: Color, _piece: Piece) -> u8 {
+        0
+    }
+
     /// Schlagzug? (inkl. en passant; Rochade zaehlt NICHT als Schlag,
     /// obwohl sie im 960-Backend als "Koenig x eigener Turm" codiert ist).
     fn is_capture(&self, mv: ChessMove) -> bool;
+
+    /// Setzt der Zug den Halbzugzaehler zurueck? Neben Captures und
+    /// Bauernzuegen zaehlen in Crazyhouse auch Drops als zeroing moves.
+    fn resets_halfmove(&self, mv: ChessMove) -> bool {
+        self.is_capture(mv) || self.piece_on(mv.get_source()) == Some(Piece::Pawn)
+    }
 
     /// Hat irgendeine Seite noch Rochaderechte? (Syzygy-Gate)
     fn has_castle_rights(&self) -> bool;

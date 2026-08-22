@@ -1,5 +1,6 @@
 use crate::backend::EngineBoard;
 use crate::board_atomic::BoardAtomic;
+use crate::board_crazyhouse::BoardCrazyhouse;
 use crate::board960::Board960;
 use crate::config::Config;
 use crate::eval_config::EvalParams;
@@ -21,7 +22,7 @@ pub fn uci_loop() {
     let eval_params = Arc::new(EvalParams::load());
     let tt = Arc::new(Mutex::new(TranspositionTable::new(cfg.hash_size_mb)));
 
-    // Aktives Spiel je nach Modus: Standard, Chess960 oder Atomic.
+    // Aktives Spiel je nach Modus: Standard, Chess960, Atomic oder Crazyhouse.
     // Umschalten via `UCI_Chess960` bzw. `UCI_Variant`.
     let mut position = GamePos::Std(Position::new());
     let mut options = EngineOptions::from_config(&cfg);
@@ -97,6 +98,7 @@ pub fn uci_loop() {
                     GamePos::Std(p) => p.set_startpos(),
                     GamePos::Frc(p) => p.set_startpos(),
                     GamePos::Atomic(p) => p.set_startpos(),
+                    GamePos::Crazyhouse(p) => p.set_startpos(),
                 }
                 tt.lock().unwrap().clear();
             }
@@ -105,6 +107,7 @@ pub fn uci_loop() {
                     GamePos::Std(p) => handle_position(p, &tokens),
                     GamePos::Frc(p) => handle_position(p, &tokens),
                     GamePos::Atomic(p) => handle_position(p, &tokens),
+                    GamePos::Crazyhouse(p) => handle_position(p, &tokens),
                 }
             }
             "go" => {
@@ -129,6 +132,10 @@ pub fn uci_loop() {
                         p, params, &tt, &book, &eval_params, &stop, &pondering,
                         options.move_overhead, &syzygy,
                     ),
+                    GamePos::Crazyhouse(p) => spawn_search(
+                        p, params, &tt, &book, &eval_params, &stop, &pondering,
+                        options.move_overhead, &syzygy,
+                    ),
                 });
             }
             "eval" => {
@@ -143,6 +150,9 @@ pub fn uci_loop() {
                         crate::eval::print_eval_breakdown(p.board(), &eval_params)
                     }
                     GamePos::Atomic(p) => {
+                        crate::eval::print_eval_breakdown(p.board(), &eval_params)
+                    }
+                    GamePos::Crazyhouse(p) => {
                         crate::eval::print_eval_breakdown(p.board(), &eval_params)
                     }
                 }
@@ -202,18 +212,20 @@ fn load_syzygy(path: &str) -> Option<Arc<Syzygy>> {
     }
 }
 
-/// Aktives Spiel: Standard-, Chess960- oder Atomic-Backend. Ein Enum statt eines
+/// Aktives Spiel: Standard-, Chess960-, Atomic- oder Crazyhouse-Backend. Ein Enum statt eines
 /// Trait-Objekts, weil die Suche generisch (monomorphisiert) laeuft und die
 /// wenigen Dispatch-Stellen hier im UCI-Loop liegen.
 enum GamePos {
     Std(Position<Board>),
     Frc(Position<Board960>),
     Atomic(Position<BoardAtomic>),
+    Crazyhouse(Position<BoardCrazyhouse>),
 }
 
 fn new_game_pos(options: &EngineOptions) -> GamePos {
     match (options.variant, options.chess960) {
         (UciVariant::Atomic, _) => GamePos::Atomic(Position::new()),
+        (UciVariant::Crazyhouse, _) => GamePos::Crazyhouse(Position::new()),
         (UciVariant::Chess, true) => GamePos::Frc(Position::new()),
         (UciVariant::Chess, false) => GamePos::Std(Position::new()),
     }

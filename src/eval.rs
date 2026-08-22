@@ -53,8 +53,12 @@ pub fn evaluate<B: EngineBoard>(board: &B, p: &EvalParams) -> i32 {
         + pawn_eg_guard
         + mob
         + trap
-        + material_imbalance(board, phase, p)
-        + material_deficit_damping(board, phase, p, w_eg, b_eg)
+        + if board.uses_standard_rules() {
+            material_imbalance(board, phase, p)
+                + material_deficit_damping(board, phase, p, w_eg, b_eg)
+        } else {
+            0
+        }
 }
 
 /// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
@@ -69,10 +73,15 @@ pub fn taper(mg: i32, eg: i32, phase: i32) -> i32 {
 /// Turm 2, Dame 4. Startpos = 24, reines KvK-Endspiel = 0.
 #[inline]
 pub fn game_phase<B: EngineBoard>(board: &B) -> i32 {
-    let knights = board.pieces(Piece::Knight).popcnt() as i32;
-    let bishops = board.pieces(Piece::Bishop).popcnt() as i32;
-    let rooks = board.pieces(Piece::Rook).popcnt() as i32;
-    let queens = board.pieces(Piece::Queen).popcnt() as i32;
+    let in_play = |piece: Piece| {
+        board.pieces(piece).popcnt() as i32
+            + board.pocket_count(Color::White, piece) as i32
+            + board.pocket_count(Color::Black, piece) as i32
+    };
+    let knights = in_play(Piece::Knight);
+    let bishops = in_play(Piece::Bishop);
+    let rooks = in_play(Piece::Rook);
+    let queens = in_play(Piece::Queen);
     (knights + bishops + 2 * rooks + 4 * queens).min(MAX_PHASE)
 }
 
@@ -273,6 +282,11 @@ fn evaluate_side<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, phase: i3
         }
     }
 
+    // In Crazyhouse bleibt geschlagenes Material als sofort einsetzbare
+    // Reserve im Spiel. Ohne diesen Term wuerde die Engine Captures zwar in
+    // der Suche sehen, den eigentlichen Taschenwert am Blatt aber verlieren.
+    score += pocket_material_score(board, us, p, phase, own_pawn_count, total_pawn_count);
+
     // Laeuferpaar — Schritt 3 der dynamischen Figurenbewertung (16.05.2026):
     // statt konstantem `2 * bishop_pair_each` (=30) jetzt phasen-getapert,
     // Endspiel-Pol zusaetzlich nach Brett-Offenheit moduliert (mehr fehlende
@@ -307,6 +321,23 @@ fn evaluate_side<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, phase: i3
     score += king_safety_with_phase(board, us, p, phase);
 
     score
+}
+
+fn pocket_material_score<B: EngineBoard>(
+    board: &B,
+    us: Color,
+    p: &EvalParams,
+    phase: i32,
+    own_pawn_count: i32,
+    total_pawn_count: i32,
+) -> i32 {
+    [Piece::Pawn, Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen]
+        .iter()
+        .map(|&piece| {
+            board.pocket_count(us, piece) as i32
+                * piece_material(piece, p, phase, own_pawn_count, total_pawn_count)
+        })
+        .sum()
 }
 
 /// Gesamt-Beitrag der King-Safety-Logik aus Sicht von `us`.
@@ -1543,6 +1574,7 @@ fn evaluate_side_breakdown<B: EngineBoard>(
             _ => {}
         }
     }
+    b.material += pocket_material_score(board, us, p, phase, own_pawn_count, total_pawn_count);
 
     // Step-3-Spiegelung der `evaluate_side`-Logik fuer den Debug-Breakdown.
     let our_bishops = *board.pieces(Piece::Bishop) & our_bb;
@@ -1580,10 +1612,12 @@ pub fn evaluate_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) -> EvalBrea
     let mut bd = EvalBreakdown::default();
     bd.phase = game_phase(board);
 
-    if let Some(s) = endgame::endgame_score(board, p) {
-        bd.endgame_override = Some(s);
-        bd.total = s;
-        return bd;
+    if board.uses_standard_rules() {
+        if let Some(s) = endgame::endgame_score(board, p) {
+            bd.endgame_override = Some(s);
+            bd.total = s;
+            return bd;
+        }
     }
 
     bd.white = evaluate_side_breakdown(board, Color::White, p, bd.phase);
@@ -1615,10 +1649,18 @@ pub fn evaluate_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) -> EvalBrea
         bd.black_endgame_guard_raw = side_pawn_endgame_guard(board, Color::Black, p);
     }
     bd.pawn_endgame_guard = pawn_endgame_guard(board, bd.phase, p);
-    bd.imbalance = material_imbalance(board, bd.phase, p);
+    bd.imbalance = if board.uses_standard_rules() {
+        material_imbalance(board, bd.phase, p)
+    } else {
+        0
+    };
     // Gleiche Roh-PST-eg-Summen wie evaluate() (hier aus dem Breakdown), damit
     // beide Pfade denselben Daempfungswert ergeben (Konsistenz-Check unten).
-    bd.damping = material_deficit_damping(board, bd.phase, p, bd.white.pst_eg, bd.black.pst_eg);
+    bd.damping = if board.uses_standard_rules() {
+        material_deficit_damping(board, bd.phase, p, bd.white.pst_eg, bd.black.pst_eg)
+    } else {
+        0
+    };
 
     // Summe aller Per-Side-Terme (so wie evaluate_side sie addiert), als Differenz.
     let side_sum_white = bd.white.material
@@ -1766,6 +1808,7 @@ pub fn print_eval_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board_crazyhouse::BoardCrazyhouse;
     use chess::Board;
     use std::str::FromStr;
 
@@ -1785,6 +1828,14 @@ mod tests {
         let score = evaluate(&b, &p);
         // 8 Bauern minus Symmetrie erwartet > 0
         assert!(score > 0, "expected white advantage, got {score}");
+    }
+
+    #[test]
+    fn crazyhouse_pocket_material_is_evaluated() {
+        let b = BoardCrazyhouse::from_fen("4k3/8/8/8/8/8/8/4K3[Q] w - - 0 1").unwrap();
+        let p = EvalParams::default();
+        assert!(evaluate(&b, &p) >= p.queen);
+        assert_eq!(game_phase(&b), 4);
     }
 
     #[test]

@@ -59,12 +59,11 @@ impl<B: EngineBoard> Position<B> {
     pub fn apply_moves(&mut self, moves: &[&str]) -> Result<(), String> {
         for uci_move in moves {
             let m = self.board.parse_uci_move(uci_move)?;
-            let is_capture = self.board.is_capture(m);
-            let is_pawn_move = self.board.piece_on(m.get_source()) == Some(Piece::Pawn);
+            let resets_halfmove = self.board.resets_halfmove(m);
 
             self.board = self.board.make_move_new(m);
 
-            if is_capture || is_pawn_move {
+            if resets_halfmove {
                 // Irreversibler Zug — Historie kann geleert werden
                 self.halfmove_clock = 0;
                 self.hash_history.clear();
@@ -81,6 +80,22 @@ impl<B: EngineBoard> Position<B> {
 /// Rochade als "Koenig x eigener Turm" codiert, was gedruckt genau der
 /// UCI_Chess960-Notation entspricht (z. B. `e1h1`).
 pub fn move_to_uci(m: ChessMove) -> String {
+    // Crazyhouse-Drop-Encoding des gemeinsamen Zugtyps: Zielfeld steht in
+    // Quelle und Ziel, die Drop-Figur im sonst fuer Promotions verwendeten
+    // Feld. Kein legaler Brettzug kann Quelle == Ziel haben.
+    if m.get_source() == m.get_dest() {
+        if let Some(piece) = m.get_promotion() {
+            let ch = match piece {
+                Piece::Pawn => 'P',
+                Piece::Knight => 'N',
+                Piece::Bishop => 'B',
+                Piece::Rook => 'R',
+                Piece::Queen => 'Q',
+                Piece::King => 'K',
+            };
+            return format!("{}@{}", ch, m.get_dest());
+        }
+    }
     let mut s = format!("{}{}", m.get_source(), m.get_dest());
     if let Some(promo) = m.get_promotion() {
         let ch = match promo {

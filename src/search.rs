@@ -872,12 +872,11 @@ fn alpha_beta<B: EngineBoard>(
         // Damit muss die irreversible-Zug-Pruefung hier nicht noch einmal
         // dieselbe Capture-Logik wiederholen; fuer die 50-Zuege-Regel fehlt
         // nur noch der Bauernzug-Test.
-        let new_halfmove =
-            if sm.see_val.is_some() || board.piece_on(mv.get_source()) == Some(Piece::Pawn) {
-                0
-            } else {
-                halfmove.saturating_add(1)
-            };
+        let new_halfmove = if board.resets_halfmove(mv) {
+            0
+        } else {
+            halfmove.saturating_add(1)
+        };
 
         // --- Principal Variation Search (PVS) -----------------------------
         // Annahme: durch gute Move-Ordering ist der erste Zug aller
@@ -1222,6 +1221,16 @@ fn quiescence<B: EngineBoard>(
 
     legal_moves.set_iterator_mask(!EMPTY);
     for mv in legal_moves {
+        // Crazyhouse-Drops sind keine Captures und wurden von der ersten
+        // Maskenphase daher nicht ausgegeben. Schachgebende Drops gehoeren
+        // wie orthodoxe Quiet-Checks in die erste Quiescence-Lage.
+        if qply == 0 && board.is_drop(mv) {
+            let nb = board.make_move_new(mv);
+            if nb.checkers().popcnt() > 0 {
+                tactical.push((mv, None, 1));
+            }
+            continue;
+        }
         if is_quiet_queen_promotion(board, mv) {
             tactical.push((mv, None, -10_000));
             continue;
@@ -1359,7 +1368,7 @@ fn has_non_pawn_material<B: EngineBoard>(board: &B, side: Color) -> bool {
 
 #[inline]
 fn is_quiet_queen_promotion<B: EngineBoard>(board: &B, mv: ChessMove) -> bool {
-    mv.get_promotion() == Some(Piece::Queen) && !board.is_capture(mv)
+    !board.is_drop(mv) && mv.get_promotion() == Some(Piece::Queen) && !board.is_capture(mv)
 }
 
 /// Late-Move-Reductions-Stufenformel (Variante A).
@@ -1530,6 +1539,13 @@ impl<'a, B: EngineBoard> MovePicker<'a, B> {
                 });
             } else if board.is_capture(mv) {
                 captures.push(mv);
+            } else if board.is_drop(mv) {
+                let h = move_history[history_idx(stm, mv.get_source(), mv.get_dest())];
+                quiets.push(ScoredMove {
+                    mv,
+                    order_key: -h,
+                    see_val: None,
+                });
             } else if mv.get_promotion() == Some(Piece::Queen) {
                 queen_promos.push(mv);
             } else if Some(mv) == killers[0] {
@@ -1824,7 +1840,7 @@ pub fn see<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
     // Materialsaldo nach shakmatys regelkonformem Zug die passende statische
     // Ordnungs-/Pruning-Schaetzung.
     if !board.uses_standard_rules() {
-        return atomic_capture_value(board, mv);
+        return variant_capture_value(board, mv);
     }
 
     let target = mv.get_dest();
@@ -1909,7 +1925,7 @@ pub fn see<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
     gain[0]
 }
 
-fn atomic_capture_value<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
+fn variant_capture_value<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
     fn material<B: EngineBoard>(board: &B, color: Color) -> i32 {
         let ours = *board.color_combined(color);
         [
@@ -1921,7 +1937,11 @@ fn atomic_capture_value<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
             Piece::King,
         ]
         .iter()
-        .map(|&piece| (board.pieces(piece) & ours).popcnt() as i32 * see_piece_value(piece))
+        .map(|&piece| {
+            ((board.pieces(piece) & ours).popcnt() as i32
+                + board.pocket_count(color, piece) as i32)
+                * see_piece_value(piece)
+        })
         .sum()
     }
 
@@ -2008,6 +2028,7 @@ fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Du
 mod tests {
     use super::*;
     use crate::board_atomic::BoardAtomic;
+    use crate::board_crazyhouse::BoardCrazyhouse;
     use chess::{Board, MoveGen};
 
     // Repetition-Helper: pruefe die vier relevanten Faelle einzeln.
@@ -2222,6 +2243,32 @@ mod tests {
             syzygy: None,
         };
         let result = search(req).expect("Atomic-Suche liefert einen Zug");
+        assert_eq!(result.best, winning);
+        assert!(result.score > MATE_THRESHOLD);
+    }
+
+    #[test]
+    fn crazyhouse_search_plays_mating_queen_drop() {
+        let board = BoardCrazyhouse::from_fen("7k/8/6K1/8/8/8/8/8[Q] w - - 0 1").unwrap();
+        let winning = board.parse_uci_move("Q@g7").unwrap();
+        let req = SearchRequest {
+            history: vec![board.get_hash()],
+            board,
+            halfmove_clock: 0,
+            params: GoParams {
+                depth: Some(2),
+                movetime: Some(10_000),
+                ..GoParams::default()
+            },
+            tt: Arc::new(Mutex::new(TranspositionTable::new(1))),
+            book: Arc::new(BookSet::load(Path::new("."), &[])),
+            eval: Arc::new(EvalParams::default()),
+            stop: Arc::new(AtomicBool::new(false)),
+            pondering: Arc::new(AtomicBool::new(false)),
+            move_overhead: 0,
+            syzygy: None,
+        };
+        let result = search(req).expect("Crazyhouse-Suche liefert einen Zug");
         assert_eq!(result.best, winning);
         assert!(result.score > MATE_THRESHOLD);
     }
