@@ -2,36 +2,79 @@
 
 Gesammelte Ideen auf Basis von `CLAUDE.md`, `README.md` und `docs/roadmap.md`.
 
+**Stand: 01.09.2026** — Status je Punkt aktualisiert nach Abgleich mit dem
+Code. Legende: **[done]** umgesetzt, **[verworfen]** gemessen & negativ,
+**[offen]** noch nicht angegangen, **[teilweise]** Grundlage da, Ausbau offen.
+
 ## 1. Suche effizienter machen
 
-- **Aspiration Windows** – Suche mit schmalem Fenster um den vorherigen Score starten; nur bei Fail-High/Low erweitern. Bereits in `docs/aspiration-windows.md` diskutiert.
-- **Adaptive Null-Move-Pruning** – Statt fixem `R = 2` z. B. `R = 2 + depth/6` plus **Verification Search**, um Zugzwang-Risiken weiter zu reduzieren. Steht in der Roadmap.
-- **Static Exchange Evaluation (SEE)** – Bessere Ordering von Schlagzügen und sicheres Prunen schlechter Schläger. Siehe `docs/see.md`.
-- **History Heuristic / Countermove Heuristic** – Leise Züge besser ordnen, damit LMR und Pruning wirksamer werden.
-- **Futility Pruning / Razoring / Reverse Futility** – Günstige Abbruchkriterien an den Blättern.
-- **Singular Extensions / Multi-Cut** – Selektive Erweiterungen in offensichtlich einzigen Zugstellungen.
+- **[verworfen] Aspiration Windows** – Implementiert und 16.05.2026
+  smoke-getestet: Re-Search-Quote 102 %, −2 Plies Gesamttiefe, Regression auf
+  der Schlüsselstellung W5AboGf0. Befund in `docs/aspiration-windows.md`.
+- **[teilweise] Adaptive Null-Move-Pruning** – NMP ist drin, aber mit
+  konstantem `R = 2`; adaptive Variante (`R = 2 + depth/6`) und Verification
+  Search stehen weiter in der Roadmap (aktuell „kein Druck").
+- **[done] Static Exchange Evaluation (SEE)** – Vollständig in `src/search.rs`:
+  Ordering gewinnender/verlierender Captures, SEE-Pruning in Hauptsuche
+  (depth ≤ 2) und Quiescence, `see_quiet` für Schachzüge. Siehe `docs/see.md`.
+- **[done] History Heuristic / Countermove Heuristic** – History seit langem
+  drin; **Countermove am 01.09.2026 umgesetzt**: Tabelle `[side][from][to]`
+  über den Gegnerzug indiziert, Cutoff-Quiets werden eingetragen, im
+  MovePicker als Stufe 5 direkt hinter den Killers sortiert. Off-Schalter
+  `MARTUNI_CM_OFF=1` (Konvention wie NMP/RFP). A/B-Match (SPRT) steht aus.
+- **[teilweise] Futility Pruning / Razoring / Reverse Futility** – RFP seit
+  16.08.2026 live (depth ≤ 3, Margin 120 cp/Tiefe). Klassisches
+  Futility-Pruning am Blatt und Razoring weiter offen.
+- **[offen] Singular Extensions / Multi-Cut** – Selektive Erweiterungen in
+  offensichtlich einzigen Zugstellungen. Hoher Aufwand, bisher nicht angefasst.
 
 ## 2. Bewertungsfunktion ausbauen
 
-- **Dynamische Figurenwerte** – Springer/Läufer phasenabhängig, Laufbauer-Anpassungen, dynamischer Läuferpaar-Bonus. Bereits in der Roadmap.
-- **Pawn-Structure-Terme** – Doppelte, isolierte, rückständige und Freibauern bewerten.
-- **Feinere Mobilität** – Pro Figurentyp und Feld statt nur linearer Safe-Mobility.
-- **Besseres King Safety** – Pawn-Storm, Pawn-Shield-Lücken, Flügelangriffe.
-- **Bedrohungen / Hängende Figuren** – Ungedeckte Figuren, Angriffe auf höherwertige Steine.
-- **Raumvorteil / Outposts / Läufer- vs. Springer-Parameter** je nach Stellungstyp.
+- **[done] Dynamische Figurenwerte** – Dynmat Step 1–3 live, inkl.
+  phasen-getapertem Läuferpaar-Bonus mit Offenheits-Skala
+  (`bishop_pair_mg/eg`, `bp_open_scale`) und Low-Mobility-Staffel-Malus.
+- **[teilweise] Pawn-Structure-Terme** – Isolierte und Freibauern (per Rang)
+  sind drin; **rückständige Bauern (Backward Pawns) offen** (Roadmap).
+- **[done] Feinere Mobilität** – Pro Figurentyp getrennte MG/EG-Mobilität auf
+  Safe-Squares (`mobility_score` in `src/eval.rs`).
+- **[teilweise] Besseres King Safety** – Pawn-Shield drin; Pawn-Storm und
+  Flügelangriffe fehlen.
+- **[teilweise] Bedrohungen / Hängende Figuren** – `heavy_piece_threat` deckt
+  einen binären Fall ab; allgemeine „hängende Figur / Angriff auf
+  höherwertigen Stein"-Terme fehlen.
+- **[teilweise] Raumvorteil / Outposts** – Springer-Outposts drin; Raumvorteil
+  (Space) fehlt.
 
 ## 3. Zeitmanagement und Ausrüstung
 
-- **Bessere Zeitverteilung** – Proportionale Budgetierung mit `MoveOverhead` und Increment statt einfacher gleichmäßiger Aufteilung.
-- **TT stärker nutzen** – Für Null-Move-Verifikation und Ponder-Move-Auswahl.
-- **Opening-Book verbessern** – Größere/qualitativ bessere Polyglot-Books und ein diverser Zugauswahlmechanismus.
+- **[offen] Bessere Zeitverteilung** – Immer noch einfaches
+  `remaining/30 + 0.8·inc` mit Overhead-Deckel (`calculate_think_time` in
+  `src/search.rs`). Keine Phasen-/Komplexitäts-Abhängigkeit.
+- **[teilweise] TT stärker nutzen** – TT-Move-Ordering und Ponder-Move aus TT
+  drin; NMP-Verifikation via TT offen.
+- **[teilweise] Opening-Book verbessern** – Polyglot-Set plus Patch-Buch
+  (`tools/build_book_patches.py`) werden laufend gepflegt; diverser
+  Zugauswahlmechanismus offen.
 
 ## 4. Mess- und Test-Infrastruktur konsequent nutzen
 
-- Jede Änderung zuerst als **A/B-Test** gegen die aktuelle Version.
-- **Regressions- und Progressionstests** in Standardstellungen und Chess960.
-- `docs/blunder-analyse.md`-Toolchain nutzen, um gezielt die größten Schwächen anzugehen.
+- **[done, als Prozess etabliert]** A/B-Tests via fastchess-SPRT
+  (`matches/`), Smoke-Tests vor Rollout, `docs/blunder-analyse.md`-Toolchain
+  mit Cluster-Klassifikation und Lichess-Lookbacks. Konvention: Off-Schalter
+  per Env-Var (`MARTUNI_NMP_OFF`, `MARTUNI_RFP_OFF`, `MARTUNI_CM_OFF`).
 
-## Kurzfristige Empfehlung
+## Kurzfristige Empfehlung (Stand 01.09.2026)
 
-Die nächsten relativ sicheren Elo-Gewinne dürften bei **Aspiration Windows**, **SEE** und **dynamischen Figurenwerten / Läuferpaar-Bonus** liegen, da diese die bestehende Architektur nicht umkrempeln, aber Suchtiefe und Eval-Qualität spürbar verbessern.
+Die ursprünglichen drei Empfehlungen sind erledigt (Aspiration verworfen,
+SEE und dynamische Figurenwerte live). Als nächste Hebel mit gutem
+Chance-Risiko-Verhältnis bleiben:
+
+1. **Countermove Heuristic** – heute umgesetzt, SPRT-A/B als nächster Schritt.
+2. **Backward Pawns** (Eval) – der letzte klassische Pawn-Struktur-Term,
+   der noch fehlt; Roadmap-führend.
+3. **Adaptive NMP** (`R = 2 + depth/6`) – kleiner, sicherer Such-Hebel, sobald
+   die Endgame-Rate Anlass gibt.
+4. **Zeitmanagement** – einmalige Investition, wirkt auf jede Partie.
+
+Singular Extensions sind der größte verbleibende Such-Hebel, aber mit
+deutlich höherem Implementierungs- und Verifikationsaufwand.

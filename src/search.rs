@@ -224,6 +224,14 @@ struct SearchState<'a> {
     // auf MAX_HISTORY). Quiet Moves werden innerhalb ihres Ordering-Bands
     // nach dem History-Score absteigend sortiert.
     move_history: Vec<i32>,
+    // Countermove-Heuristic (01.09.2026): [side][from*64 + to], indiziert
+    // ueber den ZUG DES GEGNERS (side = Seite des Vorgaengerzugs). Eintrag =
+    // der Quiet-Zug, der auf diesen Vorgaengerzug zuletzt einen Beta-Cutoff
+    // erzeugt hat. Wird im MovePicker direkt hinter den Killers einsortiert.
+    countermove: Vec<Option<ChessMove>>,
+    // Diagnose-Schalter: Countermove aus, wenn MARTUNI_CM_OFF=1
+    // (Default an seit 01.09.2026, Off-Schalter wie bei NMP/RFP).
+    cm_on: bool,
     // Optionaler Syzygy-Tablebase-Handle (None = aus) und Trefferzähler für
     // die UCI-`tbhits`-Ausgabe.
     syzygy: Option<Arc<Syzygy>>,
@@ -256,6 +264,20 @@ impl SearchState<'_> {
         let idx = history_idx(side, mv.get_source(), mv.get_dest());
         let bonus = (depth * depth).min(MAX_HISTORY);
         self.move_history[idx] = (self.move_history[idx] + bonus).min(MAX_HISTORY);
+    }
+
+    /// Merkt `reply` als Countermove auf den Gegnerzug `prev` (gespielt von
+    /// `prev_side`). Gleiche Indizierung wie die History-Tabelle, nur dass
+    /// `side/from/to` sich auf den VORGAENGERZUG beziehen.
+    fn record_countermove(&mut self, prev_side: Color, prev: ChessMove, reply: ChessMove) {
+        let idx = history_idx(prev_side, prev.get_source(), prev.get_dest());
+        self.countermove[idx] = Some(reply);
+    }
+
+    /// Der gespeicherte Countermove auf `prev` (gespielt von `prev_side`),
+    /// falls vorhanden.
+    fn countermove_for(&self, prev_side: Color, prev: Option<ChessMove>) -> Option<ChessMove> {
+        prev.and_then(|p| self.countermove[history_idx(prev_side, p.get_source(), p.get_dest())])
     }
 
     fn killers_at(&self, ply: i32) -> [Option<ChessMove>; 2] {
@@ -394,6 +416,8 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
         rfp_on: std::env::var_os("MARTUNI_RFP_OFF").is_none(),
         killers: [[None; 2]; MAX_PLY],
         move_history: vec![0; 2 * 64 * 64],
+        countermove: vec![None; 2 * 64 * 64],
+        cm_on: std::env::var_os("MARTUNI_CM_OFF").is_none(),
         syzygy: req.syzygy,
         tb_hits: 0,
     };
@@ -415,6 +439,7 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
             0,
             req.halfmove_clock,
             true, // allow_null: an der Wurzel NMP grundsaetzlich erlauben
+            None, // prev_move: an der Wurzel gibt es keinen Vorgaengerzug
             &mut state,
         );
 
@@ -530,6 +555,10 @@ fn alpha_beta<B: EngineBoard>(
     extensions_used: i32,
     halfmove: u8,
     allow_null: bool,
+    // Der Zug, der zu dieser Stellung gefuehrt hat (Gegnerzug aus Sicht des
+    // Knotens). None an der Wurzel und nach einem Null Move. Dient der
+    // Countermove-Indizierung im MovePicker.
+    prev_move: Option<ChessMove>,
     state: &mut SearchState<'_>,
 ) -> i32 {
     state.nodes += 1;
@@ -728,6 +757,7 @@ fn alpha_beta<B: EngineBoard>(
                     extensions_used,
                     halfmove.saturating_add(1),
                     false, // allow_null: nach NMP keinen weiteren Null Move
+                    None,  // prev_move: nach Null Move gibt es keinen echten Vorgaengerzug
                     state,
                 );
                 state.history.pop();
@@ -758,6 +788,13 @@ fn alpha_beta<B: EngineBoard>(
         legal_moves,
         tt_move,
         killers_here,
+        // Countermove-Lookup: der Vorgaengerzug wurde von der Gegnerseite
+        // gespielt, also mit `!side_to_move` indizieren.
+        if state.cm_on {
+            state.countermove_for(!board.side_to_move(), prev_move)
+        } else {
+            None
+        },
         &state.move_history,
     );
 
@@ -902,6 +939,7 @@ fn alpha_beta<B: EngineBoard>(
                 extensions_used + ext,
                 new_halfmove,
                 true, // allow_null
+                Some(mv),
                 state,
             )
         } else {
@@ -970,6 +1008,7 @@ fn alpha_beta<B: EngineBoard>(
                 extensions_used + ext,
                 new_halfmove,
                 true,
+                Some(mv),
                 state,
             );
 
@@ -993,6 +1032,7 @@ fn alpha_beta<B: EngineBoard>(
                     extensions_used + ext,
                     new_halfmove,
                     true,
+                    Some(mv),
                     state,
                 );
 
@@ -1016,6 +1056,7 @@ fn alpha_beta<B: EngineBoard>(
                     extensions_used + ext,
                     new_halfmove,
                     true,
+                    Some(mv),
                     state,
                 )
             } else {
@@ -1049,11 +1090,17 @@ fn alpha_beta<B: EngineBoard>(
         }
         if alpha >= beta {
             // Beta-Cutoff: wenn der kausale Zug ein Quiet-Move ist, als Killer
-            // vormerken und History-Score erhöhen. Captures und Promotionen
-            // haben eigene Sortier-Schienen und brauchen das nicht.
+            // vormerken, History-Score erhöhen und als Countermove auf den
+            // Gegnerzug eintragen. Captures und Promotionen haben eigene
+            // Sortier-Schienen und brauchen das nicht.
             if sm.see_val.is_none() && mv.get_promotion().is_none() {
                 state.record_killer(ply, mv);
                 state.record_history(board.side_to_move(), mv, depth);
+                if state.cm_on {
+                    if let Some(prev) = prev_move {
+                        state.record_countermove(!board.side_to_move(), prev, mv);
+                    }
+                }
             }
             break;
         }
@@ -1463,9 +1510,10 @@ struct ScoredMove {
 ///   2  gewinnender Capture       -40_000 + MVV/LVA   (SEE ≥ 0)
 ///   3  Killer 1                  -30_000
 ///   4  Killer 2                  -25_000
-///   5  Unterumwandlung (still)   -20_000
-///   6  ruhiger Zug              -history             (Range [-16_000, 0])
-///   7  verlierender Capture      10_000 - SEE        (SEE < 0, ganz zuletzt)
+///   5  Countermove               -22_500
+///   6  Unterumwandlung (still)   -20_000
+///   7  ruhiger Zug              -history             (Range [-16_000, 0])
+///   8  verlierender Capture      10_000 - SEE        (SEE < 0, ganz zuletzt)
 ///
 /// Warum das bit-exakt bleibt:
 ///   - Captures werden in Stufe 2 *einmal* per SEE klassifiziert; verlierende
@@ -1477,11 +1525,11 @@ struct ScoredMove {
 ///     History-Tabelle verändern kann. Nur das *Sortieren* der Quiets ist
 ///     verzögert. Damit ist die Quiet-Reihenfolge identisch zum eager-Stand.
 ///   - Die Klassifikation in `new()` folgt exakt der alten if-else-Priorität
-///     (tt > capture > Dame-Umwandlung > Killer > Unterumwandlung > quiet);
+///     (tt > capture > Dame-Umwandlung > Killer > Countermove > Unterumwandlung > quiet);
 ///     jeder Zug landet in genau einer Kategorie → kein Doppel-Ausgeben.
 struct MovePicker<'a, B: EngineBoard> {
     board: &'a B,
-    /// aktuelle Stufe (0..=8); 8 = erschöpft
+    /// aktuelle Stufe (0..=9); 9 = erschöpft
     stage: u8,
     /// Index innerhalb der gerade ausgegebenen Stufenliste
     cursor: usize,
@@ -1492,6 +1540,7 @@ struct MovePicker<'a, B: EngineBoard> {
     captures: Vec<ChessMove>,
     killer1: Option<ChessMove>,
     killer2: Option<ChessMove>,
+    countermove: Option<ChessMove>,
     under_promos: Vec<ChessMove>,
     /// ruhige Züge mit bereits in `new()` gelesenem History-Score (unsortiert)
     quiets: Vec<ScoredMove>,
@@ -1508,6 +1557,7 @@ impl<'a, B: EngineBoard> MovePicker<'a, B> {
         moves: B::Gen,
         tt_move: Option<ChessMove>,
         killers: [Option<ChessMove>; 2],
+        countermove: Option<ChessMove>,
         move_history: &[i32],
     ) -> Self {
         let stm = board.side_to_move();
@@ -1516,6 +1566,7 @@ impl<'a, B: EngineBoard> MovePicker<'a, B> {
         let mut captures = Vec::new();
         let mut killer1 = None;
         let mut killer2 = None;
+        let mut cm = None;
         let mut under_promos = Vec::new();
         let mut quiets = Vec::new();
 
@@ -1552,6 +1603,8 @@ impl<'a, B: EngineBoard> MovePicker<'a, B> {
                 killer1 = Some(mv);
             } else if Some(mv) == killers[1] {
                 killer2 = Some(mv);
+            } else if Some(mv) == countermove {
+                cm = Some(mv);
             } else if mv.get_promotion().is_some() {
                 under_promos.push(mv);
             } else {
@@ -1573,6 +1626,7 @@ impl<'a, B: EngineBoard> MovePicker<'a, B> {
             captures,
             killer1,
             killer2,
+            countermove: cm,
             under_promos,
             quiets,
             good_captures: Vec::new(),
@@ -1675,8 +1729,19 @@ impl<'a, B: EngineBoard> Iterator for MovePicker<'a, B> {
                         });
                     }
                 }
-                // Stufe 5 — stille Unterumwandlungen
+                // Stufe 5 — Countermove (Antwort-Cutoff-Zug auf den Gegnerzug)
                 5 => {
+                    self.stage = 6;
+                    if let Some(mv) = self.countermove.take() {
+                        return Some(ScoredMove {
+                            mv,
+                            order_key: -22_500,
+                            see_val: None,
+                        });
+                    }
+                }
+                // Stufe 6 — stille Unterumwandlungen
+                6 => {
                     if self.cursor < self.under_promos.len() {
                         let mv = self.under_promos[self.cursor];
                         self.cursor += 1;
@@ -1687,10 +1752,10 @@ impl<'a, B: EngineBoard> Iterator for MovePicker<'a, B> {
                         });
                     }
                     self.cursor = 0;
-                    self.stage = 6;
+                    self.stage = 7;
                 }
-                // Stufe 6 — ruhige Züge (History-Score in new() gelesen)
-                6 => {
+                // Stufe 7 — ruhige Züge (History-Score in new() gelesen)
+                7 => {
                     if !self.quiets_sorted {
                         self.quiets.sort_by_key(|sm| sm.order_key);
                         self.quiets_sorted = true;
@@ -1701,16 +1766,16 @@ impl<'a, B: EngineBoard> Iterator for MovePicker<'a, B> {
                         return Some(sm);
                     }
                     self.cursor = 0;
-                    self.stage = 7;
+                    self.stage = 8;
                 }
-                // Stufe 7 — verlierende Captures (in Stufe 2 vorbereitet)
-                7 => {
+                // Stufe 8 — verlierende Captures (in Stufe 2 vorbereitet)
+                8 => {
                     if self.cursor < self.bad_captures.len() {
                         let sm = self.bad_captures[self.cursor];
                         self.cursor += 1;
                         return Some(sm);
                     }
-                    self.stage = 8;
+                    self.stage = 9;
                 }
                 _ => return None,
             }
@@ -2030,6 +2095,85 @@ mod tests {
     use crate::board_atomic::BoardAtomic;
     use crate::board_crazyhouse::BoardCrazyhouse;
     use chess::{Board, MoveGen};
+
+    // --- Countermove-Heuristic (01.09.2026) ---------------------------------
+
+    #[test]
+    fn countermove_record_and_lookup() {
+        let mut tt = TranspositionTable::new(1);
+        let mut state = SearchState {
+            tt: &mut tt,
+            eval: Arc::new(EvalParams::default()),
+            stop: Arc::new(AtomicBool::new(false)),
+            pondering: Arc::new(AtomicBool::new(false)),
+            deadline: None,
+            think_time: Duration::from_secs(1),
+            start: Instant::now(),
+            nodes: 0,
+            history: Vec::new(),
+            root_history_len: 0,
+            root_best_move: None,
+            forced_only_move: None,
+            debug_root: false,
+            nmp_off: false,
+            rfp_on: false,
+            killers: [[None; 2]; MAX_PLY],
+            move_history: vec![0; 2 * 64 * 64],
+            countermove: vec![None; 2 * 64 * 64],
+            cm_on: true,
+            syzygy: None,
+            tb_hits: 0,
+        };
+        let prev = ChessMove::new(Square::E7, Square::E5, None);
+        let reply = ChessMove::new(Square::G1, Square::F3, None);
+        assert!(state.countermove_for(Color::Black, Some(prev)).is_none());
+        state.record_countermove(Color::Black, prev, reply);
+        assert_eq!(state.countermove_for(Color::Black, Some(prev)), Some(reply));
+        // Falsche Seite, anderer Vorgaengerzug oder kein Vorgaengerzug → kein Treffer.
+        assert!(state.countermove_for(Color::White, Some(prev)).is_none());
+        let other = ChessMove::new(Square::D7, Square::D5, None);
+        assert!(state.countermove_for(Color::Black, Some(other)).is_none());
+        assert!(state.countermove_for(Color::Black, None).is_none());
+        // Ein neuerer Cutoff auf denselben Vorgaengerzug ersetzt den alten Eintrag.
+        let reply2 = ChessMove::new(Square::B1, Square::C3, None);
+        state.record_countermove(Color::Black, prev, reply2);
+        assert_eq!(state.countermove_for(Color::Black, Some(prev)), Some(reply2));
+    }
+
+    #[test]
+    fn countermove_orders_after_killer_before_quiets() {
+        // Startstellung: keine Captures/Umwandlungen — Killer 1 zuerst,
+        // Countermove direkt dahinter, Rest (Quiets, History 0) danach.
+        let b = Board::default();
+        let k1 = ChessMove::new(Square::E2, Square::E4, None);
+        let cm = ChessMove::new(Square::G1, Square::F3, None);
+        let hist = vec![0i32; 2 * 64 * 64];
+        let moves: Vec<ChessMove> =
+            MovePicker::new(&b, b.legal_gen(), None, [Some(k1), None], Some(cm), &hist)
+                .map(|sm| sm.mv)
+                .collect();
+        assert_eq!(moves.len(), 20);
+        assert_eq!(moves[0], k1, "Killer 1 muss zuerst kommen");
+        assert_eq!(moves[1], cm, "Countermove direkt hinter den Killern");
+    }
+
+    #[test]
+    fn countermove_tt_move_stays_first() {
+        // TT-Move schlaegt Countermove und Killer — auch wenn der Countermove
+        // gesetzt ist.
+        let b = Board::default();
+        let tt_move = ChessMove::new(Square::D2, Square::D4, None);
+        let k1 = ChessMove::new(Square::E2, Square::E4, None);
+        let cm = ChessMove::new(Square::G1, Square::F3, None);
+        let hist = vec![0i32; 2 * 64 * 64];
+        let moves: Vec<ChessMove> =
+            MovePicker::new(&b, b.legal_gen(), Some(tt_move), [Some(k1), None], Some(cm), &hist)
+                .map(|sm| sm.mv)
+                .collect();
+        assert_eq!(moves[0], tt_move);
+        assert_eq!(moves[1], k1);
+        assert_eq!(moves[2], cm);
+    }
 
     // Repetition-Helper: pruefe die vier relevanten Faelle einzeln.
 

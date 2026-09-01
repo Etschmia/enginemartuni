@@ -10,6 +10,22 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**01.09.2026 — Countermove Heuristic implementiert (aus `docs/kimi-vorschlag.md`).**
+- Tabelle `[side][from*64+to]` in `SearchState`, indiziert über den
+  Gegnerzug (`prev_move` wird durch `alpha_beta` gereicht; None an Wurzel
+  und nach Null Move). Bei Beta-Cutoff durch Quiet-Zug wird die Antwort
+  eingetragen (`record_countermove`), im MovePicker als neue Stufe 5 direkt
+  hinter Killer 1/2 einsortiert (order_key −22_500).
+- Off-Schalter `MARTUNI_CM_OFF=1` (Konvention wie NMP/RFP), Default an.
+- Verifikation: 3 neue Unit-Tests (Record/Lookup, Ordering hinter Killer,
+  TT-Move bleibt vorn), Suite 124 grün. Smoke auf W5AboGf0 (depth 8) und
+  ruhiger Mittelspielstellung (movetime 10 s, Tiefe 9): identische
+  bestmoves, Knotenzahl ±10 % (divergente Suchpfade — SPRT entscheidet).
+- **Nächster Schritt (offen):** fastchess-SPRT [0, 10], 1000 Partien
+  (Standard-Setup) gegen Baseline, dann Rollout-Entscheid.
+- `docs/kimi-vorschlag.md` am selben Tag vollständig mit Status-Markern
+  aktualisiert ([done]/[verworfen]/[offen]/[teilweise]).
+
 **22.08.2026 — Crazyhouse implementiert.**
 - Neues `BoardCrazyhouse`-Backend auf `shakmaty`: regelkonforme Taschen,
   Drops (`N@f7`), Rueckverwandlung geschlagener Promotionsfiguren, FEN und
