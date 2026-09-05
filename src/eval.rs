@@ -46,7 +46,7 @@ pub fn evaluate<B: EngineBoard>(board: &B, p: &EvalParams) -> i32 {
     let b_trap_eg = rook_trapped_endgame_malus(board, Color::Black, p);
     let trap = taper(0, w_trap_eg - b_trap_eg, phase);
 
-    non_pst
+    let score = non_pst
         + taper(mg, eg, phase)
         + king_act
         + king_pass_syn
@@ -58,7 +58,12 @@ pub fn evaluate<B: EngineBoard>(board: &B, p: &EvalParams) -> i32 {
                 + material_deficit_damping(board, phase, p, w_eg, b_eg)
         } else {
             0
-        }
+        };
+
+    // Varianten-Hook: Antichess/KotH/Horde/Three-Check/Racing Kings duerfen
+    // die generische Bewertung ergaenzen oder ersetzen. Fuer Standard, 960,
+    // Atomic und Crazyhouse ist das die Identitaet (bit-exakt).
+    crate::variants::adjust(board, p, phase, score)
 }
 
 /// Interpoliert linear zwischen Middle- und Endgame-Score entsprechend der
@@ -354,6 +359,12 @@ fn king_safety<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
 }
 
 fn king_safety_with_phase<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, phase: i32) -> i32 {
+    // Koenigslose Seite (Antichess, Horde-Weiss): kein Koenig, keine
+    // Koenigssicherheit — alle Teilterme (Shield, Danger, Exposure,
+    // Rochade-Nudge) entfallen.
+    if !board.has_king(us) {
+        return 0;
+    }
     let king_sq = board.king_square(us);
     let zone = king_zone(king_sq);
 
@@ -418,6 +429,9 @@ fn king_safety_with_phase<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, 
 ///
 /// Rückgabewert ist positiv (als "abzuziehender Malus" im Aufrufer gedacht).
 fn king_exposure_penalty<B: EngineBoard>(board: &B, us: Color, p: &EvalParams, phase: i32) -> i32 {
+    if !board.has_king(us) {
+        return 0;
+    }
     // Abstand des Königs zu seiner Grundreihe
     let king_sq = board.king_square(us);
     let rank = king_sq.get_rank().to_index() as i32;
@@ -924,13 +938,16 @@ fn rook_seventh_rank_bonus<B: EngineBoard>(board: &B, us: Color, our_rooks: BitB
         Color::White => (6, 7),
         Color::Black => (1, 0),
     };
-    let enemy_king_rank = board.king_square(!us).get_rank().to_index() as i32;
+    // Ohne gegnerischen Koenig (Antichess/Horde) gibt es nur den reinen
+    // 7.-Reihe-Bonus; der "Koenig eingesperrt"-Zuschlag entfaellt.
+    let enemy_king_on_eighth = board.has_king(!us)
+        && board.king_square(!us).get_rank().to_index() as i32 == eighth_rank;
 
     let mut score = 0;
     for rook_sq in our_rooks {
         if rook_sq.get_rank().to_index() as i32 == seventh_rank {
             score += p.rook_seventh_bonus;
-            if enemy_king_rank == eighth_rank {
+            if enemy_king_on_eighth {
                 score += p.rook_seventh_vs_king_eighth_bonus;
             }
         }
@@ -997,6 +1014,9 @@ fn king_passed_pawn_synergy<B: EngineBoard>(board: &B, phase: i32, p: &EvalParam
 }
 
 fn side_king_passed_synergy<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
+    if !board.has_king(us) {
+        return 0;
+    }
     let king_sq = board.king_square(us);
     let our_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(us);
     let their_pawns = *board.pieces(Piece::Pawn) & *board.color_combined(!us);
@@ -1100,6 +1120,10 @@ fn opposition_bonus<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32
     if board.side_to_move() == us {
         return 0;
     }
+    // Opposition braucht beide Koenige.
+    if !board.has_king(us) || !board.has_king(!us) {
+        return 0;
+    }
     let our_k = board.king_square(us);
     let their_k = board.king_square(!us);
     if !has_opposition_geometry(board, our_k, their_k) {
@@ -1200,6 +1224,9 @@ fn rank_from_index(i: i32) -> Rank {
 /// Ecke ist immer vom Verteidiger erreichbar; Sub-Konzept 3 uebernimmt.
 fn key_square_bonus<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     if p.key_square_bonus_by_rank.iter().all(|&x| x == 0) {
+        return 0;
+    }
+    if !board.has_king(us) {
         return 0;
     }
     let our_bb = *board.color_combined(us);
@@ -1333,6 +1360,10 @@ fn rook_pawn_correction<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) ->
         Color::Black => Rank::First,
     };
     let promo_corner = Square::make_square(promo_rank, pawn_sq.get_file());
+    // Ohne gegnerischen Koenig kann niemand die Promo-Ecke halten.
+    if !board.has_king(!us) {
+        return 0;
+    }
     let their_k = board.king_square(!us);
     if crate::endgame::chebyshev(their_k, promo_corner) <= 1 {
         return p.rook_pawn_drawish_penalty;
@@ -1424,12 +1455,13 @@ fn king_activity_endgame<B: EngineBoard>(board: &B, phase: i32, p: &EvalParams) 
     if phase >= p.king_activity_phase_threshold {
         return 0;
     }
-    let w = if heavy_piece_threat(board, Color::Black) {
+    // Koenigslose Seiten (Antichess/Horde) bekommen keinen Aktivitaetsbonus.
+    let w = if !board.has_king(Color::White) || heavy_piece_threat(board, Color::Black) {
         0
     } else {
         king_centralization_score(board.king_square(Color::White))
     };
-    let b = if heavy_piece_threat(board, Color::White) {
+    let b = if !board.has_king(Color::Black) || heavy_piece_threat(board, Color::White) {
         0
     } else {
         king_centralization_score(board.king_square(Color::Black))
@@ -1526,6 +1558,11 @@ pub struct EvalBreakdown {
     /// Material-Defizit-Daempfung (Weiss-Sicht). Siehe `material_deficit_damping`.
     /// Negativ = Weiss bekommt einen Kompensations-Abschlag, positiv = Schwarz.
     pub damping: i32,
+    /// Varianten-Anpassung (`crate::variants::adjust`): Differenz zwischen
+    /// der generischen Bewertung und dem Endwert. 0 fuer Standard/960/
+    /// Atomic/Crazyhouse; in Antichess/KotH/Horde/Three-Check/Racing Kings
+    /// der Beitrag des jeweiligen Varianten-Moduls.
+    pub variant_adjust: i32,
     pub total: i32,
 }
 
@@ -1689,7 +1726,7 @@ pub fn evaluate_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) -> EvalBrea
         + bd.black.king_safety;
     let non_pst = side_sum_white - side_sum_black;
 
-    bd.total = non_pst
+    let generic = non_pst
         + bd.pst_tapered
         + bd.king_activity_eg
         + bd.king_passed_synergy
@@ -1698,6 +1735,10 @@ pub fn evaluate_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) -> EvalBrea
         + bd.rook_trapped_tapered
         + bd.imbalance
         + bd.damping;
+    // Gleicher Varianten-Hook wie in evaluate(), damit der Sanity-Check
+    // (Total == evaluate) auch in den Varianten stimmt.
+    bd.total = crate::variants::adjust(board, p, bd.phase, generic);
+    bd.variant_adjust = bd.total - generic;
     bd
 }
 
@@ -1793,6 +1834,7 @@ pub fn print_eval_breakdown<B: EngineBoard>(board: &B, p: &EvalParams) {
     );
     println!("info string imbalance            {:>6}", bd.imbalance);
     println!("info string damping              {:>6}", bd.damping);
+    println!("info string variant_adjust       {:>6}", bd.variant_adjust);
     println!("info string total                {:>6} cp", bd.total);
 
     // Sanity: muss mit evaluate() uebereinstimmen.

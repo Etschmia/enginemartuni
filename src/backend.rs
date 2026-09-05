@@ -9,6 +9,10 @@
 //!   - `chess::Board`      — Standard-Schach, unveraendert der Live-Pfad.
 //!     Alle Methoden reichen 1:1 an die Crate durch (duenne Huelle, bit-exakt).
 //!   - `Board960`          — Chess960 auf shakmaty-Basis (src/board960.rs).
+//!   - `BoardAtomic`, `BoardCrazyhouse` — eigene Varianten-Adapter.
+//!   - `BoardShak<P>`      — generischer shakmaty-Adapter fuer Antichess,
+//!     King of the Hill, Horde, Three-Check und Racing Kings
+//!     (src/board_shak.rs).
 //!
 //! Die "gemeinsame Sprache" bleiben die kleinen `chess`-Werttypen (`BitBoard`,
 //! `Square`, `Piece`, `Color`, `ChessMove`) — sie sind reine Daten ohne Bezug
@@ -24,6 +28,23 @@
 //! Feld-belegt-Pruefung wie ein Schlagzug aus.
 
 use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, MoveGen, Piece, Square};
+
+/// Regelvariante, die ein Backend spielt. Wird von der Bewertung genutzt,
+/// um varianten-spezifische Zusatzterme zu dispatchen (`crate::variants`),
+/// und von der Suche, um Sonderfaelle (koenigslose Seiten, Varianten-
+/// Siege) zu erkennen. `Standard` deckt auch Chess960 ab — das ist nur
+/// eine andere Grundstellung, keine andere Regelvariante.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VariantKind {
+    Standard,
+    Atomic,
+    Crazyhouse,
+    Antichess,
+    KingOfTheHill,
+    Horde,
+    ThreeCheck,
+    RacingKings,
+}
 
 /// Zuggenerator-Schnittstelle im Stil von `chess::MoveGen`: Iterator ueber
 /// legale Zuege mit nachtraeglich setzbarer Zielfeld-Maske. Bereits
@@ -76,11 +97,52 @@ pub trait EngineBoard: Clone + Send + Sync + 'static {
         true
     }
 
+    /// Welche Regelvariante spielt dieses Backend? Default: Standard.
+    fn variant_kind(&self) -> VariantKind {
+        VariantKind::Standard
+    }
+
+    /// Hat `color` (noch) einen Koenig auf dem Brett? In Antichess kann der
+    /// Koenig geschlagen werden, in Horde hat Weiss von vornherein keinen.
+    /// Alle Eval-Terme, die `king_square` nutzen, muessen fuer koenigslose
+    /// Seiten uebersprungen werden — `king_square` liefert dann nur einen
+    /// Platzhalter. Orthodoxe Backends: immer `true`.
+    fn has_king(&self, _color: Color) -> bool {
+        true
+    }
+
     /// Varianten-Niederlage der Seite am Zug (z. B. explodierter Koenig in
-    /// Atomic). Orthodoxes Matt wird weiterhin ueber `checkers + 0 Zuege`
-    /// erkannt.
+    /// Atomic, dritter erhaltener Schach in Three-Check, gegnerischer Koenig
+    /// im Zentrum bei King of the Hill). Orthodoxes Matt wird weiterhin
+    /// ueber `checkers + 0 Zuege` erkannt.
     fn is_variant_loss(&self) -> bool {
         false
+    }
+
+    /// Varianten-SIEG der Seite am Zug: sie hat nach den Regeln der Variante
+    /// bereits gewonnen, obwohl sie am Zug waere (Antichess: keine eigenen
+    /// Steine mehr bzw. keine legalen Zuege; Racing Kings: Koenig hat die
+    /// 8. Reihe erreicht und der Gegner konnte nicht nachziehen; per FEN
+    /// auch KotH/Three-Check/Horde). Invariante der Backends: in einer
+    /// solchen Stellung ist die legale Zugliste leer, damit die Suche das
+    /// Ende an genau einer Stelle (leere Zugliste) erkennt.
+    fn is_variant_win(&self) -> bool {
+        false
+    }
+
+    /// Varianten-Remis (Racing Kings: beide Koenige erreichen die 8. Reihe
+    /// im selben Zugpaar). Auch hier ist die Zugliste leer.
+    fn is_variant_draw(&self) -> bool {
+        false
+    }
+
+    /// Three-Check: Anzahl der Schachgebote, die `color` NOCH GEBEN muss,
+    /// um zu gewinnen (Lichess-/shakmaty-Zaehlweise: Start 3, bei 0 hat
+    /// `color` gewonnen). `None` in allen anderen Varianten. Aufrufer:
+    /// `variants::threecheck` (Schach-Bonus und Eskalation der Koenigs-
+    /// Exposition nach dem Zaehlerstand).
+    fn checks_remaining(&self, _color: Color) -> Option<u8> {
+        None
     }
 
     /// Crazyhouse-Drop? Drop-Zuege werden in der gemeinsamen `ChessMove`-

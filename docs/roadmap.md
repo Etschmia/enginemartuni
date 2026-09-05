@@ -10,6 +10,84 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**05.09.2026 — Fünf weitere Lichess-Varianten implementiert: Antichess,
+King of the Hill, Horde, Three-Check, Racing Kings.**
+- **Gerüst:** ein generischer shakmaty-Adapter `BoardShak<P>`
+  (`src/board_shak.rs`, parametrisiert über das Mini-Trait `ShakVariant`
+  mit `VariantKind`-Kennung) statt fünf Kopien von `BoardAtomic`; Typaliasse
+  `BoardAntichess`/`BoardKingOfTheHill`/`BoardHorde`/`BoardThreeCheck`/
+  `BoardRacingKings`. Neue `EngineBoard`-Hooks: `variant_kind()`,
+  `has_king(color)` (königslose Seiten in Antichess/Horde — alle Königs-
+  Terme der Eval sind darauf geguardet, `king_square` liefert nur einen
+  Platzhalter), `is_variant_win()`/`is_variant_draw()` (Sieg/Remis der
+  Seite am Zug; Invariante: Zugliste leer, die Suche bewertet über
+  `terminal_score` an genau einer Stelle) und `checks_remaining()`.
+  Varianten-Eval-Module unter `src/variants/` mit einem Dispatch
+  `variants::adjust(board, p, phase, base)` am Ende von `evaluate()` und
+  `evaluate_breakdown()` (neue Breakdown-Zeile `variant_adjust`). UCI:
+  `UCI_Variant antichess|giveaway|suicide|kingofthehill|horde|3check|
+  threecheck|racingkings`, Standard-Rochadenotation `e1g1`, Three-Check-
+  FENs im Lichess-Format (`… 3+3 0 1`, auch `+0+0`), Antichess-Umwandlung
+  in einen König (`e7e8k`); Dispatch im UCI-Loop über das Makro
+  `with_game_pos!`. Buch und Syzygy in allen Varianten aus.
+- **Antichess** (ersetzt `base`): Material zählt NEGATIV (König = normale
+  Figur, 300), dazu Angriffsreichweite als Malus (3 cp je angegriffenem
+  Feld — wegen Schlagzwang ist jedes erreichbare Feld eine Angriffsfläche
+  für erzwungene Schläge) und vorgerückte Bauern als Malus. Suche: unter
+  Schlagzwang gibt es kein „Passen", der Quiescence-Stand-Pat wird deshalb
+  für die ersten 4 Q-Halbzüge wie Schach behandelt
+  (`ANTICHESS_FORCED_QPLY_MAX`, Antichess-gated; ohne Cap erstickt der
+  Schlagzwang-Baum die Suche).
+- **King of the Hill** (auf `base`): Chebyshev-Distanz des Königs zu
+  d4/e4/d5/e5, getapert nach der Restarmee des GEGNERS statt der globalen
+  Phase; ungedeckte Hügelfelder, Einstiegsdrohung (Gegner muss parieren)
+  und `WIN_NEXT_MOVE` 5000, damit der Stand-Pat den stillen Gewinnzug sieht.
+- **Horde** (auf `base`): Bauern jenseits von 16 zählen 75; nichtlinearer
+  Malus für kleine weiße Restarmee (skaliert mit der schwarzen Jäger-
+  Armee); Bauernketten, hängende Bauern unter Figuren-/Königsdruck,
+  Vormarsch/Freibauern und Sturm gedeckter Bauern auf den schwarzen König.
+- **Three-Check** (auf `base`): eskalierender Bonus je gegebenem Schach
+  [0, 120, 330], Königsexposition als Zählung freier Schachfelder
+  (Strahlen/Springersprünge, nur wenn der Gegner die Figur hat) und der
+  bestehende `king_danger`-Druck verdoppelt; Terme skaliert nach dem
+  Zählerstand des Angreifers (×1,0/1,5/2,2).
+- **Racing Kings** (ersetzt `base`): konvexe Reihen-Tabelle des Königs,
+  kürzester legal betretbarer Königsweg per Bitboard-BFS (kein Schach,
+  nicht neben dem Gegnerkönig), Sperre der Vorwärtsfelder des Gegners,
+  Material auf halber orthodoxer Höhe (nur Blockierer), Wettlauf-Prognose
+  in Halbzügen inkl. Remis-Regel und `WIN_NEXT_MOVE`.
+- **Verifikation:** `cargo test` 193 grün (124 → 193, je Variante 10–15
+  Modultests: Symmetrie, Eval-Terme, Matt-/Sieg-in-1, Robustheit
+  königsloser Stellungen); Adapter-Perft je Variante Tiefe 1–4 identisch
+  mit `shakmaty::perft` UND unabhängig mit python-chess 1.11.2 (Antichess
+  4 FENs, KotH 4, Horde 7, 3check 6, Racing Kings 10 — inkl. Schlagzwang,
+  ep, Königsumwandlung, Reihe-1-Doppelschritt, Schachverbot, Remisregel).
+  Terminal-Erkennung in der Suche je Variante (Sieg/Niederlage in 1,
+  Patt = Sieg in Antichess, Racing-Kings-Remis → cp 0, entschiedene
+  Stellung → `bestmove 0000`). **Standardpfad bit-exakt:** HEAD c0c93cc vs.
+  Arbeitsstand, `go depth 8/9` auf 3–4 Standard-FENs, Knotenzahlen und PVs
+  identisch (fünfmal unabhängig verifiziert). Clippy: keine Warnungen in
+  `src/board_shak.rs` und `src/variants/*`. UCI-Smoke-Matrix 05.09.
+  (Release-Binary, python-chess-Legalitätsprüfung): alle neun Betriebsarten
+  `startpos` + Zugfolge mit Rochade `e1g1` (960: `e1h1`, 3check mit
+  Schachgebot Qe5+) → legale bestmoves, rc 0; elf Variantenwechsel im
+  selben Prozess (3check → standard → horde → racingkings → antichess →
+  chess960 → kingofthehill → atomic → crazyhouse → standard → 3check) ohne
+  Absturz, TT wird beim Wechsel geleert; Lichess-FEN-Formate (`3+3`,
+  `+1+0`, Horde `kq`) geparst.
+- **Bekannte offene Punkte (alle minor, Prüfer 05.09.):** Suchtiefe in
+  den shakmaty-Varianten nur 3–6 in 0,8 s, weil `uses_standard_rules() ==
+  false` pauschal NMP/RFP/SEE/Quiet-Checks abschaltet (→ „Nächste
+  Schritte" 2); Antichess-Move-Ordering bewertet Schläge positiv und
+  kennt kein Remis durch unzureichendes Material; Horde-`eval` einer
+  bereits entschiedenen Stellung zeigt +48 statt Verlust (Suche schneidet
+  vorher terminal ab); Racing-Kings-BFS ignoriert Abzugsschach-Verbote
+  (nur statischer Horizontwert); Three-Check-Exposition zählt auch von
+  gegnerischen Steinen besetzte Strahlfelder. Varianten-Konstanten sind
+  Erstentwürfe ohne A/B, noch nicht in `eval.toml`.
+- **Live 05.09.:** offen — Rollout (Commit, Build, `config.yml`-Freigabe
+  der fünf Varianten, Bot-Restart) trägt der Hauptagent nach.
+
 **01.09.2026 — Countermove Heuristic implementiert (aus `docs/kimi-vorschlag.md`).**
 - Tabelle `[side][from*64+to]` in `SearchState`, indiziert über den
   Gegnerzug (`prev_move` wird durch `alpha_beta` gereicht; None an Wurzel
@@ -1172,90 +1250,87 @@ Punkte 2/3 unten).
 
 ## Nächste Schritte
 
-1. **AetherBot-Lookback** als nächste Eval-Priorität, nachdem Schritt 3
-   der dynamischen Figurenbewertung am 16.05. live ist (siehe „Aktueller
-   Status" und Verlauf). Im 16.05.-Sample 3.38 B/P bei 8 Spielen
-   ([[project-aetherbot-lookback-2026-05-16]]) — bisher zu dünn für
-   einen Buch-Patch, aber das deutlichste neue Sparring-Signal.
-   Erst-Re-Check empfohlen nach ≥20 Partien. Parallel dazu wartet die
-   Step-3-Lichess-Lookback-Erfassung (100–150 Partien gegen Blitz 2039 /
-   Rapid 2100).
-2. **Aspiration Windows — VERWORFEN am 16.05.2026.** Variante B
-   (δ=30 cp, Faktor 2, ab d≥5) implementiert und auf den 9 Cluster-1b-
-   Stichproben gemessen: Σ maxD −2, Re-Search-Quote **102 %**, und
-   W5AboGf0 spielt mit Aspiration den falschen Zug (`Qg4` statt
-   `Qxd6`), den die volle Suche bei gleicher Tiefe findet. Cluster-1b-
-   Stellungen sind genau Score-Diskontinuitäten zwischen ID-Tiefen
-   (~90 cp Sprünge); ±30 cp Startfenster ist viel zu eng, exponentielles
-   Widening verbrennt mehr Knoten als das engere Fenster spart. Code
-   aus `search.rs` entfernt, `docs/aspiration-windows.md` mit
-   Smoke-Befund versehen, `tools/probe_aspiration.py` (umbenannt zu
-   `probe_capture_ordering.py`) für künftige Versuche im Repo gelassen.
-3. **MVV-Bonus / Centipawn-MVV — VERWORFEN am 16.05.2026.** Variante A
-   (Centipawn-MVV mit LVA-Modifier) implementiert, Smoke + fastchess-
-   SPRT 1000 Partien gegen pre-MVV-Baseline. A/B: +6.60 ± 16.76 Elo
-   für MVV-CP, LOS 78 %, SPRT nicht entschieden (LLR −1.12 Richtung
-   H0). Smoke zeigte +1 Quality-G (4 → 5) und +2 maxD, aber eine
-   **Regression auf W5AboGf0** (Qxd6 → Qg4) — der ursprünglichen
-   Cluster-1b-Anker-Stellung. Profil ähnlich Step 2 v2, aber bei
-   Move-Ordering greift [[feedback-ab-vs-lichess-signal]] nicht
-   (Spiegelstil ist hier ehrlich). Code aus `search.rs` entfernt
-   (reproduzierbarer Revert), `docs/mvv-bonus.md` mit VERWORFEN-
-   Status + Befund, Reproduktions-Binary `target/release/martuni-mvv-cp`
-   und Match-Setup `matches/baseline_vs_mvv_cp/` aufgehoben.
-4. **`connected_rooks_pair = 30` ausgerollt am 15.05.2026.** A/B-Match
-   `matches/conn_rooks_150_vs_30` lief 15.05. 17:15–17:39, SPRT [0, 10]
-   nach 240 Partien terminiert (H0 akzeptiert): **CR30 schlägt CR150
-   um +150.65 Elo ±41.14**, LOS 100 % für CR30, Ptnml [45, 22, 43, 6, 4],
-   PairsRatio 0.15, Total Time 00:23:54. Damit ist der Eval-Audit-
-   Befund (92–99 % Bias-Treiber) live bestätigt — selfplay-Signal so
-   deutlich, dass das übliche A/B-↔-Lichess-Caveat nicht greift.
-   `eval.toml` im Repo-Root auf 30 gesetzt; kein Rebuild nötig
-   (Laufzeit-Config). Lichess-Lookback am 16.05. Bei Plateau evtl.
-   Folge-A/B 30 vs 0 oder 30 vs 60.
+Stand 05.09.2026 (bereinigt; die alten Punkte 2–4 von Mai 2026 sind im
+Verlauf dokumentiert: Aspiration und MVV-CP verworfen, CR30 ausgerollt).
+
+1. **Varianten-Rollout beobachten (05.09.2026).** Antichess, King of the
+   Hill, Horde, Three-Check und Racing Kings sind neu live (Details im
+   „Aktuellen Status"). Nach den ersten ~30 Partien je Variante ein
+   Lookback: Score, offensichtliche Regelfehler (Lichess-Abbrüche,
+   illegale Züge), Zeitnot. Eval-Terme der Varianten sind bewusst erste
+   Entwürfe ohne A/B.
+2. **Feineres Search-Gating für Varianten mit orthodoxer Mechanik.**
+   Befund der Prüf-Agenten vom 05.09.: `uses_standard_rules() == false`
+   schaltet in ALLEN shakmaty-Varianten pauschal NMP, RFP, Quiet-Check-
+   Quiescence und das orthodoxe SEE ab (SEE → `variant_capture_value`,
+   also ein voller make_move pro Capture). Für Atomic ist das nötig, für
+   King of the Hill, Three-Check, Horde und Racing Kings aber nicht —
+   dort gelten normale Schlag- und Schachregeln. Folge: nach 1.e4 e5
+   erreicht KotH/3check in 3 s nur Tiefe 5 (1,9 M Knoten), Standard
+   Tiefe 7 in 0,5 s. Vorschlag: Gating per `variant_kind()` in zwei
+   Stufen — (a) SEE/Quiet-Checks für KotH, 3check, Horde, Racing Kings
+   wieder an (bit-exakt gegen Standard prüfbar, da gleiche Mechanik),
+   (b) NMP/RFP für KotH und 3check wieder an (Racing Kings ohne NMP
+   lassen: Nullzug verschiebt das Wettrennen; Horde: weiße Seite ohne
+   Koenig → Zugzwang-Schutz greift nicht sauber). Messen per Selfplay
+   in der jeweiligen Variante (fastchess kann `variant`, UHO-Buch nur
+   für KotH/3check sinnvoll). Antichess bleibt außen vor (kein Schach,
+   Schlagzwang — eigene Welt).
+3. **Countermove-Heuristik: SPRT noch offen (seit 01.09.).** fastchess
+   SPRT [0, 10], 1000 Partien Standard-Setup gegen Baseline c0c93cc
+   ohne Countermove (`MARTUNI_CM_OFF=1`), dann Rollout-Entscheid.
+   Live läuft der Term bereits (Default an).
+4. **Chess960-Eröffnungsdrift — Hebel #2 eskalierender Rochade-Malus.**
+   Aus dem 960-Lookback 11.08.: Rochadequote 46 → 56 %, aber Ø Rochadezug
+   19 unverändert spät; ply≤16-Blunder in 960 zehnmal häufiger als im
+   Standard. Nächster Kandidat: `castle_rights_mg` mit dem Zugzähler
+   wachsen lassen (statt flat −15). Anker für den Lookback: 960 1720,
+   Blitz 2159, Rapid 2290 (11.08.).
 5. **NMP-Verfeinerungen** (adaptive R, Verification Search) — erst wenn
    die Endgame-Rate Anlass gibt; aktuell kein Druck.
 
 ## Offene Themen — Search
 
-- **Futility / Reverse Futility Pruning** — RFP umgesetzt und ausgerollt
-  16.08.2026 (siehe „Aktueller Status"): `depth <= 3`, Margin 120 cp/Tiefe,
-  non-PV, Default an, Off-Schalter `MARTUNI_RFP_OFF=1`. (Klassisches
-  Futility-Pruning am Blatt / Razoring weiter offen.)
-- **Lazy MovePicker** — inkrementelle Zuggenerierung (Hash → Captures →
-  Killer → Quiet) statt vorab vollständig sortierten Vektor; spart
-  Rechenzeit bei frühen Cutoffs.
+- **Futility Pruning am Blatt / Razoring** — RFP ist seit 16.08.2026 live
+  (`depth <= 3`, Margin 120 cp/Tiefe, `MARTUNI_RFP_OFF=1`); das
+  klassische Futility-Pruning auf Zugebene und Razoring sind weiter offen.
 - **LMR Variante B** — logarithmische Reduktionsformel mit Lookup-Table
   als A/B-Test gegen Variante A (siehe [lmr-plan.md](lmr-plan.md)).
 - **LMR auch in PV-Knoten** — Stockfish-Stil mit konservativeren
   Reduktionswerten (siehe [lmr-plan.md](lmr-plan.md)).
+- **Varianten-Gating** — siehe „Nächste Schritte" Punkt 2.
+- **Antichess-Suche** — `variant_capture_value` bewertet dort jeden Schlag
+  positiv (Materialgewinn ist im Räuberschach schlecht); Move-Ordering
+  invertieren oder eigenes Antichess-SEE. Außerdem fehlt die Erkennung
+  von Remis durch unzureichendes Material (ungleichfarbige Läufer, die
+  sich nie schlagen können) — Prüfer-Befund 05.09., minor.
+- Erledigt (nur zur Orientierung): Lazy/Staged MovePicker 19.06.2026
+  (bit-exakt, +8–12 % NPS), Aspiration Windows verworfen 16.05., MVV-CP
+  verworfen 16.05., Countermove 01.09. (SPRT offen).
 
 ## Offene Themen — Evaluation
 
 - **Backward Pawns** — Strafe für Bauern ohne Nachbarbauern hinter sich,
   deren Vorrückfeld vom Gegner sicher kontrolliert wird.
-- **Outposts (Springer)** — Bonus für Springer auf gedeckten Zentralfeldern,
-  die durch gegnerische Bauern nicht mehr vertrieben werden können (siehe
-  [see.md](see.md), Abschnitt „Offene Schritte").
-- **Dynamischer Bishop-Pair-Bonus** — Bonus skaliert mit Brett-Offenheit
-  (umgekehrt proportional zur Bauernanzahl). Aktuell statischer Fixwert
-  `bishop_pair_each`.
-- **Pawn-Endgame-Guard** — Opposition, Key Squares und Rook-Pawn-Edge als
-  ergänzendes Wissen zum bereits vorhandenen `kpk_score` in
-  [endgame.rs](../src/endgame.rs). Konzept (Variante B, additiver Eval-
-  Term in `eval.rs`) liegt in
-  [pawn-endgame-guard.md](pawn-endgame-guard.md) — 23.05.2026 ausgelöst
-  durch den stickshark99-Deep-Dive (KNP-Endspiel-Drift).
 - **Tapering für Passbauern und isolierte Bauern** — Passbauer-Bonus
   per Rang ist da (`pawn_passed_rank_bonuses`), expliziter MG/EG-Split
   fehlt; isolierte Bauern sind phasenflach mit −20 cp (siehe
   [eval-kalibrierung.md](eval-kalibrierung.md), Punkte 2 und 3).
-- **Springer- vs. Läufer-Differenzierung** — N=B=300 cp ist nicht
-  stellungsabhängig; Plan in
-  [vorbereiteter_Prompt_dynamische_Figurenbewertung.md](vorbereiteter_Prompt_dynamische_Figurenbewertung.md).
 - **Bishop-Trap-Detection** (siehe [see.md](see.md)).
 - **Pawn-Shield bei nach vorne gegangenem König** — kleine Schwäche, in
   [eval-kalibrierung.md](eval-kalibrierung.md) notiert.
+- **Eskalierender Rochade-Malus (960)** — siehe „Nächste Schritte" Punkt 4.
+- **Varianten-Evals kalibrieren** — die fünf neuen Varianten-Module in
+  `src/variants/` sind Erstentwürfe; Konstanten sind noch nicht in
+  `eval.toml`, kein A/B. Horde: statische Bewertung einer bereits
+  entschiedenen Stellung (Weiß am Zug ohne Steine) liefert +48 cp statt
+  Verlustwert (harmlos, weil die Suche vorher terminal abschneidet;
+  Prüfer-Befund 05.09.).
+- Erledigt (nur zur Orientierung): Outposts implementiert, A/B −10.8 Elo
+  → dormant 0/0 (06.06.); dynamischer Bishop-Pair-Bonus (Dynmat Step 3,
+  16.05.); Pawn-Endgame-Guard live 23.05. (Gate 300 → 700 am 27.05.);
+  Springer/Läufer-Tapering (Dynmat Step 1/2, 10./13.05.); Low-Mobility-
+  Malus 11.08.
 
 ## Offene Themen — Performance / Code-Qualität
 
@@ -1265,11 +1340,17 @@ Punkte 2/3 unten).
   `Add`/`Sub`/`Mul`-Traits, finale Interpolation per `score.taper(phase)`.
 - **Iterative Deepening auslagern** — eigener `SearchState`-Methode, damit
   `search()` schlanker wird.
-- **Benannte Ordering-Konstanten** — magische Zahlen in
-  `order_moves` durch benannte Konstanten oder ein Stage-Enum ersetzen.
 - **`is_passed_simple` (search.rs) vs. `is_passed` (eval.rs)** sind nach
   dem 09.05-Bitmask-Refactor byte-identisch. Bei Gelegenheit
   konsolidieren (eine Instanz, gemeinsamer Aufrufer).
+- **Varianten-Adapter: Zuglisten-Lookup** — `BoardShak`/`BoardAtomic`/
+  `BoardCrazyhouse` suchen bei `make_move_new` und `is_capture` linear
+  in der Arc-Zugliste; für die Varianten-NPS ein kleiner Hebel (Index
+  über from/to). Vorher Punkt 2 der „Nächsten Schritte" (Gating) — der
+  wiegt deutlich mehr.
+- Erledigt: benannte Ordering-Konstanten (im MovePicker als Stufen-
+  `order_key`, 19.06.); redundante MoveGen/polyglot_hash im Hot-Path
+  raus (09.05.); TT-Lock-once + Gen/Age (24.06.).
 
 ## Verlauf
 

@@ -11,7 +11,7 @@
 //! generisch bleiben. Polyglot und Syzygy sind bewusst deaktiviert, weil
 //! deren Daten orthodoxe Schachregeln voraussetzen.
 
-use crate::backend::{EngineBoard, MoveGenLike};
+use crate::backend::{EngineBoard, MoveGenLike, VariantKind};
 use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, Piece, Square, ALL_SQUARES, EMPTY};
 use shakmaty::fen::Fen;
 use shakmaty::uci::UciMove;
@@ -212,6 +212,10 @@ impl EngineBoard for BoardAtomic {
 
     fn uses_standard_rules(&self) -> bool {
         false
+    }
+
+    fn variant_kind(&self) -> VariantKind {
+        VariantKind::Atomic
     }
 
     fn is_variant_loss(&self) -> bool {

@@ -5,6 +5,11 @@ pub enum UciVariant {
     Chess,
     Atomic,
     Crazyhouse,
+    Antichess,
+    KingOfTheHill,
+    Horde,
+    ThreeCheck,
+    RacingKings,
 }
 
 pub struct EngineOptions {
@@ -41,7 +46,10 @@ impl EngineOptions {
         println!("option name MoveOverhead type spin default 10 min 0 max 5000");
         println!("option name Ponder type check default false");
         println!("option name UCI_Chess960 type check default false");
-        println!("option name UCI_Variant type combo default chess var chess var atomic var crazyhouse");
+        println!(
+            "option name UCI_Variant type combo default chess var chess var atomic var crazyhouse \
+             var antichess var kingofthehill var horde var 3check var racingkings"
+        );
         println!(
             "option name SyzygyPath type string default {}",
             if self.syzygy_path.is_empty() {
@@ -68,9 +76,17 @@ impl EngineOptions {
                 self.chess960 = value.trim().eq_ignore_ascii_case("true");
             }
             "uci_variant" => {
+                // Werte, wie python-chess/lichess-bot sie sendet; die
+                // Aliasse (giveaway/suicide/threecheck) sind gaengige
+                // Schreibweisen anderer GUIs.
                 self.variant = match value.trim().to_ascii_lowercase().as_str() {
                     "atomic" => UciVariant::Atomic,
                     "crazyhouse" => UciVariant::Crazyhouse,
+                    "antichess" | "giveaway" | "suicide" => UciVariant::Antichess,
+                    "kingofthehill" => UciVariant::KingOfTheHill,
+                    "horde" => UciVariant::Horde,
+                    "3check" | "threecheck" => UciVariant::ThreeCheck,
+                    "racingkings" => UciVariant::RacingKings,
                     _ => UciVariant::Chess,
                 };
             }

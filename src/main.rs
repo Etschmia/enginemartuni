@@ -1,6 +1,7 @@
 mod backend;
 mod board_atomic;
 mod board_crazyhouse;
+mod board_shak;
 mod board960;
 mod config;
 mod endgame;
@@ -14,6 +15,7 @@ mod search;
 mod syzygy;
 mod tt;
 mod uci;
+mod variants;
 
 fn main() {
     uci::uci_loop();

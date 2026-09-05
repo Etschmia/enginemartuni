@@ -6,7 +6,7 @@
 //! wobei das Promotion-Feld die eingesetzte Figur traegt. An der UCI-Grenze
 //! wird daraus wieder die uebliche Notation `N@f7`.
 
-use crate::backend::{EngineBoard, MoveGenLike};
+use crate::backend::{EngineBoard, MoveGenLike, VariantKind};
 use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, Piece, Square, ALL_SQUARES, EMPTY};
 use shakmaty::fen::Fen;
 use shakmaty::uci::UciMove;
@@ -212,6 +212,10 @@ impl EngineBoard for BoardCrazyhouse {
 
     fn uses_standard_rules(&self) -> bool {
         false
+    }
+
+    fn variant_kind(&self) -> VariantKind {
+        VariantKind::Crazyhouse
     }
 
     fn is_drop(&self, mv: ChessMove) -> bool {

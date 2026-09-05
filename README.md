@@ -59,15 +59,18 @@ Martuni implements the full UCI protocol, including:
 - `go ponder` / `ponderhit`
 - `setoption` for Hash, MoveOverhead, Ponder
 - `UCI_Chess960` for Fischer Random Chess
-- `UCI_Variant` with `chess`, `atomic`, and `crazyhouse`
+- `UCI_Variant` with `chess`, `atomic`, `crazyhouse`, `antichess` (aliases `giveaway`, `suicide`), `kingofthehill`, `horde`, `3check` (alias `threecheck`), and `racingkings`
 
 ### Variants
 
-Martuni plays standard chess, Chess960, Atomic Chess, and Crazyhouse. Variant
-move legality, explosions, pockets, drops, promoted-piece handling, checks,
-castling, and en passant use `shakmaty` rule backends. Opening books and
-orthodox Syzygy tablebases are disabled automatically in Atomic and Crazyhouse
-mode.
+Martuni plays standard chess, Chess960, Atomic Chess, Crazyhouse, Antichess,
+King of the Hill, Horde, Three-Check, and Racing Kings. Variant move legality,
+explosions, pockets, drops, promoted-piece handling, checks, castling, en
+passant, capture obligation, remaining checks (Three-Check FENs such as
+`... w KQkq - 3+3 0 1`), and the variant-specific win/draw conditions use
+`shakmaty` rule backends; each variant has its own evaluation hook in
+`src/variants/`. Opening books and orthodox Syzygy tablebases are disabled
+automatically in all variant modes.
 
 It works with any UCI-compatible GUI: [Arena](http://www.playwitharena.de/), [Cute Chess](https://cutechess.com/), [Lucas Chess](https://lucaschess.pythonanywhere.com/), [BanksiaGUI](https://banksiagui.com/), etc.
 

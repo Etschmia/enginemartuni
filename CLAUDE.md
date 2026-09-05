@@ -20,7 +20,7 @@ Ausnahme: Infrastruktur (Board-Repräsentation, Zuggenerierung, UCI-Protokoll) d
 Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
 
 - **UCI:** vollständig, inkl. `go ponder` / `ponderhit` mit echter Ponder-Suche (offene Deadline, TT-basierter Pondermove)
-- **Varianten:** Standard, Chess960 (`UCI_Chess960`), Atomic und Crazyhouse (`UCI_Variant atomic|crazyhouse`); Varianten-Backends auf `shakmaty`, Standardpfad weiter auf `chess`
+- **Varianten:** Standard, Chess960 (`UCI_Chess960`), Atomic, Crazyhouse, Antichess, King of the Hill, Horde, Three-Check und Racing Kings (`UCI_Variant atomic|crazyhouse|antichess|kingofthehill|horde|3check|racingkings`; Aliasse `giveaway`/`suicide`/`threecheck`); Varianten-Backends auf `shakmaty` (`BoardAtomic`, `BoardCrazyhouse`, generisches `BoardShak<P>`), Varianten-Eval-Hooks in `src/variants/`, Standardpfad weiter bit-exakt auf `chess`
 - **Suche:** Alpha-Beta mit iterativem Deepening, PVS (Null-Window-Scout), Null-Move Pruning (R=2, min-depth 3, mit Zugzwang-Schutz), Late Move Reductions (Variante A: R=1 ab depth≥3 & Index≥3, R=2 ab depth≥6 & Index≥6; nur Non-PV, keine Captures/Promotions/Checks/Killer), Reverse Futility Pruning (depth ≤ 3), Quiescence Search, Transposition Table, korrekte Repetition-Detection (Stockfish-Stil: 1-fold in Spielhistorie ≠ Remis)
 - **Move-Ordering:** TT-Move → SEE-basierte Captures (MVV/LVA) → Killer Moves → Countermove → Quiet Moves nach History-Heuristic; SEE-Pruning in Hauptsuche und Quiescence
 - **Evaluation:** Material + Piece-Square-Tables (Tapered Midgame/Endgame), King Safety (3×3-Zone, Angreifer-Gewichte, SafetyTable, Pawn Shield), Endspiel-Heuristiken

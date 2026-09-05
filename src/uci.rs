@@ -1,6 +1,9 @@
 use crate::backend::EngineBoard;
 use crate::board_atomic::BoardAtomic;
 use crate::board_crazyhouse::BoardCrazyhouse;
+use crate::board_shak::{
+    BoardAntichess, BoardHorde, BoardKingOfTheHill, BoardRacingKings, BoardThreeCheck,
+};
 use crate::board960::Board960;
 use crate::config::Config;
 use crate::eval_config::EvalParams;
@@ -94,21 +97,11 @@ pub fn uci_loop() {
                 }
             }
             "ucinewgame" => {
-                match &mut position {
-                    GamePos::Std(p) => p.set_startpos(),
-                    GamePos::Frc(p) => p.set_startpos(),
-                    GamePos::Atomic(p) => p.set_startpos(),
-                    GamePos::Crazyhouse(p) => p.set_startpos(),
-                }
+                with_game_pos!(&mut position, |p| p.set_startpos());
                 tt.lock().unwrap().clear();
             }
             "position" => {
-                match &mut position {
-                    GamePos::Std(p) => handle_position(p, &tokens),
-                    GamePos::Frc(p) => handle_position(p, &tokens),
-                    GamePos::Atomic(p) => handle_position(p, &tokens),
-                    GamePos::Crazyhouse(p) => handle_position(p, &tokens),
-                }
+                with_game_pos!(&mut position, |p| handle_position(p, &tokens));
             }
             "go" => {
                 if let Some(h) = search_handle.take() {
@@ -119,43 +112,26 @@ pub fn uci_loop() {
                 let params = parse_go_params(&tokens);
                 pondering.store(params.ponder, Ordering::Relaxed);
 
-                search_handle = Some(match &position {
-                    GamePos::Std(p) => spawn_search(
-                        p, params, &tt, &book, &eval_params, &stop, &pondering,
-                        options.move_overhead, &syzygy,
-                    ),
-                    GamePos::Frc(p) => spawn_search(
-                        p, params, &tt, &book, &eval_params, &stop, &pondering,
-                        options.move_overhead, &syzygy,
-                    ),
-                    GamePos::Atomic(p) => spawn_search(
-                        p, params, &tt, &book, &eval_params, &stop, &pondering,
-                        options.move_overhead, &syzygy,
-                    ),
-                    GamePos::Crazyhouse(p) => spawn_search(
-                        p, params, &tt, &book, &eval_params, &stop, &pondering,
-                        options.move_overhead, &syzygy,
-                    ),
-                });
+                search_handle = Some(with_game_pos!(&position, |p| spawn_search(
+                    p,
+                    params,
+                    &tt,
+                    &book,
+                    &eval_params,
+                    &stop,
+                    &pondering,
+                    options.move_overhead,
+                    &syzygy,
+                )));
             }
             "eval" => {
                 // Debug-Kommando: druckt die komponentenweise Aufschluesselung
                 // der statischen Bewertung der aktuell gesetzten Stellung.
                 // Greift NICHT in die laufende Suche ein.
-                match &position {
-                    GamePos::Std(p) => {
-                        crate::eval::print_eval_breakdown(p.board(), &eval_params)
-                    }
-                    GamePos::Frc(p) => {
-                        crate::eval::print_eval_breakdown(p.board(), &eval_params)
-                    }
-                    GamePos::Atomic(p) => {
-                        crate::eval::print_eval_breakdown(p.board(), &eval_params)
-                    }
-                    GamePos::Crazyhouse(p) => {
-                        crate::eval::print_eval_breakdown(p.board(), &eval_params)
-                    }
-                }
+                with_game_pos!(&position, |p| crate::eval::print_eval_breakdown(
+                    p.board(),
+                    &eval_params
+                ));
             }
             "ponderhit" => {
                 // Gegner hat den vorhergesagten Zug gespielt: aus dem Ponder-Modus
@@ -212,20 +188,54 @@ fn load_syzygy(path: &str) -> Option<Arc<Syzygy>> {
     }
 }
 
-/// Aktives Spiel: Standard-, Chess960-, Atomic- oder Crazyhouse-Backend. Ein Enum statt eines
-/// Trait-Objekts, weil die Suche generisch (monomorphisiert) laeuft und die
-/// wenigen Dispatch-Stellen hier im UCI-Loop liegen.
+/// Aktives Spiel: Standard-, Chess960- oder eines der Varianten-Backends.
+/// Ein Enum statt eines Trait-Objekts, weil die Suche generisch
+/// (monomorphisiert) laeuft und die wenigen Dispatch-Stellen hier im
+/// UCI-Loop liegen — gebuendelt im Makro `with_game_pos!`.
 enum GamePos {
     Std(Position<Board>),
     Frc(Position<Board960>),
     Atomic(Position<BoardAtomic>),
     Crazyhouse(Position<BoardCrazyhouse>),
+    Antichess(Position<BoardAntichess>),
+    KingOfTheHill(Position<BoardKingOfTheHill>),
+    Horde(Position<BoardHorde>),
+    ThreeCheck(Position<BoardThreeCheck>),
+    RacingKings(Position<BoardRacingKings>),
 }
 
+/// Fuehrt `$body` mit der konkreten `Position<B>` des aktiven Backends aus.
+/// `$pos` ist `&GamePos` oder `&mut GamePos`; `$p` bindet die Position.
+/// Neue Backends: hier UND in `GamePos`/`new_game_pos` eintragen — der
+/// Compiler meckert dank erschoepfendem `match`, wenn eines fehlt.
+macro_rules! with_game_pos {
+    ($pos:expr, |$p:ident| $body:expr) => {
+        match $pos {
+            GamePos::Std($p) => $body,
+            GamePos::Frc($p) => $body,
+            GamePos::Atomic($p) => $body,
+            GamePos::Crazyhouse($p) => $body,
+            GamePos::Antichess($p) => $body,
+            GamePos::KingOfTheHill($p) => $body,
+            GamePos::Horde($p) => $body,
+            GamePos::ThreeCheck($p) => $body,
+            GamePos::RacingKings($p) => $body,
+        }
+    };
+}
+use with_game_pos;
+
 fn new_game_pos(options: &EngineOptions) -> GamePos {
+    // Chess960 ist nur fuer die Standardregeln eine eigene Aufstellungs-
+    // option; die Varianten-Backends nutzen Standard-Rochadenotation.
     match (options.variant, options.chess960) {
         (UciVariant::Atomic, _) => GamePos::Atomic(Position::new()),
         (UciVariant::Crazyhouse, _) => GamePos::Crazyhouse(Position::new()),
+        (UciVariant::Antichess, _) => GamePos::Antichess(Position::new()),
+        (UciVariant::KingOfTheHill, _) => GamePos::KingOfTheHill(Position::new()),
+        (UciVariant::Horde, _) => GamePos::Horde(Position::new()),
+        (UciVariant::ThreeCheck, _) => GamePos::ThreeCheck(Position::new()),
+        (UciVariant::RacingKings, _) => GamePos::RacingKings(Position::new()),
         (UciVariant::Chess, true) => GamePos::Frc(Position::new()),
         (UciVariant::Chess, false) => GamePos::Std(Position::new()),
     }

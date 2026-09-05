@@ -692,11 +692,7 @@ fn alpha_beta<B: EngineBoard>(
     // Stalemate/Checkmate nicht faelschlich durch Null-Move-Pruning laufen.
     let legal_moves = board.legal_gen();
     if legal_moves.count_remaining() == 0 {
-        return if in_check || board.is_variant_loss() {
-            -MATE + ply
-        } else {
-            0
-        };
+        return terminal_score(board, in_check, ply);
     }
 
     // --- Reverse Futility Pruning ----------------------------------------
@@ -1137,6 +1133,16 @@ fn alpha_beta<B: EngineBoard>(
 }
 // Maximale Quiescence-Tiefe: begrenzt Explosion bei vielen Captures.
 const MAX_QPLY: i32 = 12;
+
+/// Antichess: so viele Quiescence-Halbzuege lang wird Schlagzwang wie Schach
+/// behandelt (alle Zuege, kein Stand-Pat). Danach faellt die Quiescence auf
+/// den normalen Stand-Pat zurueck — eine bewusste Naeherung: der komplette
+/// Schlagzwang-Baum einer vollen Stellung ist riesig (gemessen 05.09.2026:
+/// ohne Cap qply bis 28, Startstellung nur noch Tiefe 2 in 1 s statt 7;
+/// Cap 4 → Tiefe 7, Cap 8 → Tiefe 6). Vier Halbzuege loesen die unmittelbar
+/// erzwungenen Schlaege am Horizont auf, ohne die Hauptsuche zu ersticken.
+/// Tuning-Kandidat fuer ein A/B (Antichess-only, Standard unberuehrt).
+const ANTICHESS_FORCED_QPLY_MAX: i32 = 4;
 // Delta-Pruning-Margin: ein Capture muss mindestens diesen Betrag über alpha
 // liegen können, sonst ist er hoffnungslos (verhindert nutzlose Suche).
 // Auf 150 reduziert (war 200): missed_capture-Rate war nach SEE-Einführung
@@ -1160,15 +1166,32 @@ fn quiescence<B: EngineBoard>(
     let in_check = board.checkers().popcnt() > 0;
     let mut legal_moves = board.legal_gen();
     if legal_moves.count_remaining() == 0 {
-        return if in_check || board.is_variant_loss() {
-            -MATE + ply
-        } else {
-            0
-        };
+        return terminal_score(board, in_check, ply);
     }
 
-    if in_check {
-        // Im Schach: alle legalen Züge durchsuchen, kein Stand-Pat.
+    // Antichess-Schlagzwang (05.09.2026): gibt es einen Schlagzug, sind ALLE
+    // legalen Zuege Schlagzuege — die Seite am Zug kann nicht "passen". Der
+    // Stand-Pat unten wuerde ihr genau das unterstellen und die Stellung
+    // (meist grob) ueberschaetzen: in Antichess ist Schlagen in der Regel
+    // schlecht, also waere "ich bleibe stehen" fast immer der beste Zug —
+    // ein illegaler. Deshalb wird Schlagzwang fuer die ersten
+    // ANTICHESS_FORCED_QPLY_MAX Quiescence-Halbzuege wie Schach behandelt:
+    // alle Zuege durchsuchen, kein Stand-Pat (Schlagketten enden von
+    // selbst, jeder Schlag entfernt einen Stein — der Cap begrenzt nur den
+    // Aufwand, siehe Konstante). Weil unter Schlagzwang jeder legale Zug
+    // ein Schlagzug ist, reicht die Pruefung des ersten Zugs. Fuer
+    // `chess::Board` ist `variant_kind()` die Konstante Standard → der
+    // Ausdruck wird wegoptimiert, Standardpfad bit-exakt (Node-Counts
+    // 3 FENs go depth 9 identisch zum Baseline-Binary).
+    let forced_capture = qply < ANTICHESS_FORCED_QPLY_MAX
+        && board.variant_kind() == crate::backend::VariantKind::Antichess
+        && board
+            .legal_gen()
+            .next()
+            .is_some_and(|mv| board.is_capture(mv));
+
+    if in_check || forced_capture {
+        // Im Schach (oder unter Schlagzwang): alle legalen Züge durchsuchen, kein Stand-Pat.
         // Stand-Pat wäre falsch, weil die Seite nicht einfach "passen" kann.
         // Tiefenlimit gilt nicht im Schach — sonst würden Matt-Drohungen übersehen.
         let mut best = -INF;
@@ -1335,6 +1358,34 @@ fn quiescence<B: EngineBoard>(
     }
 
     alpha
+}
+
+/// Bewertung einer Stellung OHNE legale Zuege (Hauptsuche und Quiescence
+/// nutzen dieselbe Reihenfolge):
+///
+///   1. Varianten-SIEG der Seite am Zug (Antichess: keine Steine/Zuege mehr;
+///      Racing Kings: Gegner konnte nicht nachziehen) → `MATE - ply`, also
+///      "Matt in ply Halbzuegen ab Wurzel" — die kuerzeste Gewinnroute
+///      bekommt den hoechsten Score, genau wie beim orthodoxen Matt.
+///   2. Varianten-REMIS (Racing Kings, beide auf Reihe 8) → 0.
+///   3. Sonst wie bisher: im Schach oder Varianten-Niederlage (Atomic-
+///      Explosion, dritter Schach in Three-Check, KotH-Huegel des Gegners,
+///      Horde ohne weisse Steine) → `-MATE + ply`, andernfalls Patt → 0.
+///
+/// Fuer `chess::Board` sind `is_variant_win`/`is_variant_draw`/
+/// `is_variant_loss` Trait-Defaults (`false`) und werden wegoptimiert —
+/// der Standardpfad bleibt bit-exakt (Node-Count-Verifikation 05.09.2026).
+#[inline]
+fn terminal_score<B: EngineBoard>(board: &B, in_check: bool, ply: i32) -> i32 {
+    if board.is_variant_win() {
+        MATE - ply
+    } else if board.is_variant_draw() {
+        0
+    } else if in_check || board.is_variant_loss() {
+        -MATE + ply
+    } else {
+        0
+    }
 }
 
 fn eval_stm<B: EngineBoard>(board: &B, params: &EvalParams) -> i32 {

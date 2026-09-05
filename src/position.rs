@@ -103,7 +103,9 @@ pub fn move_to_uci(m: ChessMove) -> String {
             Piece::Rook => 'r',
             Piece::Bishop => 'b',
             Piece::Knight => 'n',
-            _ => 'q',
+            // Antichess erlaubt die Umwandlung in einen Koenig (`e7e8k`).
+            Piece::King => 'k',
+            Piece::Pawn => 'q',
         };
         s.push(ch);
     }
