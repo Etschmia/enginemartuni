@@ -85,8 +85,14 @@ King of the Hill, Horde, Three-Check, Racing Kings.**
   (nur statischer Horizontwert); Three-Check-Exposition zählt auch von
   gegnerischen Steinen besetzte Strahlfelder. Varianten-Konstanten sind
   Erstentwürfe ohne A/B, noch nicht in `eval.toml`.
-- **Live 05.09.:** offen — Rollout (Commit, Build, `config.yml`-Freigabe
-  der fünf Varianten, Bot-Restart) trägt der Hauptagent nach.
+- **Live 05.09. 17:02:** Commit cc8184a gepusht, Release-Build, die fünf
+  Varianten (`antichess`, `horde`, `kingOfTheHill`, `racingKings`,
+  `threeCheck`) in der ignorierten Operator-`config.yml` des lichess-bot
+  freigeschaltet (Backup `config.yml.bak-20260905`), Hard-Restart des
+  Dienstes. Engine-Config OK, Wiederverbindung innerhalb ~1 s, zwei
+  laufende Partien wurden wieder aufgenommen. Rollback: Varianten in der
+  `config.yml` wieder auskommentieren + `git reset --hard c0c93cc` +
+  Build + Restart.
 
 **01.09.2026 — Countermove Heuristic implementiert (aus `docs/kimi-vorschlag.md`).**
 - Tabelle `[side][from*64+to]` in `SearchState`, indiziert über den
