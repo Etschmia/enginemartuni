@@ -26,6 +26,10 @@ docs/post-tobias-*.md
 # cron konfigurationsdatei
 tools/analyze_cron.config.json
 
+# lokaler Cron-Laufzeitzustand (Quarantaene-Fehlerzaehler)
+tools/analyze_cron.quarantine.json
+tools/*.json.tmp
+
 # A/B-Test-Output (lokal, kann gross werden)
 matches/
 

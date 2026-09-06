@@ -10,6 +10,58 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**06.09.2026 — Blunder-Analyse-Cron repariert: Varianten-Analysepfad
+(Fairy-Stockfish) + Quarantäne gegen Head-of-Line-Blocking.**
+- **Befund:** `info` meldete „0 Partien analysiert". Zwei unabhängige
+  Defekte lagen übereinander. (a) Beim Archivierungslauf am 06.09. 10:33
+  war eine Terminal-Zeile (`terminal_resize_reflow = tru0`) vor das JSON in
+  `tools/analyze_cron.config.json` gerutscht; alle 120 Cron-Läufe des
+  Analysefensters 17:00–18:59 brachen sofort mit `could not load config …:
+  Expecting value: line 1 column 1` ab. Weil die Datei lokal auf
+  `skip-worktree` steht, war die Beschädigung in `git status` unsichtbar.
+  (b) Schon am 05.09. lief der Cron minütlich ins Leere: die Varianten-PGNs
+  des Rollouts vom Vortag ließen den variantenunfähigen Stockfish mit
+  `chess.engine.EngineError: engine does not support UCI_Variant` sterben.
+  `analyze_blunders.py` verbucht eine PGN nur bei Erfolg, also wählte
+  `pick_next_pgn()` jede Minute dieselbe Antichess-Partie — klassisches
+  Head-of-Line-Blocking, das alle 90 wartenden PGNs mit blockierte.
+- **Zwei Analysepfade:** Standard, Chess960 und „From Position" gehen
+  weiterhin an `/usr/games/stockfish` (17.1) und in die bisherige
+  Zustandsdatei. Echte Varianten (Antichess, Atomic, Crazyhouse, King of
+  the Hill, Horde, Three-check, Racing Kings) gehen an **Fairy-Stockfish 14**
+  (`~/tools/fairy-stockfish`, Release `fairy_sf_14`, `x86-64-bmi2`) und in
+  eine **getrennte** Zustandsdatei `analyse-<datum>-varianten.json` — ein
+  Antichess-Blunder hat statistisch nichts mit einem Standard-Blunder zu
+  tun, gemischt wären die gewohnten Blunder/Partie-Kennzahlen unbrauchbar.
+  Die Variante wird aus dem `[Variant]`-Header der PGN gelesen; eine PGN
+  gilt als erledigt, sobald sie in einer der beiden Zustandsdateien steht.
+  Neue Config-Schlüssel: `engine`, `variant-engine`, `variant-output`,
+  `max-failures` (alle mit Defaults, Config bleibt abwärtskompatibel).
+  `ENGINE_DIRS` ergänzt den minimalen Cron-PATH um `/usr/games` und
+  `~/tools`, plus `shutil.which()`-Vorabprüfung, damit eine fehlende Engine
+  als klare Log-Zeile erscheint statt als nichtssagendes rc=2.
+- **Quarantäne als Sicherheitsnetz:** `tools/analyze_cron.quarantine.json`
+  zählt Fehlschläge pro PGN mit; ab `max-failures` (3) wird die Datei
+  dauerhaft übersprungen, ein späterer Erfolgslauf löscht den Zähler.
+  Einträge zu archivierten PGNs werden beim Schreiben ausgesiebt,
+  geschrieben wird atomar über Temp-Datei + `replace()`. Damit kann kein
+  einzelner Crash — welcher Ursache auch immer — das Analysefenster mehr
+  stilllegen.
+- **Verifikation:** Alle 90 wartenden PGNs korrekt klassifiziert (44 →
+  Stockfish: 32 Standard + 12 Chess960; 46 → Fairy: 11 Antichess, 8 KotH,
+  8 Three-check, 8 Racing Kings, 6 Horde, 3 Crazyhouse, 2 Atomic). Je eine
+  PGN pro Variante durch die volle Toolchain (`--depth 6`): siebenmal rc=0
+  mit plausiblen Blunder-Zahlen. Quarantäne-Zyklus durchgespielt (greift
+  exakt beim 3. Fehlschlag, Reset nach Erfolg, Pruning nach Archivierung,
+  robust gegen kaputte Zustandsdatei). Zwei echte Cron-Ticks mit
+  cron-typisch minimalem `PATH=/usr/bin:/bin`: Tick 1 analysierte die seit
+  05.09. blockierende Antichess-Partie in 40,9 s (rc=0), Tick 2 rückte auf
+  die nächste PGN vor (Chess960 → Stockfish → Standard-Zustandsdatei).
+- **Offen:** Varianten-Lookback, sobald die 46 Varianten-PGNs
+  durchgelaufen sind — es ist das erste echte Blunder-Material für die
+  fünf neuen Varianten und die Grundlage für die noch nicht per A/B
+  belegten Varianten-Konstanten.
+
 **05.09.2026 — Fünf weitere Lichess-Varianten implementiert: Antichess,
 King of the Hill, Horde, Three-Check, Racing Kings.**
 - **Gerüst:** ein generischer shakmaty-Adapter `BoardShak<P>`

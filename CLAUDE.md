@@ -58,6 +58,27 @@ Restart:          always
 
 `challenge_cron.py` läuft stündlich (Crontab, `45 * * * *`) und fordert automatisch einen Online-Bot heraus (abwechselnd 5+0 Blitz und 15+10 Rapid). Ergebnisse werden in `challenge_cron_tracking.json` erfasst. Log: `lichess_bot_auto_logs/challenge_cron.log`.
 
+### Blunder-Analyse-Cron
+
+`tools/analyze_cron.py` läuft minütlich im Fenster 17–19 Uhr (Crontab) und
+analysiert pro Tick genau eine noch offene PGN aus `~/lichess-bot/game_records/`.
+
+- **Zwei Analysepfade:** Standard/Chess960/„From Position" → `stockfish`
+  (`/usr/games`, 17.1) → `analyse-<datum>.json`; echte Varianten (Antichess,
+  Atomic, Crazyhouse, KotH, Horde, Three-check, Racing Kings) →
+  **`fairy-stockfish`** (`~/tools/fairy-stockfish`, Fairy-Stockfish 14) →
+  `analyse-<datum>-varianten.json`. Vanilla-Stockfish kann kein
+  `UCI_Variant` — ohne Fairy-Stockfish bricht jede Varianten-PGN ab.
+- **Konfiguration:** `tools/analyze_cron.config.json` (lokal, `skip-worktree`
+  + gitignored). Nach einer Archivierung müssen `output` und `variant-output`
+  auf die neuen Zieldateien zeigen. **Vor dem Speichern JSON validieren** —
+  eine kaputte Config legt das komplette Analysefenster still (06.09.2026).
+- **Quarantäne:** `tools/analyze_cron.quarantine.json` zählt Fehlschläge je
+  PGN; ab `max-failures` (3) wird sie übersprungen, ein Erfolgslauf setzt den
+  Zähler zurück. Verhindert, dass eine einzelne kaputte PGN alle
+  nachfolgenden blockiert.
+- **Log:** `logs/analyze_cron.log` (`grep -E "QUARANTINE|ERROR"` für Probleme).
+
 ```bash
 cargo build --release
 echo -e "uci\nisready\nposition startpos\ngo movetime 1000\nquit" | ./target/release/martuni

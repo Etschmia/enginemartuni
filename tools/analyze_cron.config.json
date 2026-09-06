@@ -3,6 +3,13 @@
   "min-movetime": 0.0,
   "depth": 17,
   "threads": 2,
+  "hash": 256,
+
+  "engine": "stockfish",
   "output": "analyse-05.10.2026.json",
-  "hash": 256
+
+  "variant-engine": "fairy-stockfish",
+  "variant-output": "analyse-05.10.2026-varianten.json",
+
+  "max-failures": 3
 }
