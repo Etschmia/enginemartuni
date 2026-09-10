@@ -8,7 +8,7 @@
 //!     freien Turm-Startfeldern, Shredder-/X-FEN-Parsing, Zobrist-Hash)
 //!     und generiert die legalen Zuege.
 //!   - Beim Bau eines `Board960` werden Bitboards, Koenigsfelder, Checkers
-//!     und die Zugliste EINMAL in `chess`-Typen gespiegelt. Eval, SEE,
+//!     in `chess`-Typen gespiegelt; die Zugliste folgt beim ersten Bedarf. Eval, SEE,
 //!     PSTs und alle statischen Angriffstabellen rechnen dann exakt wie im
 //!     Standard-Backend auf diesen Bitboards — kein Term muss 960 "kennen".
 //!
@@ -17,10 +17,8 @@
 //! unveraendert korrekt; `is_capture` behandelt sie als Nicht-Schlagzug.
 //!
 //! Bewusste v1-Vereinfachungen (Kosten nur im 960-Modus):
-//!   - Zugliste wird pro Knoten eager erzeugt (kein Lazy-Staging wie die
-//!     chess-Crate-MoveGen); Lazy lohnt nicht, weil die Suche an JEDEM
-//!     Knoten vor Stand-Pat die Zugliste fuer die Matt-/Patt-Erkennung
-//!     braucht (search.rs::quiescence, count_remaining).
+//!   - Legal lists are lazy: TT cutoffs can avoid generation. Terminal
+//!     checks still request the list before pruning/stand-pat.
 //!   - Zobrist-Hash wird pro Stellung komplett neu berechnet. Mikro-Bench
 //!     26.07.2026 (bench_from_pos): ~12 ns/Stellung, <5 % der from_pos-
 //!     Kosten — inkrementelles Update lohnt NICHT. Teuer waren stattdessen
@@ -32,7 +30,7 @@
 //!   - Polyglot-Buch bleibt aus (`as_std() == None`), Syzygy funktioniert
 //!     ueber die generische Probe (Endspiele sind in 960 identisch).
 
-use crate::backend::{EngineBoard, MoveGenLike};
+use crate::backend::{EngineBoard, MoveGenLike, MoveMetadata};
 use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, Piece, Square, ALL_SQUARES, EMPTY};
 use shakmaty::fen::Fen;
 use shakmaty::uci::UciMove;
@@ -41,7 +39,7 @@ use shakmaty::{
     CastlingMode, Chess, Color as ShakColor, EnPassantMode, Move as ShakMove,
     Position as ShakPositionTrait, Role, Square as ShakSquare,
 };
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 // --- Typ-Konvertierungen ---------------------------------------------------
 // Beide Crates nummerieren Felder identisch (A1=0 … H8=63, zeilenweise),
@@ -96,11 +94,8 @@ pub struct Board960 {
     /// nicht das Zielfeld (e6).
     ep_pawn: Option<Square>,
     hash: u64,
-    /// Legale Zuege dieser Stellung (eager, s. Modulkopf). Im `Arc`, damit
-    /// `legal_gen` und `Board960::clone` die Liste teilen statt kopieren —
-    /// die Kopie war im Mikro-Bench teurer als der gesamte restliche
-    /// Board-Bau (26.07.2026).
-    moves: Arc<Vec<MoveEntry>>,
+    /// Lazy legal list; initialized clones and generators share its Arc.
+    moves: OnceLock<Arc<Vec<MoveEntry>>>,
 }
 
 impl Board960 {
@@ -130,12 +125,7 @@ impl Board960 {
             ALL_SQUARES[pawn_idx]
         });
         let hash = pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal).0;
-        let moves = Arc::new(
-            pos.legal_moves()
-                .iter()
-                .map(|m| MoveEntry { cm: cm_of(m), sm: *m })
-                .collect::<Vec<_>>(),
-        );
+
 
         Board960 {
             checkers: BitBoard(pos.checkers().0),
@@ -145,13 +135,22 @@ impl Board960 {
             kings,
             ep_pawn,
             hash,
-            moves,
+            moves: OnceLock::new(),
             pos,
         }
     }
 
+    /// Generated on first demand; initialized clones share the immutable list.
+    fn moves(&self) -> &Arc<Vec<MoveEntry>> {
+        self.moves.get_or_init(|| Arc::new(
+            self.pos.legal_moves().iter()
+                .map(|m| MoveEntry { cm: cm_of(m), sm: *m })
+                .collect()
+        ))
+    }
+
     fn find_move(&self, mv: ChessMove) -> Option<&MoveEntry> {
-        self.moves.iter().find(|e| e.cm == mv)
+        self.moves().iter().find(|e| e.cm == mv)
     }
 }
 
@@ -209,7 +208,7 @@ impl EngineBoard for Board960 {
     }
 
     fn status(&self) -> BoardStatus {
-        if !self.moves.is_empty() {
+        if !self.moves().is_empty() {
             BoardStatus::Ongoing
         } else if self.checkers != EMPTY {
             BoardStatus::Checkmate
@@ -236,7 +235,7 @@ impl EngineBoard for Board960 {
 
     fn legal_gen(&self) -> Gen960 {
         Gen960 {
-            moves: Arc::clone(&self.moves),
+            moves: Arc::clone(self.moves()),
             yielded: [0; 4],
             mask: !EMPTY,
             cursor: 0,
@@ -340,6 +339,15 @@ impl Iterator for Gen960 {
 }
 
 impl MoveGenLike for Gen960 {
+    fn next_with_metadata(&mut self) -> Option<(ChessMove, Option<MoveMetadata>)> {
+        let mv = self.next()?;
+        let sm = self.moves[self.cursor - 1].sm;
+        Some((mv, Some(MoveMetadata {
+            capture: sm.is_capture(),
+            drop: matches!(sm, ShakMove::Put { .. }),
+        })))
+    }
+
     fn set_iterator_mask(&mut self, mask: BitBoard) {
         self.mask = mask;
         self.cursor = 0;
@@ -354,6 +362,27 @@ impl MoveGenLike for Gen960 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lazy_lists_preserve_clone_and_child_independence() {
+        let board = Board960::startpos();
+        assert!(board.moves.get().is_none());
+        let cold_clone = board.clone();
+        let _ = board.get_hash();
+        let _ = board.checkers();
+        assert!(board.moves.get().is_none());
+        let mv = board.legal_gen().next().unwrap();
+        assert!(cold_clone.moves.get().is_none());
+        let warm_clone = board.clone();
+        assert!(Arc::ptr_eq(board.moves(), warm_clone.moves()));
+        assert_eq!(board.legal_gen().collect::<Vec<_>>(), cold_clone.legal_gen().collect::<Vec<_>>());
+        let child = board.make_move_new(mv);
+        assert!(child.moves.get().is_none());
+        crate::backend::assert_capture_metadata(&board);
+        crate::backend::assert_capture_metadata(&child);
+        assert!(!Arc::ptr_eq(board.moves(), child.moves()));
+    }
+
 
     /// Perft ueber die EngineBoard-Schnittstelle (legal_gen + make_move_new)
     /// — testet die komplette Konvertierungsschicht, nicht shakmaty selbst.
@@ -522,7 +551,7 @@ mod bench_from_pos {
         for _ in 0..N {
             for pos in &positions {
                 let b = Board960::from_pos(pos.clone());
-                acc += b.moves.len();
+                acc += b.moves().len();
             }
         }
         println!("from_pos:     {:?}  (acc {})", t.elapsed(), acc);

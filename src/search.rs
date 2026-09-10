@@ -1608,7 +1608,7 @@ struct MovePicker<'a, B: EngineBoard> {
 impl<'a, B: EngineBoard> MovePicker<'a, B> {
     fn new(
         board: &'a B,
-        moves: B::Gen,
+        mut moves: B::Gen,
         tt_move: Option<ChessMove>,
         killers: [Option<ChessMove>; 2],
         countermove: Option<ChessMove>,
@@ -1630,9 +1630,10 @@ impl<'a, B: EngineBoard> MovePicker<'a, B> {
         // Erster gesucht wird) — die teure Capture-SEE folgt erst in Stufe 2.
         // `move_history` wird nur hier gelesen (Knoten-Eintritt) und NICHT
         // gespeichert; danach hält der Picker keinen State-Borrow mehr.
-        for mv in moves {
+        while let Some((mv, metadata)) = moves.next_with_metadata() {
+            let is_capture = metadata.map_or_else(|| board.is_capture(mv), |m| m.capture);
             if Some(mv) == tt_move {
-                let see_val = if board.is_capture(mv) {
+                let see_val = if is_capture {
                     Some(see(board, mv))
                 } else {
                     None
@@ -1642,9 +1643,9 @@ impl<'a, B: EngineBoard> MovePicker<'a, B> {
                     order_key: -100_000,
                     see_val,
                 });
-            } else if board.is_capture(mv) {
+            } else if is_capture {
                 captures.push(mv);
-            } else if board.is_drop(mv) {
+            } else if metadata.map_or_else(|| board.is_drop(mv), |m| m.drop) {
                 let h = move_history[history_idx(stm, mv.get_source(), mv.get_dest())];
                 quiets.push(ScoredMove {
                     mv,
@@ -2066,6 +2067,11 @@ fn variant_capture_value<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
 
     let mover = board.side_to_move();
     let before = material(board, mover) - material(board, !mover);
+    let values = [Piece::Pawn, Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen, Piece::King]
+        .map(see_piece_value);
+    if let Some(after) = board.material_balance_after(mv, values) {
+        return after - before;
+    }
     let after = board.make_move_new(mv);
     material(&after, mover) - material(&after, !mover) - before
 }
@@ -2155,6 +2161,51 @@ mod tests {
     use crate::board_atomic::BoardAtomic;
     use crate::board_crazyhouse::BoardCrazyhouse;
     use chess::{Board, MoveGen};
+
+    /// The old full-child SEE calculation remains an independent oracle.
+    fn assert_variant_material<B: EngineBoard>(fens: &[&str]) {
+        fn material<B: EngineBoard>(b: &B, side: Color) -> i32 {
+            [Piece::Pawn, Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen, Piece::King]
+                .iter().map(|&p| ((b.pieces(p) & b.color_combined(side)).popcnt() as i32
+                    + b.pocket_count(side, p) as i32) * see_piece_value(p)).sum()
+        }
+        for fen in fens {
+            let board = B::from_fen(fen).unwrap();
+            crate::backend::assert_capture_metadata(&board);
+            for mv in board.legal_gen() {
+                let child = board.make_move_new(mv);
+                let side = board.side_to_move();
+                let expected = material(&child, side) - material(&child, !side)
+                    - material(&board, side) + material(&board, !side);
+                assert_eq!(variant_capture_value(&board, mv), expected, "{fen}: {mv}");
+                crate::backend::assert_capture_metadata(&child);
+            }
+        }
+    }
+
+    #[test]
+    fn variant_see_matches_full_child_for_special_moves() {
+        use crate::board_shak::*;
+        assert_variant_material::<BoardAtomic>(&[
+            "4k3/4p3/8/8/8/8/8/4R1K1 w - - 0 1",
+            "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+            "4k3/6P1/8/8/8/8/8/4K3 w - - 0 1",
+        ]);
+        assert_variant_material::<BoardCrazyhouse>(&[
+            "4k3/8/8/3q~4/4P3/8/8/4K3[PNq] w - - 0 1",
+            "4k3/8/8/3pP3/8/8/8/4K3[] w - d6 0 1",
+            "4k2r/6P1/8/8/8/8/8/4K3[] w - - 0 1",
+            "4k3/8/8/8/8/8/8/R3K2R[] w KQ - 0 1",
+        ]);
+        assert_variant_material::<BoardAntichess>(&[
+            "8/3P4/8/8/8/8/8/7k w - - 0 1",
+            "8/8/8/4p3/3P4/8/8/8 w - - 0 1",
+        ]);
+        assert_variant_material::<BoardKingOfTheHill>(&["4k3/8/8/8/8/3K4/8/8 w - - 0 1"]);
+        assert_variant_material::<BoardHorde>(&["8/8/8/8/3k4/8/3P4/8 b - - 0 1"]);
+        assert_variant_material::<BoardThreeCheck>(&["4k3/8/8/8/8/8/8/4K2R w - - 1+3 0 1"]);
+        assert_variant_material::<BoardRacingKings>(&["K7/7k/8/8/8/8/8/8 b - - 0 1"]);
+    }
 
     fn clock_test_state(tt: &mut TranspositionTable) -> SearchState<'_> {
         SearchState {
