@@ -80,3 +80,25 @@ Point 2 validation: 201 unit tests passed, zero failures, one pre-existing
 ignored microbenchmark. Release UCI results match point 1 exactly for all 11
 cases, both with the checked-in modest depths and with `--standard-depth 5`
 (Standard and Chess960). This is correctness evidence, not a speedup claim.
+
+## Point 3: redundant node work
+
+RFP stores its static evaluation locally; NMP reuses it if present and otherwise
+evaluates lazily. All pruning gates, bounds, evaluation values and ordering stay
+unchanged. Non-check extension candidates are tested only with at least two
+remaining extension plies. Check-extension phase calculation is skipped when
+the budget is exhausted; child check detection still runs for pruning and LMR.
+
+Test-only thread-local counters exercise real alpha-beta calls: overlapping
+RFP/NMP requests evaluate the selected node once, disabled-pruning combinations
+retain their lazy behavior, and candidate checks stop with zero or one extension
+ply available (but run with two). The full suite passes 203 tests, zero failures,
+one pre-existing ignored microbenchmark. No instrumentation is in release builds.
+
+The final release also passes all eight UCI controls (including the read-only
+Syzygy root probe) and exactly matches point 2's per-iteration nodes, scores,
+root PV and bestmove/ponder output on all 11 cases at both tested depth sets.
+Point 1 is the reference for implementation-only comparisons; no separate
+base-source binary was built. No controlled timing benchmark or Elo experiment
+was performed; initial production saturation and later modest correctness runs
+do not provide performance evidence.
