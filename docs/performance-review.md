@@ -43,3 +43,40 @@ All builds/tests in this work use the job artifact CARGO_TARGET_DIR, nice 19,
 credible speed/NPS/Elo claims. The pre-existing ignored Chess960 microbenchmark
 is not run under load. Actual execution records and binary SHA256/source commits
 are stored in the job's progress.md and artifacts.
+
+## Point 2: bounded variant adapter improvements
+
+Variant/Chess960 generators expose capture/drop metadata for the exact entry
+just yielded. MovePicker consumes it without rescanning the legal list; standard
+MoveGen retains the existing board-based fallback. The generator's cursor,
+mask, yielded bits, ordering and stable picker sorts are unchanged.
+
+Atomic, Crazyhouse and Chess960 legal lists now use `OnceLock<Arc<Vec<_>>>`.
+Construction still calculates the same board mirrors, checkers, EP and hash;
+legal generation occurs at its first consumer. Initialized clones share the
+list; a clone of an uninitialized board initializes independently. Child boards
+start with a fresh cache. No terminal test moves behind pruning: status and
+legal_gen still force the list wherever required. TT cutoffs can avoid it.
+
+Variant SEE plays the same infrastructure move on a raw cloned position and
+counts board/pocket material with the same piece weights. It avoids building a
+second engine adapter (hash, mirrors, outcomes and legal list) solely for SEE;
+no new exchange heuristic or rule implementation is introduced. Differential
+tests compare this against the old full-child material calculation for every
+legal move in selected EP, explosion, promotion, promoted-piece capture,
+pocket/drop, castling and variant terminal-transition positions. Existing
+adapter-versus-shakmaty perft and variant search/outcome tests remain enabled.
+
+Residual work is explicit: BoardShak's five generic variants still construct
+legal lists/outcomes eagerly, preserving the Antichess single-list terminal
+optimization. Arbitrary ChessMove-to-shakmaty translation, other metadata callers,
+and some quiescence classification still use linear lookup. Raw SEE move play
+is repeated when a capture is searched; Crazyhouse checking drops still build a
+child for detection and again for search. Eliminating these remaining costs
+would require broader move-handle or child-lifetime changes and is deferred.
+No general all-children cache, move limit change, or buffer rewrite is included.
+
+Point 2 validation: 201 unit tests passed, zero failures, one pre-existing
+ignored microbenchmark. Release UCI results match point 1 exactly for all 11
+cases, both with the checked-in modest depths and with `--standard-depth 5`
+(Standard and Chess960). This is correctness evidence, not a speedup claim.

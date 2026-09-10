@@ -46,11 +46,23 @@ pub enum VariantKind {
     RacingKings,
 }
 
+/// Immutable metadata carried by variant legal-move entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MoveMetadata {
+    pub capture: bool,
+    pub drop: bool,
+}
+
 /// Zuggenerator-Schnittstelle im Stil von `chess::MoveGen`: Iterator ueber
 /// legale Zuege mit nachtraeglich setzbarer Zielfeld-Maske. Bereits
 /// ausgegebene Zuege werden nach einem Maskenwechsel nicht erneut geliefert
 /// (Quiescence-Muster: erst Captures per Maske, dann Rest per `!EMPTY`).
 pub trait MoveGenLike: Iterator<Item = ChessMove> {
+    /// Optional move metadata for the just-yielded move. Adapters already
+    /// own this metadata; standard MoveGen uses the board fallback.
+    fn next_with_metadata(&mut self) -> Option<(ChessMove, Option<MoveMetadata>)> {
+        self.next().map(|mv| (mv, None))
+    }
     fn set_iterator_mask(&mut self, mask: BitBoard);
     /// Anzahl der noch nicht ausgegebenen Zuege (maskenunabhaengig).
     fn count_remaining(&self) -> usize;
@@ -86,6 +98,11 @@ pub trait EngineBoard: Clone + Send + Sync + 'static {
     fn get_hash(&self) -> u64;
     fn status(&self) -> BoardStatus;
     fn make_move_new(&self, mv: ChessMove) -> Self;
+    /// Exact material balance after a legal move, using caller-supplied piece
+    /// values in chess::Piece order. Variant adapters avoid full child setup.
+    fn material_balance_after(&self, _mv: ChessMove, _values: [i32; 6]) -> Option<i32> {
+        None
+    }
     fn null_move(&self) -> Option<Self>;
     fn legal_gen(&self) -> Self::Gen;
 
@@ -330,4 +347,30 @@ impl EngineBoard for Board {
 
         Err(format!("Illegal move: {}", uci))
     }
+}
+
+#[cfg(test)]
+pub(crate) fn assert_capture_metadata<B: EngineBoard>(board: &B) {
+    use chess::EMPTY;
+    let all: Vec<_> = board.legal_gen().collect();
+    let mask = *board.color_combined(!board.side_to_move());
+    let mut expected: Vec<_> = all.iter().copied()
+        .filter(|m| BitBoard::from_square(m.get_dest()) & mask != EMPTY).collect();
+    let first_len = expected.len();
+    expected.extend(all.iter().copied()
+        .filter(|m| BitBoard::from_square(m.get_dest()) & mask == EMPTY));
+    let mut gen = board.legal_gen();
+    gen.set_iterator_mask(mask);
+    let mut actual = Vec::new();
+    for next_mask in [None, Some(!EMPTY)] {
+        if let Some(mask) = next_mask { gen.set_iterator_mask(mask); }
+        while let Some((mv, capture)) = gen.next_with_metadata() {
+            assert_eq!(capture, Some(MoveMetadata { capture: board.is_capture(mv), drop: board.is_drop(mv) }), "{}", mv);
+            actual.push(mv);
+            assert_eq!(gen.count_remaining(), all.len() - actual.len());
+        }
+        if next_mask.is_none() { assert_eq!(actual.len(), first_len); }
+    }
+    assert_eq!(actual, expected, "mask changes must preserve order and yield each move once");
+    assert_eq!(gen.next_with_metadata(), None);
 }

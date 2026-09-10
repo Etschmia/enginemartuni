@@ -30,7 +30,7 @@
 //! Alle fuenf Varianten nutzen die Standard-Rochadenotation (`e1g1`).
 //! Polyglot-Buch und Syzygy sind aus (orthodoxe Daten passen nicht).
 
-use crate::backend::{EngineBoard, MoveGenLike, VariantKind};
+use crate::backend::{EngineBoard, MoveGenLike, MoveMetadata, VariantKind};
 use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, Piece, Square, ALL_SQUARES, EMPTY};
 use shakmaty::fen::Fen;
 use shakmaty::uci::UciMove;
@@ -321,6 +321,11 @@ impl<P: ShakVariant> EngineBoard for BoardShak<P> {
         Self::from_pos(pos)
     }
 
+    fn material_balance_after(&self, mv: ChessMove, values: [i32; 6]) -> Option<i32> {
+        let entry = self.find_move(mv)?;
+        Some(crate::variant_material::balance_after(&self.pos, entry.sm, values))
+    }
+
     // Null-Move-Pruning ist fuer alle Varianten dieses Adapters aus:
     // Schlagzwang (Antichess), Zielfeld-Siege (KotH/Racing Kings) und
     // Schachzaehlung (Three-Check) machen "passen ist nie besser als ziehen"
@@ -445,6 +450,15 @@ impl Iterator for GenShak {
 }
 
 impl MoveGenLike for GenShak {
+    fn next_with_metadata(&mut self) -> Option<(ChessMove, Option<MoveMetadata>)> {
+        let mv = self.next()?;
+        let sm = self.moves[self.cursor - 1].sm;
+        Some((mv, Some(MoveMetadata {
+            capture: sm.is_capture(),
+            drop: matches!(sm, ShakMove::Put { .. }),
+        })))
+    }
+
     fn set_iterator_mask(&mut self, mask: BitBoard) {
         self.mask = mask;
         self.cursor = 0;
@@ -474,6 +488,7 @@ mod tests {
         for fen in fens {
             let board = BoardShak::<P>::from_fen(fen)
                 .unwrap_or_else(|e| panic!("{:?}: FEN {} ungueltig: {}", P::KIND, fen, e));
+            crate::backend::assert_capture_metadata(&board);
             let reference: P = Fen::from_ascii(fen.as_bytes())
                 .unwrap()
                 .into_position(CastlingMode::Standard)

@@ -16,6 +16,7 @@ mod syzygy;
 mod tt;
 mod uci;
 mod variants;
+mod variant_material;
 
 fn main() {
     uci::uci_loop();

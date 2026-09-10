@@ -11,7 +11,7 @@
 //! generisch bleiben. Polyglot und Syzygy sind bewusst deaktiviert, weil
 //! deren Daten orthodoxe Schachregeln voraussetzen.
 
-use crate::backend::{EngineBoard, MoveGenLike, VariantKind};
+use crate::backend::{EngineBoard, MoveGenLike, MoveMetadata, VariantKind};
 use chess::{BitBoard, Board, BoardStatus, ChessMove, Color, Piece, Square, ALL_SQUARES, EMPTY};
 use shakmaty::fen::Fen;
 use shakmaty::uci::UciMove;
@@ -21,7 +21,7 @@ use shakmaty::{
     CastlingMode, Color as ShakColor, EnPassantMode, Move as ShakMove,
     Position as ShakPositionTrait, Role, Square as ShakSquare,
 };
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[inline]
 fn sq(s: ShakSquare) -> Square {
@@ -70,7 +70,7 @@ pub struct BoardAtomic {
     kings: [Square; 2],
     ep_pawn: Option<Square>,
     hash: u64,
-    moves: Arc<Vec<MoveEntry>>,
+    moves: OnceLock<Arc<Vec<MoveEntry>>>,
     variant_loss: bool,
 }
 
@@ -100,15 +100,7 @@ impl BoardAtomic {
             ALL_SQUARES[pawn_idx]
         });
         let hash = pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal).0;
-        let moves = Arc::new(
-            pos.legal_moves()
-                .iter()
-                .map(|m| MoveEntry {
-                    cm: cm_of(m),
-                    sm: *m,
-                })
-                .collect(),
-        );
+
 
         Self {
             checkers: BitBoard(pos.checkers().0),
@@ -118,14 +110,23 @@ impl BoardAtomic {
             kings,
             ep_pawn,
             hash,
-            moves,
+            moves: OnceLock::new(),
             variant_loss,
             pos,
         }
     }
 
+    /// Generated on first demand; initialized clones share the immutable list.
+    fn moves(&self) -> &Arc<Vec<MoveEntry>> {
+        self.moves.get_or_init(|| Arc::new(
+            self.pos.legal_moves().iter()
+                .map(|m| MoveEntry { cm: cm_of(m), sm: *m })
+                .collect()
+        ))
+    }
+
     fn find_move(&self, mv: ChessMove) -> Option<&MoveEntry> {
-        self.moves.iter().find(|entry| entry.cm == mv)
+        self.moves().iter().find(|entry| entry.cm == mv)
     }
 }
 
@@ -177,7 +178,7 @@ impl EngineBoard for BoardAtomic {
     fn status(&self) -> BoardStatus {
         if self.variant_loss {
             BoardStatus::Checkmate
-        } else if !self.moves.is_empty() {
+        } else if !self.moves().is_empty() {
             BoardStatus::Ongoing
         } else if self.checkers != EMPTY {
             BoardStatus::Checkmate
@@ -195,6 +196,11 @@ impl EngineBoard for BoardAtomic {
         Self::from_pos(pos)
     }
 
+    fn material_balance_after(&self, mv: ChessMove, values: [i32; 6]) -> Option<i32> {
+        let entry = self.find_move(mv)?;
+        Some(crate::variant_material::balance_after(&self.pos, entry.sm, values))
+    }
+
     // Null-Move-Pruning ist fuer Atomic deaktiviert. Ein erfundener Passzug
     // waere wegen der explosionsbasierten Schachdefinition besonders riskant.
     fn null_move(&self) -> Option<Self> {
@@ -203,7 +209,7 @@ impl EngineBoard for BoardAtomic {
 
     fn legal_gen(&self) -> GenAtomic {
         GenAtomic {
-            moves: Arc::clone(&self.moves),
+            moves: Arc::clone(self.moves()),
             yielded: [0; 4],
             mask: !EMPTY,
             cursor: 0,
@@ -295,6 +301,15 @@ impl Iterator for GenAtomic {
 }
 
 impl MoveGenLike for GenAtomic {
+    fn next_with_metadata(&mut self) -> Option<(ChessMove, Option<MoveMetadata>)> {
+        let mv = self.next()?;
+        let sm = self.moves[self.cursor - 1].sm;
+        Some((mv, Some(MoveMetadata {
+            capture: sm.is_capture(),
+            drop: matches!(sm, ShakMove::Put { .. }),
+        })))
+    }
+
     fn set_iterator_mask(&mut self, mask: BitBoard) {
         self.mask = mask;
         self.cursor = 0;
@@ -309,6 +324,27 @@ impl MoveGenLike for GenAtomic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lazy_lists_preserve_clone_and_child_independence() {
+        let board = BoardAtomic::startpos();
+        assert!(board.moves.get().is_none());
+        let cold_clone = board.clone();
+        let _ = board.get_hash();
+        let _ = board.checkers();
+        assert!(board.moves.get().is_none());
+        let mv = board.legal_gen().next().unwrap();
+        assert!(cold_clone.moves.get().is_none());
+        let warm_clone = board.clone();
+        assert!(Arc::ptr_eq(board.moves(), warm_clone.moves()));
+        assert_eq!(board.legal_gen().collect::<Vec<_>>(), cold_clone.legal_gen().collect::<Vec<_>>());
+        let child = board.make_move_new(mv);
+        assert!(child.moves.get().is_none());
+        crate::backend::assert_capture_metadata(&board);
+        crate::backend::assert_capture_metadata(&child);
+        assert!(!Arc::ptr_eq(board.moves(), child.moves()));
+    }
+
 
     fn perft(board: &BoardAtomic, depth: u32) -> u64 {
         if depth == 0 {

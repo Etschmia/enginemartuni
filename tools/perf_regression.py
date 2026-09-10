@@ -82,6 +82,7 @@ def main():
     ap.add_argument('--engine', type=Path, required=True)
     ap.add_argument('--output', type=Path, required=True)
     ap.add_argument('--compare', type=Path)
+    ap.add_argument('--standard-depth', type=int, help='Override orthodox depths for pruning comparisons')
     ap.add_argument('--controls', action='store_true', help='Also check stop, ponderhit, clocks, mate, forced move')
     ap.add_argument('--syzygy', type=Path, help='Optional read-only tablebase root control test')
     a = ap.parse_args()
@@ -98,6 +99,9 @@ def main():
         config = 'HASH_SIZE_MB=16\nBOOK_DIR=books\nBOOK_FILES=absent.bin\nSYZYGY_PATH=\n'
         (d/'.env').write_text(config)
         for case in json.loads((root/'tests/perf_positions.json').read_text()):
+            if a.standard_depth is not None and case['variant'] == 'chess':
+                assert 1 <= a.standard_depth <= 8, 'Keep this correctness runner bounded'
+                case['depth'] = a.standard_depth
             e = Engine(binary, d)
             try:
                 e.send('setoption name UCI_Variant value '+case['variant'])
