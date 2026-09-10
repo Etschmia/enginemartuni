@@ -186,10 +186,11 @@ struct SearchState<'a> {
     eval: Arc<EvalParams>,
     stop: Arc<AtomicBool>,
     pondering: Arc<AtomicBool>,
-    // None = unbegrenzt (Ponder-Modus); wird beim ersten Ponderhit auf
-    // now + think_time gesetzt.
+    // None = untimed depth search or pondering. Only a real ponderhit
+    // activates the optional clock budget.
     deadline: Option<Instant>,
-    think_time: Duration,
+    think_time: Option<Duration>,
+    waiting_for_ponderhit: bool,
     start: Instant,
     nodes: u64,
     // Historie + aktueller Suchpfad; zum Erkennen von Stellungswiederholungen.
@@ -295,12 +296,13 @@ impl SearchState<'_> {
         }
         // Uebergang Ponder → Normal: jetzt die echte Deadline setzen.
         // Bei forciertem Zug sofort abbrechen — der Zug steht fest.
-        if self.deadline.is_none() && !self.pondering.load(Ordering::Relaxed) {
+        if self.waiting_for_ponderhit && !self.pondering.load(Ordering::Relaxed) {
+            self.waiting_for_ponderhit = false;
             if self.forced_only_move.is_some() {
                 self.stop.store(true, Ordering::Relaxed);
                 return true;
             }
-            self.deadline = Some(Instant::now() + self.think_time);
+            self.deadline = self.think_time.map(|budget| Instant::now() + budget);
         }
         if let Some(dl) = self.deadline {
             if self.nodes & 2047 == 0 && Instant::now() >= dl {
@@ -384,7 +386,7 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
     let deadline = if req.params.ponder {
         None
     } else {
-        Some(start + think_time)
+        think_time.map(|budget| start + budget)
     };
 
     // Forcierter Zug im Ponder-Modus vormerken: sobald ponderhit kommt
@@ -405,6 +407,7 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
         pondering: Arc::clone(&req.pondering),
         deadline,
         think_time,
+        waiting_for_ponderhit: req.params.ponder,
         start,
         nodes: 0,
         history,
@@ -2118,16 +2121,22 @@ fn see_quiet<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
     gain[0]
 }
 
-fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Duration {
+fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Option<Duration> {
     if let Some(movetime) = params.movetime {
         let ms = movetime.saturating_sub(move_overhead).max(1);
-        return Duration::from_millis(ms);
+        return Some(Duration::from_millis(ms));
     }
 
     let (time, inc) = match stm {
         Color::White => (params.wtime, params.winc),
         Color::Black => (params.btime, params.binc),
     };
+
+    // A depth limit alone is not a clock. Explicit time controls retain
+    // their existing allocation, including the legacy default for bare go.
+    if params.depth.is_some() && params.wtime.is_none() && params.btime.is_none() {
+        return None;
+    }
 
     let remaining = time.unwrap_or(30_000);
     let increment = inc.unwrap_or(0);
@@ -2137,7 +2146,7 @@ fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Du
     let budget = remaining / 30 + (increment * 8 / 10);
     let budget = budget.saturating_sub(move_overhead).max(50);
     let ceiling = remaining.saturating_sub(50).max(50);
-    Duration::from_millis(budget.min(ceiling))
+    Some(Duration::from_millis(budget.min(ceiling)))
 }
 
 #[cfg(test)]
@@ -2146,6 +2155,100 @@ mod tests {
     use crate::board_atomic::BoardAtomic;
     use crate::board_crazyhouse::BoardCrazyhouse;
     use chess::{Board, MoveGen};
+
+    fn clock_test_state(tt: &mut TranspositionTable) -> SearchState<'_> {
+        SearchState {
+            tt,
+            eval: Arc::new(EvalParams::default()),
+            stop: Arc::new(AtomicBool::new(false)),
+            pondering: Arc::new(AtomicBool::new(false)),
+            deadline: None,
+            think_time: Some(Duration::from_secs(1)),
+            waiting_for_ponderhit: false,
+            start: Instant::now(),
+            nodes: 0,
+            history: Vec::new(),
+            root_history_len: 0,
+            root_best_move: None,
+            forced_only_move: None,
+            debug_root: false,
+            nmp_off: false,
+            rfp_on: false,
+            killers: [[None; 2]; MAX_PLY],
+            move_history: vec![0; 2 * 64 * 64],
+            countermove: vec![None; 2 * 64 * 64],
+            cm_on: true,
+            syzygy: None,
+            tb_hits: 0,
+        }
+    }
+
+    #[test]
+    fn depth_clock_policy() {
+        let mut p = GoParams { depth: Some(6), ..GoParams::default() };
+        assert_eq!(calculate_think_time(&p, 20, Color::White), None);
+        p.winc = Some(1000);
+        assert_eq!(calculate_think_time(&p, 20, Color::White), None);
+        p.wtime = Some(30_000);
+        assert_eq!(calculate_think_time(&p, 20, Color::White), Some(Duration::from_millis(1780)));
+        p.btime = Some(6000);
+        assert_eq!(calculate_think_time(&p, 20, Color::Black), Some(Duration::from_millis(180)));
+        p.movetime = Some(10);
+        assert_eq!(calculate_think_time(&p, 20, Color::White), Some(Duration::from_millis(1)));
+        assert_eq!(calculate_think_time(&GoParams::default(), 20, Color::White), Some(Duration::from_millis(980)));
+    }
+
+    #[test]
+    fn untimed_depth_does_not_rearm_clock_and_obeys_stop() {
+        let mut tt = TranspositionTable::new(1);
+        let mut state = clock_test_state(&mut tt);
+        state.think_time = None;
+        state.start = Instant::now() - Duration::from_secs(60);
+        for nodes in [0, 2048, 4096] {
+            state.nodes = nodes;
+            assert!(!state.should_stop());
+            assert!(state.deadline.is_none());
+        }
+        state.stop.store(true, Ordering::Relaxed);
+        assert!(state.should_stop());
+    }
+
+    #[test]
+    fn ponderhit_arms_clock_once_or_remains_untimed() {
+        for budget in [None, Some(Duration::from_secs(1))] {
+            let mut tt = TranspositionTable::new(1);
+            let mut state = clock_test_state(&mut tt);
+            state.think_time = budget;
+            state.waiting_for_ponderhit = true;
+            state.pondering.store(true, Ordering::Relaxed);
+            assert!(!state.should_stop());
+            assert!(state.deadline.is_none());
+            state.pondering.store(false, Ordering::Relaxed);
+            assert!(!state.should_stop());
+            assert_eq!(state.deadline.is_some(), budget.is_some());
+            assert!(!state.waiting_for_ponderhit);
+            let deadline = state.deadline;
+            assert!(!state.should_stop());
+            assert_eq!(state.deadline, deadline);
+            if budget.is_some() {
+                state.deadline = Some(Instant::now() - Duration::from_secs(1));
+                assert!(state.should_stop());
+            }
+        }
+    }
+
+    #[test]
+    fn forced_ponder_move_waits_for_hit_even_without_clock() {
+        let mut tt = TranspositionTable::new(1);
+        let mut state = clock_test_state(&mut tt);
+        state.think_time = None;
+        state.waiting_for_ponderhit = true;
+        state.forced_only_move = Some(ChessMove::new(Square::E2, Square::E4, None));
+        state.pondering.store(true, Ordering::Relaxed);
+        assert!(!state.should_stop());
+        state.pondering.store(false, Ordering::Relaxed);
+        assert!(state.should_stop());
+    }
 
     // --- Countermove-Heuristic (01.09.2026) ---------------------------------
 
@@ -2158,7 +2261,8 @@ mod tests {
             stop: Arc::new(AtomicBool::new(false)),
             pondering: Arc::new(AtomicBool::new(false)),
             deadline: None,
-            think_time: Duration::from_secs(1),
+            think_time: Some(Duration::from_secs(1)),
+            waiting_for_ponderhit: false,
             start: Instant::now(),
             nodes: 0,
             history: Vec::new(),
