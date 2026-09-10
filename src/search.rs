@@ -717,6 +717,8 @@ fn alpha_beta<B: EngineBoard>(
     // Cutoff behaupten. Rueckgabe des static_eval (fail-soft) statt beta,
     // damit Elternknoten einen engeren Bound bekommen — analog zum
     // NMP-Cutoff wird nichts in die TT geschrieben.
+    // RFP and NMP may both need this node's unchanged static evaluation.
+    let mut pruning_eval = None;
     if state.rfp_on
         && board.uses_standard_rules()
         && ply > 0
@@ -726,6 +728,7 @@ fn alpha_beta<B: EngineBoard>(
         && beta.abs() < MATE_THRESHOLD
     {
         let static_eval = eval_stm(board, &state.eval);
+        pruning_eval = Some(static_eval);
         if rfp_cutoff(static_eval, beta, depth) {
             return static_eval;
         }
@@ -740,7 +743,7 @@ fn alpha_beta<B: EngineBoard>(
         && ply > 0
         && has_non_pawn_material(board, board.side_to_move())
     {
-        let static_eval = eval_stm(board, &state.eval);
+        let static_eval = pruning_eval.unwrap_or_else(|| eval_stm(board, &state.eval));
         if static_eval >= beta {
             if let Some(null_board) = board.null_move() {
                 // History fuer Repetition-Check kohaerent halten — der
@@ -886,8 +889,10 @@ fn alpha_beta<B: EngineBoard>(
             }
         }
 
-        let other_cand = !child_in_check && is_candidate_move(board, mv, &nb, sm.see_val);
-        let check_ext = if child_in_check {
+        let other_cand = extensions_used + 2 <= MAX_EXTENSION_PER_LINE
+            && !child_in_check
+            && is_candidate_move(board, mv, &nb, sm.see_val);
+        let check_ext = if child_in_check && extensions_used < MAX_EXTENSION_PER_LINE {
             if crate::eval::game_phase(&nb) < 16 {
                 2
             } else {
@@ -1391,7 +1396,20 @@ fn terminal_score<B: EngineBoard>(board: &B, in_check: bool, ply: i32) -> i32 {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    // Thread-local instrumentation never enters production builds. Track only
+    // one position's evaluation and extension checks in the current test.
+    static WORK_COUNTS: std::cell::RefCell<(Option<u64>, usize, usize)> =
+        const { std::cell::RefCell::new((None, 0, 0)) };
+}
+
 fn eval_stm<B: EngineBoard>(board: &B, params: &EvalParams) -> i32 {
+    #[cfg(test)]
+    WORK_COUNTS.with(|counts| {
+        let mut counts = counts.borrow_mut();
+        if counts.0 == Some(board.get_hash()) { counts.1 += 1; }
+    });
     let score = evaluate(board, params);
     if board.side_to_move() == Color::White {
         score
@@ -1509,6 +1527,8 @@ fn is_candidate_move<B: EngineBoard>(
     new_board: &B,
     see_val: Option<i32>,
 ) -> bool {
+    #[cfg(test)]
+    WORK_COUNTS.with(|counts| counts.borrow_mut().2 += 1);
     // Der Aufrufer ruft diesen Helfer nur fuer Nicht-Schachzuege auf. Das
     // Debug-Assert dokumentiert die Vorbedingung ohne Release-Takte fuer einen
     // Zustand zu verbrennen, der im aktuellen Kontrollfluss nicht eintreten kann.
@@ -2231,6 +2251,42 @@ mod tests {
             cm_on: true,
             syzygy: None,
             tb_hits: 0,
+        }
+    }
+
+    #[test]
+    fn rfp_and_nmp_evaluate_same_node_only_once() {
+        let board = Board::default();
+        let static_eval = eval_stm(&board, &EvalParams::default());
+        // RFP must not cut; NMP must request the same static eval at depth 3.
+        let beta = static_eval - 1;
+        assert!(!rfp_cutoff(static_eval, beta, 3));
+        for (rfp, nmp_off, expected) in [(true, false, 1), (true, true, 1),
+                                        (false, false, 1), (false, true, 0)] {
+            let mut tt = TranspositionTable::new(1);
+            let mut state = clock_test_state(&mut tt);
+            state.rfp_on = rfp;
+            state.nmp_off = nmp_off;
+            WORK_COUNTS.with(|counts| *counts.borrow_mut() = (Some(board.get_hash()), 0, 0));
+            alpha_beta(&board, 3, 1, beta - 1, beta, 4, 0, true, None, &mut state);
+            assert!(!state.stop.load(Ordering::Relaxed));
+            WORK_COUNTS.with(|counts| assert_eq!(counts.borrow().1, expected,
+                "rfp={rfp}, nmp_off={nmp_off}"));
+        }
+        WORK_COUNTS.with(|counts| *counts.borrow_mut() = (None, 0, 0));
+    }
+
+    #[test]
+    fn extension_candidates_require_two_remaining_plies() {
+        for used in [2, 3, 4] {
+            let mut tt = TranspositionTable::new(1);
+            let mut state = clock_test_state(&mut tt);
+            WORK_COUNTS.with(|counts| *counts.borrow_mut() = (None, 0, 0));
+            alpha_beta(&Board::default(), 1, 0, -INF, INF, used, 0, true, None, &mut state);
+            WORK_COUNTS.with(|counts| {
+                if used == 2 { assert!(counts.borrow().2 > 0); }
+                else { assert_eq!(counts.borrow().2, 0); }
+            });
         }
     }
 
