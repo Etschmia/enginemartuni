@@ -1,0 +1,79 @@
+[
+  {
+    "id": "std-start",
+    "variant": "chess",
+    "position": "fen rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "depth": 3,
+    "chess960": false
+  },
+  {
+    "id": "std-mid",
+    "variant": "chess",
+    "position": "fen r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+    "depth": 3,
+    "chess960": false
+  },
+  {
+    "id": "std-pawn-end",
+    "variant": "chess",
+    "position": "fen 8/6k1/5p2/6p1/3P4/4K1P1/8/8 w - - 0 1",
+    "depth": 3,
+    "chess960": false
+  },
+  {
+    "id": "chess960-mid",
+    "variant": "chess",
+    "position": "fen bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+    "depth": 3,
+    "chess960": true
+  },
+  {
+    "id": "atomic-start",
+    "variant": "atomic",
+    "position": "fen rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "depth": 3,
+    "chess960": false
+  },
+  {
+    "id": "crazyhouse-pocket",
+    "variant": "crazyhouse",
+    "position": "fen 4k3/8/8/8/8/8/8/4K3[PNq] w - - 0 1",
+    "depth": 2,
+    "chess960": false
+  },
+  {
+    "id": "antichess-start",
+    "variant": "antichess",
+    "position": "fen rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1",
+    "depth": 3,
+    "chess960": false
+  },
+  {
+    "id": "koth-mid",
+    "variant": "kingofthehill",
+    "position": "fen r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+    "depth": 3,
+    "chess960": false
+  },
+  {
+    "id": "horde-start",
+    "variant": "horde",
+    "position": "fen rnbqkbnr/pppppppp/8/1PP2PP1/PPPPPPPP/PPPPPPPP/PPPPPPPP/PPPPPPPP w kq - 0 1",
+    "depth": 3,
+    "chess960": false
+  },
+  {
+    "id": "threecheck-mid",
+    "variant": "3check",
+    "position": "fen rnbqkb1r/pppp1ppp/5n2/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2+3 2 3",
+    "depth": 3,
+    "chess960": false
+  },
+  {
+    "id": "racing-mid",
+    "variant": "racingkings",
+    "position": "fen 8/8/8/8/8/k6K/1rbnNBR1/qrbnNBRQ w - - 2 2",
+    "depth": 3,
+    "chess960": false
+  }
+]
