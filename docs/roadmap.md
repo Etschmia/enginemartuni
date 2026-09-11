@@ -10,6 +10,43 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**11.09.2026 — PR #4 „performance review points 1–3" ausgerollt (19:38 LIVE);
+Standard-Suche dabei nicht mehr bit-exakt — A/B bewusst zurückgestellt.**
+- **Inhalt:** Fast-Forward `0139f5b → 249c937`, drei Commits.
+  `1c965ef` *fix(search)*: `go depth N` läuft nicht mehr gegen eine
+  fabrizierte Uhr — `think_time` ist jetzt `Option<Duration>`, und das
+  Warten auf `ponderhit` hat mit `waiting_for_ponderhit` ein eigenes Flag,
+  statt es aus `deadline.is_none()` zu erraten. `d64f9da`
+  *perf(variants)*: Zug-Metadaten werden wiederverwendet, die Zugliste des
+  Kindknotens erst bei Bedarf erzeugt (`board_atomic`, `board_crazyhouse`,
+  `board_shak`, `board960`, neu `src/variant_material.rs`). `249c937`
+  *perf(search)*: die Eval für die Pruning-Entscheidungen wird einmal
+  berechnet und weiterverwendet, erschöpfte Extensions werden gegatet.
+- **Messung alt vs. neu**, `go movetime 2000` nach 1.e4 e5, NPS und
+  erreichte Tiefe: atomic 733k→957k (5/5), crazyhouse 497k→801k (4/4),
+  King of the Hill 1010k→1279k (4→5), Three-check 753k→1135k (5/5),
+  Antichess 1803k→1936k (9→10), Horde 534k→1168k (5→6), Racing Kings
+  607k→938k (4→5). Standard-NPS flat (2355k→2342k), 203/204 Tests grün.
+- **Der Haken:** `249c937` wirkt auch im Standardpfad. Bei fixer Tiefe 10
+  liefert die Engine andere Scores (40→33 cp, 28→29 cp) und andere
+  Node-Counts als vorher; die Bestmoves waren in allen Stichproben
+  identisch. Die bisherige Zusage „Standardpfad bleibt bit-exakt" gilt
+  damit nicht mehr, und eine echte Suchverhaltensänderung läuft ohne SPRT
+  live — anders als bei allen bisherigen Such-Hebeln.
+- **Entscheidung (Tobias, 11.09.):** kein A/B jetzt. Beobachten, und das
+  A/B **nur nachholen, falls die Spielstärke sichtbar nachlässt**.
+  Baseline-Binary dafür aus `0139f5b` bauen, Harness wie gehabt
+  (fastchess + UHO_Lichess). Rollback: `git reset --hard 0139f5b`,
+  `cargo build --release`, Service-Neustart.
+- **Nebenbefund Smoke-Test:** Der Einzeiler aus `CLAUDE.md`
+  (`echo -e "…go movetime 1000\nquit" | martuni`) taugt nicht als
+  Varianten-Smoke: das `quit` erreicht die Engine, bevor die Suche
+  angelaufen ist, und sie antwortet mit `info string fallback (no
+  completed depth, nodes=1)` plus einem Fallback-Zug. In der
+  Startstellung fällt das nicht auf, weil dort das Eröffnungsbuch
+  greift. Für echte Smokes einen Treiber verwenden, der auf `bestmove`
+  wartet, bevor er `quit` sendet.
+
 **06.09.2026 — Blunder-Analyse-Cron repariert: Varianten-Analysepfad
 (Fairy-Stockfish) + Quarantäne gegen Head-of-Line-Blocking.**
 - **Befund:** `info` meldete „0 Partien analysiert". Zwei unabhängige
