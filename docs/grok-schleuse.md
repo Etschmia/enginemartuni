@@ -34,9 +34,27 @@ Martuni-Server. `schleuse_sync.py` kopiert und merged nur JSON.
 |---|---|---|
 | Martuni-Server, Crontab | `tools/schleuse_sync.py` | `*/10 * * * *` |
 | Martuni-Server, Crontab | `tools/analyze_cron.py` | **abgeschaltet** (auskommentiert, 14.09.2026) |
-| Grok-Bot | Poll auf `outbox/`, Analyse, Ergebnis nach `inbox/` | Intervall laut Abstimmung (Vorschlag: alle 5 Min, älteste PGN zuerst) |
+| Grok-Bot (Worker „Schach“) | Poll auf `outbox/`, Analyse, Ergebnis nach `inbox/` | alle 5 Min, 1 Partie gleichzeitig, älteste PGN zuerst (bestätigt 14.09.2026) |
 
 Crontab-Backup vor der Umstellung: `logs/crontab.backup-2026-09-14.txt`.
+
+## Abgestimmter Stand mit dem Grok-Bot (Antwort vom 14.09.2026)
+
+Der Grok-Bot hat das Protokoll bestätigt (`grok_bot_schleuse/ANTWORT-von-Grok-Bot.md`).
+Festgehaltene Eckdaten:
+
+| Punkt | Grok-Seite |
+|---|---|
+| Zugriff | per SSH auf diesen Host (`librechat@martuni.de`), kein Spiegel; PGN per scp holen, lokal analysieren, Ergebnis als `.tmp` hochladen und remote atomar umbenennen |
+| Stockfish | 17.1 (identisch mit hier) |
+| Fairy-Stockfish | **11.1 LB 64** (apt) statt 14 hier; `UCI_Variant` für alle unsere Varianten vorhanden. Varianten-Kennzahlen sind damit nicht bit-identisch zu den bisherigen Fairy-14-Läufen, für die Blunder/Partie-Statistik unerheblich |
+| python-chess | 1.11.2 (identisch) |
+| Parameter | `--depth 17 --hash 256 --min-movetime 0 --threads 2` (2 statt 1 Thread; Tiefe entscheidet, akzeptiert) |
+| Polling / Parallelität | alle 5 Minuten, 1 Partie gleichzeitig, älteste zuerst |
+| Fehlerformat | `.failed.json` wie spezifiziert, keine Extrafelder |
+| Heartbeat | `status.json` im Schleusen-Root nach jedem Durchlauf |
+| Log auf der Grok-Seite | `/workspace/enginemartuni/logs/schleuse_worker.log`; alternativ den Grok-Bot im Chat fragen |
+
 
 ## Verzeichnisprotokoll (`~/grok_bot_schleuse/`)
 

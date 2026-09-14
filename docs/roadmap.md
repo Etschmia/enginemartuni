@@ -23,8 +23,13 @@ Einzeldokumenten:
   [grok-schleuse.md](grok-schleuse.md).
 - **Stand:** Crontab umgestellt (Backup `logs/crontab.backup-2026-09-14.txt`),
   50 Partien in `outbox/`, 35 warten. Abstimmungs-Prompt für den Grok-Bot
-  liegt in `grok_bot_schleuse/PROMPT-fuer-Grok-Bot.md`; **offen:** Antwort des
-  Grok-Bots (Zugriffsweg, Versionen, Intervall), danach ggf. Feinschliff.
+  liegt in `grok_bot_schleuse/PROMPT-fuer-Grok-Bot.md`. **Grok-Bot hat am
+  14.09. bestätigt:** SSH auf diesen Host, Stockfish 17.1, Fairy-Stockfish
+  11.1 (statt 14), python-chess 1.11.2, Tiefe 17 mit 2 Threads, Polling
+  alle 5 Min, 1 Partie gleichzeitig, Heartbeat `status.json`.
+  **Offen:** erster echter Durchlauf (Worker muss auf der Grok-Seite scharf
+  geschaltet werden), danach prüfen, dass `done/` wächst und `info` die
+  Zahlen richtig zeigt; Varianten-Lookback dann auf Fairy-11.1-Basis.
 - **Rückweg:** Cron-Zeilen zurücktauschen, `outbox/` leeren (siehe Doku).
 
 **11.09.2026 — PR #4 „performance review points 1–3" ausgerollt (19:38 LIVE);
