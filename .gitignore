@@ -35,3 +35,6 @@ matches/
 
 # lokale Cron-/Probe-Logs
 logs/
+
+# PID-Locks der Cron-Skripte
+tools/*.pid

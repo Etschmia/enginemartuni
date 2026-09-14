@@ -58,26 +58,28 @@ Restart:          always
 
 `challenge_cron.py` läuft stündlich (Crontab, `45 * * * *`) und fordert automatisch einen Online-Bot heraus (abwechselnd 5+0 Blitz und 15+10 Rapid). Ergebnisse werden in `challenge_cron_tracking.json` erfasst. Log: `lichess_bot_auto_logs/challenge_cron.log`.
 
-### Blunder-Analyse-Cron
+### Blunder-Analyse (seit 14.09.2026 ausgelagert auf den Grok-Bot)
 
-`tools/analyze_cron.py` läuft minütlich im Fenster 17–19 Uhr (Crontab) und
-analysiert pro Tick genau eine noch offene PGN aus `~/lichess-bot/game_records/`.
+Dieser Server rechnet **keine Stockfish-Analysen mehr selbst** (Server am
+Limit). `tools/analyze_cron.py` ist in der Crontab auskommentiert. Stattdessen
+läuft `tools/schleuse_sync.py` alle 10 Minuten und tauscht Dateien mit dem
+Grok-Bot über `~/grok_bot_schleuse/` aus — Protokoll, Betrieb und Rückweg in
+[docs/grok-schleuse.md](docs/grok-schleuse.md).
 
-- **Zwei Analysepfade:** Standard/Chess960/„From Position" → `stockfish`
-  (`/usr/games`, 17.1) → `analyse-<datum>.json`; echte Varianten (Antichess,
-  Atomic, Crazyhouse, KotH, Horde, Three-check, Racing Kings) →
-  **`fairy-stockfish`** (`~/tools/fairy-stockfish`, Fairy-Stockfish 14) →
-  `analyse-<datum>-varianten.json`. Vanilla-Stockfish kann kein
-  `UCI_Variant` — ohne Fairy-Stockfish bricht jede Varianten-PGN ab.
-- **Konfiguration:** `tools/analyze_cron.config.json` (lokal, `skip-worktree`
-  + gitignored). Nach einer Archivierung müssen `output` und `variant-output`
-  auf die neuen Zieldateien zeigen. **Vor dem Speichern JSON validieren** —
-  eine kaputte Config legt das komplette Analysefenster still (06.09.2026).
-- **Quarantäne:** `tools/analyze_cron.quarantine.json` zählt Fehlschläge je
-  PGN; ab `max-failures` (3) wird sie übersprungen, ein Erfolgslauf setzt den
-  Zähler zurück. Verhindert, dass eine einzelne kaputte PGN alle
-  nachfolgenden blockiert.
-- **Log:** `logs/analyze_cron.log` (`grep -E "QUARANTINE|ERROR"` für Probleme).
+- **Schleuse:** `outbox/<pgn>.pgn` (offene Partien, max. 50) → Grok-Bot
+  analysiert mit `analyze_blunders.py` (Stockfish bzw. Fairy-Stockfish,
+  Tiefe 17) → `inbox/<pgn>.json` bzw. `inbox/<pgn>.failed.json` → Merge in
+  `analyse-<datum>.json` / `analyse-<datum>-varianten.json`, Datei nach `done/`.
+- **Konfiguration:** weiterhin `tools/analyze_cron.config.json` (lokal,
+  `skip-worktree` + gitignored). Nach einer Archivierung müssen `output` und
+  `variant-output` auf die neuen Zieldateien zeigen. **Vor dem Speichern JSON
+  validieren** — eine kaputte Config legt den Sync still (Lehre vom 06.09.2026).
+  Neue optionale Schlüssel: `schleuse-dir`, `max-outbox`.
+- **Quarantäne:** `tools/analyze_cron.quarantine.json` wie bisher; ein
+  `.failed.json` vom Grok-Bot zählt als Fehlschlag, ab `max-failures` (3)
+  wird die PGN übersprungen.
+- **Log:** `logs/schleuse_sync.log` (`grep -E "FAILED|ERROR|QUARANTINE"`).
+  `info` zeigt die Warteschlange (`outbox/inbox`) und den Grok-Heartbeat.
 
 ```bash
 cargo build --release

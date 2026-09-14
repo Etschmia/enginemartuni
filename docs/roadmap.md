@@ -6,9 +6,26 @@ Einzeldokumenten:
 
 - Search: [lmr-plan.md](lmr-plan.md), [null-move-pruning.md](null-move-pruning.md), [see.md](see.md)
 - Evaluation: [eval-kalibrierung.md](eval-kalibrierung.md), [endgame.md](endgame.md), [vorbereiteter_Prompt_dynamische_Figurenbewertung.md](vorbereiteter_Prompt_dynamische_Figurenbewertung.md)
-- Tooling: [blunder-analyse.md](blunder-analyse.md)
+- Tooling: [blunder-analyse.md](blunder-analyse.md), [grok-schleuse.md](grok-schleuse.md)
 
 ## Aktueller Status
+
+**14.09.2026 — Blunder-Analyse auf den Grok-Bot ausgelagert (Grok-Schleuse);
+`analyze_cron.py` hier abgeschaltet.**
+- **Warum:** Server am Limit (Abend-Fenster schon am 12.09. abgeschaltet,
+  Nacht-Fenster 2–3 Uhr jetzt ebenfalls). Stockfish/Fairy-Stockfish laufen
+  nicht mehr auf diesem Rechner.
+- **Wie:** neues `tools/schleuse_sync.py` (Cron `*/10`) kopiert offene
+  PGNs nach `~/grok_bot_schleuse/outbox/` (max. 50 gleichzeitig) und merged
+  Ergebnisse aus `inbox/` (Format = `analyze_blunders.py --output` je
+  Partie) in die bestehenden `analyse-*.json`; Quarantäne, Config, `info`,
+  Archivierung und Report unverändert. Protokoll und Betrieb:
+  [grok-schleuse.md](grok-schleuse.md).
+- **Stand:** Crontab umgestellt (Backup `logs/crontab.backup-2026-09-14.txt`),
+  50 Partien in `outbox/`, 35 warten. Abstimmungs-Prompt für den Grok-Bot
+  liegt in `grok_bot_schleuse/PROMPT-fuer-Grok-Bot.md`; **offen:** Antwort des
+  Grok-Bots (Zugriffsweg, Versionen, Intervall), danach ggf. Feinschliff.
+- **Rückweg:** Cron-Zeilen zurücktauschen, `outbox/` leeren (siehe Doku).
 
 **11.09.2026 — PR #4 „performance review points 1–3" ausgerollt (19:38 LIVE);
 Standard-Suche dabei nicht mehr bit-exakt — A/B bewusst zurückgestellt.**
