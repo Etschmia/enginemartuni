@@ -38,3 +38,6 @@ logs/
 
 # PID-Locks der Cron-Skripte
 tools/*.pid
+
+# Grok-Bot local runtime
+tools/schleuse_worker.pid
