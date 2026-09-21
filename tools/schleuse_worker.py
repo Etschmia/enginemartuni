@@ -19,16 +19,23 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-REMOTE_HOST = "martuni.de"
-REMOTE_DIR = "/home/librechat/grok_bot_schleuse"
-PYTHON = "/workspace/enginemartuni/.venv/bin/python3"
-ANALYZE_SCRIPT = "/workspace/schleuse-work/analyze_blunders.py"
-WORK_DIR = Path("/workspace/schleuse-work/jobs")
-LOG_PATH = Path("/workspace/enginemartuni/logs/schleuse_worker.log")
-PID_PATH = Path("/workspace/enginemartuni/tools/schleuse_worker.pid")
+def _env(name: str, default: str) -> str:
+    """Host-specific override; defaults keep the original Grok-Bot layout."""
+    return os.environ.get(name, default)
 
-ENGINE_LABEL = "Stockfish 17.1"
-VARIANT_ENGINE_LABEL = "Fairy-Stockfish 11.1 LB 64"
+
+REMOTE_HOST = _env("SCHLEUSE_REMOTE_HOST", "martuni.de")
+REMOTE_DIR = _env("SCHLEUSE_REMOTE_DIR", "/home/librechat/grok_bot_schleuse")
+PYTHON = _env("SCHLEUSE_PYTHON", "/workspace/enginemartuni/.venv/bin/python3")
+ANALYZE_SCRIPT = _env("SCHLEUSE_ANALYZE_SCRIPT", "/workspace/schleuse-work/analyze_blunders.py")
+WORK_DIR = Path(_env("SCHLEUSE_WORK_DIR", "/workspace/schleuse-work/jobs"))
+LOG_PATH = Path(_env("SCHLEUSE_LOG_PATH", "/workspace/enginemartuni/logs/schleuse_worker.log"))
+PID_PATH = Path(_env("SCHLEUSE_PID_PATH", "/workspace/enginemartuni/tools/schleuse_worker.pid"))
+# Prepended to PATH so the engines are found (Debian puts them in /usr/games).
+ENGINE_PATH = _env("SCHLEUSE_ENGINE_PATH", "/usr/games:/workspace/tools")
+
+ENGINE_LABEL = _env("SCHLEUSE_ENGINE_LABEL", "Stockfish 17.1")
+VARIANT_ENGINE_LABEL = _env("SCHLEUSE_VARIANT_ENGINE_LABEL", "Fairy-Stockfish 11.1 LB 64")
 
 VANILLA_VARIANTS = {
     "",
@@ -330,7 +337,7 @@ def process_one(pgn_name: str) -> None:
         log(f"Engine selected: {engine} for {pgn_name!r}")
 
         env = os.environ.copy()
-        env["PATH"] = f"/usr/games:/workspace/tools:{env.get('PATH', '')}"
+        env["PATH"] = f"{ENGINE_PATH}:{env.get('PATH', '')}"
 
         cmd = [
             PYTHON,
