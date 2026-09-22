@@ -41,3 +41,6 @@ tools/*.pid
 
 # Grok-Bot local runtime
 tools/schleuse_worker.pid
+
+# Backups des Archivierungsskripts (Config selbst ist schon ignoriert)
+tools/analyze_cron.config.json.bak-*

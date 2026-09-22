@@ -104,14 +104,19 @@ Lichess-Lookback beurteilt.
     Elo → verworfen** (Könige am Hügelrand sind zu häufig, der Baum
     explodiert). Code entfernt, Kommentar in search.rs.
   - KotH Term 5 (mit Extension) vs. Extension: 100 P, 47-3-50 = 48,5 %,
-    −10 ± 68 Elo — **unbrauchbar**: 21 Partien durch Zeitverlust (Server
+    −10 ± 68 Elo — unbrauchbar: 21 Partien durch Zeitverlust (Server
     mit Load 8: Live-Bot-Partie, Fremdagenten, Crons), Log durch einen
-    überlebenden Runner-Prozess kontaminiert. **Wiederholen** als
-    „Term 5 ohne Extension vs. SEE-Fix" bei ruhigem Server (Binary
-    `martuni-t5` liegt bereit).
-  - Racing Kings / Horde SEE-Fix vs. Live: **offen** — erster Lauf durch
-    einen Runner-Bug (FEN-Header nach der Zufallseröffnung) abgestürzt,
-    Runner repariert, Wiederholung bei ruhigem Server.
+    überlebenden Runner-Prozess kontaminiert.
+  - **Nachtlauf 21:45–22:30** (`matches/night_20260922/`, ohne
+    Zeitverluste): KotH **Term 5 ohne Extension vs. SEE-Fix: 150 P,
+    82-2-66 = 55,3 %, +37 ± 56 Elo** — positive Tendenz, nicht
+    signifikant; Term 5 bleibt live, Urteil über den Lichess-Lookback.
+    Racing Kings SEE-Fix vs. Live: 60 P, 28-5-27 = 50,8 %, +6 ± 86 Elo
+    (kein Regress). Horde SEE-Fix vs. Live: nach 40 P 22-0-18 = 55 %
+    abgebrochen — der Nachtlauf war nur als Nebensatz in der Rollout-Frage
+    erwähnt, nicht ausdrücklich freigegeben, und lief parallel zu einer
+    Live-Partie; um 22:30 gestoppt. Selfplay-Matches künftig nur auf
+    ausdrückliche Freigabe.
 - **Lehren:** Matches tagsüber konkurrieren mit dem Live-Bot und den
   Handels-Crons (8–21 Uhr) — Zeitverluste bei 10+0.1 mit MoveOverhead 0;
   Nachtfenster oder `--concurrency 1` nehmen. Queue-Skripte per PID
