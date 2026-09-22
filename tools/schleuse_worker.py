@@ -277,6 +277,40 @@ def detect_engine(pgn_text: str) -> str:
     return "fairy-stockfish"
 
 
+def pgn_variant(pgn_text: str) -> str:
+    """Variant name exactly as the Martuni server reads it from the header.
+
+    Mirrors analyze_cron.read_pgn_variant(): first header block only, the quoted
+    value stripped and lowercased, "standard" when absent.
+    """
+    for line in pgn_text.splitlines():
+        line = line.strip()
+        if not line:
+            break  # blank line ends the header block
+        if line.startswith("[Variant "):
+            parts = line.split('"')
+            if len(parts) >= 2:
+                return parts[1].strip().lower()
+    return "standard"
+
+
+def tag_variant(json_path: Path, variant: str) -> None:
+    """Record the variant in the result file.
+
+    schleuse_sync.variant_output_for() prefers the PGN header in game_records/,
+    but once a game has been archived out of there it falls back to
+    result["variant"] -- defaulting to "standard". Every result delivered so far
+    lacked the field, so that fallback would silently route variant games into
+    the standard series, where roadmap.md explicitly does not want them. One
+    field closes the gap regardless of when the server archives.
+    """
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    data["variant"] = variant
+    json_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 def remote_delete_outbox(pgn_name: str) -> None:
     path = f"{REMOTE_DIR}/outbox/{pgn_name}"
     ssh(f"rm -f {remote_quote(path)}", check=True)
@@ -402,6 +436,7 @@ def process_one(pgn_name: str) -> None:
             write_status(current=None)
             return
 
+        tag_variant(local_json, pgn_variant(pgn_text))
         upload_inbox(local_json, f"{pgn_name}.json")
         remote_delete_outbox(pgn_name)
         log(f"OK uploaded inbox/{pgn_name}.json and deleted outbox")
