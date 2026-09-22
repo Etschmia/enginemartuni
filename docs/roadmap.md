@@ -11,9 +11,24 @@ Einzeldokumenten:
 ## Aktueller Status
 
 **22.09.2026 (Sitzung, Teil 2) — Varianten-Suche repariert, Three-check-
-und KotH-Eval nachgeschärft. Code in der Arbeitskopie, A/Bs laufen,
-Rollout offen.** Tobias-Entscheid: Punkte 1–3 der Auswertung nacheinander,
-Crazyhouse-Eval später (siehe „Offene Themen — Evaluation").
+und KotH-Eval nachgeschärft. AUSGEROLLT 18:19 LIVE (Commit `1ceaabe`,
+Bot „Welcome Martuni" 18:19:22).** Tobias-Entscheid: Punkte 1–3 der
+Auswertung nacheinander, Crazyhouse-Eval später (siehe „Offene Themen —
+Evaluation"); Rollout mit P1 + P2 + Term 5, Term 5 wird über den
+Lichess-Lookback beurteilt.
+- **Rollback:** `git reset --hard 44f7f6c`, `cargo build --release`,
+  Service-Neustart — oder schneller `cp target/release/martuni-live-20260922
+  target/release/martuni` + Neustart. Baseline-Binaries liegen datiert in
+  `target/release/` (`-live-` = 11.09., `-p1-` = nur SEE-Fix, `-final-`).
+- **Lookback-Anker 22.09. (vor Rollout):** Blitz 2130, Rapid 2271, Bullet
+  2205, 960 1720, Three-check 1796, KotH 1652, Racing Kings 1382, Horde
+  1802, Atomic 1571, Crazyhouse 1366, Antichess 2132. Erwartung: Three-check
+  und KotH deutlich hoch (Selfplay +250 Elo gegen den alten Stand), Racing
+  Kings/Horde leicht hoch, Standard/960 unverändert (bit-exakt).
+- **Nachtlauf 22.09. ab 21:45** (`target/release/night_matches_20260922.sh`,
+  Ausgabe `matches/night_20260922/`): KotH Term 5 vs. P1 (75 Paare), Racing
+  Kings und Horde SEE-Fix vs. Live (je 30 Paare). Beim nächsten Einstieg
+  auswerten (`FINAL`-Zeilen in `*.log`, PGN farbkorrekt auszählen).
 - **Punkt 1 — SEE-Fix + Gating (Suche):** `VariantKind` bekommt drei
   Prädikate (`orthodox_captures`, `allows_null_move`,
   `allows_static_pruning`, backend.rs). `see()` rechnet für Three-check,
@@ -1516,16 +1531,25 @@ Punkte 2/3 unten).
 
 ## Nächste Schritte
 
-Stand 05.09.2026 (bereinigt; die alten Punkte 2–4 von Mai 2026 sind im
-Verlauf dokumentiert: Aspiration und MVV-CP verworfen, CR30 ausgerollt).
+Stand 22.09.2026 (Punkt 2 der alten Liste — Search-Gating — ist mit dem
+SEE-Fix erledigt und ausgerollt; Details im Status-Eintrag 22.09.).
 
+0. **Nachtlauf 22.09. auswerten** (`matches/night_20260922/`): KotH Term 5
+   vs. P1, Racing Kings und Horde SEE-Fix vs. Live. Term 5 bei negativem
+   Ergebnis wieder ausbauen (nur `kingofthehill.rs`, Standard unberührt).
+0b. **Lookback Three-check/KotH/Racing Kings** nach ~50 Live-Partien je
+   Variante (Anker im Status-Eintrag 22.09.): Rating, ply≤16-Blunder in
+   Three-check (vorher 2,30/P), KotH-Verluste per Königsmarsch (vorher
+   26/26). Dann Crazyhouse-Eval-Skala (Offene Themen — Evaluation).
 1. **Varianten-Rollout beobachten (05.09.2026).** Antichess, King of the
    Hill, Horde, Three-Check und Racing Kings sind neu live (Details im
    „Aktuellen Status"). Nach den ersten ~30 Partien je Variante ein
    Lookback: Score, offensichtliche Regelfehler (Lichess-Abbrüche,
    illegale Züge), Zeitnot. Eval-Terme der Varianten sind bewusst erste
    Entwürfe ohne A/B.
-2. **Feineres Search-Gating für Varianten mit orthodoxer Mechanik.**
+2. **Feineres Search-Gating für Varianten mit orthodoxer Mechanik —
+   ERLEDIGT 22.09.2026** (SEE-Fix + Gating, siehe Status). Ursprünglicher
+   Befund zur Orientierung:
    Befund der Prüf-Agenten vom 05.09.: `uses_standard_rules() == false`
    schaltet in ALLEN shakmaty-Varianten pauschal NMP, RFP, Quiet-Check-
    Quiescence und das orthodoxe SEE ab (SEE → `variant_capture_value`,
@@ -1564,7 +1588,10 @@ Verlauf dokumentiert: Aspiration und MVV-CP verworfen, CR30 ausgerollt).
   als A/B-Test gegen Variante A (siehe [lmr-plan.md](lmr-plan.md)).
 - **LMR auch in PV-Knoten** — Stockfish-Stil mit konservativeren
   Reduktionswerten (siehe [lmr-plan.md](lmr-plan.md)).
-- **Varianten-Gating** — siehe „Nächste Schritte" Punkt 2.
+- **Varianten-Gating** — erledigt 22.09.2026 (SEE-Fix, NMP/RFP für
+  KotH/Three-check). Offen: NMP/RFP für Horde/Racing Kings nach Messung;
+  KotH-Rand-Extension verworfen (−93 Elo), Variante „nur bei ungedecktem
+  oder einfach gedecktem Einstieg" wäre der nächste Versuch.
 - **Antichess-Suche** — `variant_capture_value` bewertet dort jeden Schlag
   positiv (Materialgewinn ist im Räuberschach schlecht); Move-Ordering
   invertieren oder eigenes Antichess-SEE. Außerdem fehlt die Erkennung
