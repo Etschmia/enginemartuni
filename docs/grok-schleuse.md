@@ -139,9 +139,15 @@ unverändert weiterbenutzt. Relevante Schlüssel:
 | `max-outbox` | neu, optional; Default 50 Dateien gleichzeitig in `outbox/` |
 | `depth`, `threads`, `hash`, `min-movetime`, `engine`, `variant-engine` | vom Server nicht mehr benutzt, gelten als **Sollwerte für die Grok-Seite** |
 
-**Archivierung** läuft wie gehabt: neue Zieldateien in `output` /
-`variant-output` eintragen, JSON validieren. `schleuse_sync.py` liest die
-Config bei jedem Lauf neu.
+**Archivierung** (Schnitt nach einem Rollout) macht seit 22.09.2026
+`tools/archive_after_rollout.py`: alte Partien (Startzeit vor dem Cut,
+Default = mtime des Live-Binaries) nach `game_archiv/`, alte Analysedateien
+nach `archiv/`, `output` / `variant-output` auf `analyse-<Datum>.json`
+umstellen — mit JSON-Validierung vor dem Schreiben, Drain der Schleuse
+(alte Partien werden erst fertig analysiert) und dem gemeinsamen Lock.
+Ohne `--execute` Probelauf. Der Claude-Skill `martuni-archiv` beschreibt
+die Klammer (Voraussetzungen, Kontrolle, Roadmap-Eintrag).
+`schleuse_sync.py` liest die Config bei jedem Lauf neu.
 
 ## Betrieb und Fehlersuche
 

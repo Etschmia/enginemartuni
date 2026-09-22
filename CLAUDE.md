@@ -75,6 +75,10 @@ Grok-Bot über `~/grok_bot_schleuse/` aus — Protokoll, Betrieb und Rückweg in
   `variant-output` auf die neuen Zieldateien zeigen. **Vor dem Speichern JSON
   validieren** — eine kaputte Config legt den Sync still (Lehre vom 06.09.2026).
   Neue optionale Schlüssel: `schleuse-dir`, `max-outbox`.
+- **Archivierung nach einem Rollout:** `tools/archive_after_rollout.py`
+  (Probelauf ohne, scharf mit `--execute`) bzw. Claude-Skill `martuni-archiv`:
+  Partien vor dem Cut nach `game_archiv/`, Analysedateien nach `archiv/`,
+  Config auf `analyse-<Datum>.json` umstellen.
 - **Quarantäne:** `tools/analyze_cron.quarantine.json` wie bisher; ein
   `.failed.json` vom Grok-Bot zählt als Fehlschlag, ab `max-failures` (3)
   wird die PGN übersprungen.

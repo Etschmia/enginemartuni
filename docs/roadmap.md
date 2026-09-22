@@ -25,6 +25,12 @@ Lichess-Lookback beurteilt.
   1802, Atomic 1571, Crazyhouse 1366, Antichess 2132. Erwartung: Three-check
   und KotH deutlich hoch (Selfplay +250 Elo gegen den alten Stand), Racing
   Kings/Horde leicht hoch, Standard/960 unverändert (bit-exakt).
+- **Archiviert 22.09. 18:29** (erster Lauf des neuen
+  `tools/archive_after_rollout.py`, Skill `martuni-archiv`): 1060 Partien
+  (Start vor 18:11:35 = Binary-Tausch) → `game_archiv/`, `analyse-06.10.2026*.json`
+  → `archiv/`, Config auf **`analyse-22.09.2026.json` /
+  `analyse-22.09.2026-varianten.json`** — das sind die Lookback-Dateien für
+  dieses Rollout. `done/` der Schleuse nach `bis-22.09.2026/`.
 - **Nachtlauf 22.09. ab 21:45** (`target/release/night_matches_20260922.sh`,
   Ausgabe `matches/night_20260922/`): KotH Term 5 vs. P1 (75 Paare), Racing
   Kings und Horde SEE-Fix vs. Live (je 30 Paare). Beim nächsten Einstieg
