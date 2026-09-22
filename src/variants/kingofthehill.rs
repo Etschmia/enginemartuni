@@ -37,6 +37,13 @@
 //!      Gewinnzug uebersehen; ihr Stand-Pat bekommt deshalb einen
 //!      "entschieden"-Wert, der jede Materialdifferenz ueberragt, aber
 //!      unter der Mate-Schwelle der Suche bleibt (kein Ply-Adjustment).
+//!   5. Einfach gedeckte Einstiegsfelder (seit 22.09.2026) — der Koenig
+//!      steht neben einem Huegelfeld, das genau EIN gegnerischer Stein
+//!      deckt. Ein Abtausch, ein Opfer oder eine Ablenkung dieses einen
+//!      Deckers oeffnet den Einstieg; die Suche sieht das oft erst hinter
+//!      dem Horizont. Befund der Blunder-Analyse 22.09.2026: in den
+//!      KotH-Verlusten bewertete Stockfish solche Stellungen mit −25 bis
+//!      −29 Bauern, Martunis Statik mit ±0 (Terme 1–4 gaben 20–100 cp).
 //!
 //! Alle Werte in Centipawns (Skala wie die Standard-Eval: Bauer 100,
 //! Leichtfigur 300, Turm 500, Dame 900), Rueckgabe aus Sicht von Weiss.
@@ -124,6 +131,37 @@ const ENTRY_THREAT_EXTRA: i32 = 50;
 // ---------------------------------------------------------------------------
 const WIN_NEXT_MOVE: i32 = 5_000;
 
+// ---------------------------------------------------------------------------
+// Term 5: Einfach gedeckte Einstiegsfelder (22.09.2026).
+//
+// Term 3/4 zaehlen nur Einstiegsfelder, die der Gegner GAR NICHT deckt.
+// Ein Feld, das genau ein gegnerischer Stein deckt, ist in der Praxis
+// fast so gefaehrlich: der Decker laesst sich schlagen (auch per Opfer —
+// Turm gegen Laeufer ist in KotH ein guter Preis fuer den Einstieg),
+// ablenken oder fesseln, und die statische Bewertung sieht nichts davon.
+// Beispiel aus einer Live-Partie (Weiss am Zug, Stockfish −27,8 Bauern):
+// 3r4/5p2/p2k4/1p1r2pp/2pBn3/1P2PN2/P1P2PPP/R2R2K1 — der schwarze Koenig
+// auf d6 hat e5 als Einstieg, gedeckt von Sf3 und Ld4; der Laeufer haengt
+// aber am Td5, und nach ...Txd4 Sxd4 (oder Txd4) ist e5 nur noch einfach
+// bzw. gar nicht mehr gedeckt — ...Ke5 beendet die Partie, Weiss kann nur
+// den Laeufer opfern (Lf6). Martunis Statik gab hier +3,45 fuer Weiss
+// (Material), die KotH-Terme −103. Term 5 greift, sobald nur noch EIN
+// Decker uebrig ist; "haengende Decker" (wie der Ld4 hier) waeren die
+// naechste Verfeinerung.
+//
+// Gezaehlt werden Huegelfelder neben dem Koenig, die keine eigene Figur
+// blockiert und die GENAU EIN gegnerischer Stein (inkl. Koenig) deckt.
+// Malus/Bonus flach, unabhaengig davon, wer am Zug ist: ist die Seite am
+// Zug, kann sie den Decker jetzt angreifen; ist sie es nicht, muss der
+// Gegner das Feld JETZT nachdecken. 120 cp = etwas mehr als Term 3
+// (ungedecktes Feld, Seite nicht am Zug, 100 cp) — zwei einfach gedeckte
+// Felder wiegen bereits eine Leichtfigur. Erstentwurf, per Selfplay in
+// der Variante gemessen (siehe Roadmap 22.09.2026). Eine zusaetzlich
+// erprobte Such-Extension fuer Koenigsschritte an den Huegelrand wurde
+// verworfen (−108 Elo im Selfplay).
+// ---------------------------------------------------------------------------
+const SINGLE_GUARD_ENTRY: i32 = 120;
+
 /// Ergaenzt die generische Bewertung um die vier KotH-Terme (s. Modul-Doku).
 /// `p` wird nicht gebraucht (die Konstanten leben hier im Modul); `phase`
 /// ebenfalls nicht — die Phasengewichtung laeuft ueber die gegnerische
@@ -180,7 +218,27 @@ fn side_score<B: EngineBoard>(board: &B, us: Color) -> i32 {
         }
     }
 
+    // Term 5: Einstiegsfelder neben dem Koenig, die genau ein gegnerischer
+    // Stein deckt (siehe Konstante). Disjunkt zu Term 3/4 (dort 0 Decker).
+    let single_guarded = (get_king_moves(king) & HILL & enemy_attacks & !ours)
+        .filter(|&sq| guard_count(board, sq, !us, occ_without_king) == 1)
+        .count() as i32;
+    score += single_guarded * SINGLE_GUARD_ENTRY;
+
     score
+}
+
+/// Anzahl Steine von `side`, die `sq` bei Belegung `occ` decken (Bauern
+/// per gespiegelter Angriffsrichtung, Koenig eingeschlossen).
+fn guard_count<B: EngineBoard>(board: &B, sq: Square, side: Color, occ: BitBoard) -> u32 {
+    let own = *board.color_combined(side) & occ;
+    let bq = (*board.pieces(Piece::Bishop) | *board.pieces(Piece::Queen)) & own;
+    let rq = (*board.pieces(Piece::Rook) | *board.pieces(Piece::Queen)) & own;
+    (get_knight_moves(sq) & *board.pieces(Piece::Knight) & own).popcnt()
+        + (get_bishop_moves(sq, occ) & bq).popcnt()
+        + (get_rook_moves(sq, occ) & rq).popcnt()
+        + get_pawn_attacks(sq, !side, *board.pieces(Piece::Pawn) & own).popcnt()
+        + (get_king_moves(sq) & *board.pieces(Piece::King) & own).popcnt()
 }
 
 /// Chebyshev-Distanz (Koenigsschritte) von `sq` zum naechsten Huegelfeld,
@@ -496,5 +554,54 @@ mod tests {
         let legal: Vec<ChessMove> = board(fen).legal_gen().collect();
         assert!(legal.contains(&result.best), "illegaler bestmove {}", result.best);
         assert!(result.score.abs() < 1000, "score {}", result.score);
+    }
+}
+
+#[cfg(test)]
+mod single_guard_entry_tests {
+    //! Term 5 (22.09.2026): einfach gedeckte Einstiegsfelder.
+    use super::*;
+    use crate::board_shak::BoardKingOfTheHill;
+    use crate::eval_config::EvalParams;
+
+    fn board(fen: &str) -> BoardKingOfTheHill {
+        BoardKingOfTheHill::from_fen(fen).unwrap_or_else(|e| panic!("FEN {} ungueltig: {}", fen, e))
+    }
+
+    #[test]
+    fn counts_entries_guarded_by_exactly_one_piece() {
+        // Live-Stellung (siehe Konstante) NACH ...Txd4 Txd4: Kd6, e5 nur
+        // noch vom Sf3 gedeckt.
+        let live = board("3r4/5p2/p2k4/1p4pp/2pRn3/1P2PN2/P1P2PPP/R5K1 b - - 0 29");
+        // Dieselbe Stellung mit weissem Bauern f4: e5 doppelt gedeckt.
+        let double = board("3r4/5p2/p2k4/1p4pp/2pRnP2/1P2PN2/P1P3PP/R5K1 b - - 0 29");
+        let occ_live = *live.combined() & !BitBoard::from_square(Square::D6);
+        assert_eq!(guard_count(&live, Square::E5, Color::White, occ_live), 1);
+        let occ_double = *double.combined() & !BitBoard::from_square(Square::D6);
+        assert_eq!(guard_count(&double, Square::E5, Color::White, occ_double), 2);
+        // Der Unterschied im schwarzen Anteil ist genau Term 5 (der f4-Bauer
+        // aendert weder Distanz noch ungedeckte Felder: e5 war schon gedeckt).
+        assert_eq!(
+            side_score(&live, Color::Black) - side_score(&double, Color::Black),
+            SINGLE_GUARD_ENTRY
+        );
+        // Weiss (Kg1, weit weg) bekommt nichts.
+        assert_eq!(side_score(&live, Color::White), side_score(&double, Color::White));
+    }
+
+    #[test]
+    fn unguarded_entries_are_not_double_counted() {
+        // Ke3 neben d4/e4/d5(?): d4 und e4 ungedeckt (Term 3), kein Term 5.
+        let b = board("7k/8/8/8/8/4K3/8/8 b - - 0 1");
+        let occ = *b.combined() & !BitBoard::from_square(Square::E3);
+        assert_eq!(guard_count(&b, Square::D4, Color::Black, occ), 0);
+        let p = EvalParams::default();
+        // Seite nicht am Zug mit zwei freien Einstiegsfeldern: Term 3.
+        assert_eq!(
+            side_score(&b, Color::White) - taper(HILL_DIST_MG[1], HILL_DIST_EG[1], enemy_army_phase(&b, Color::Black))
+                - (HILL & !attack_map(&b, Color::Black, occ)).popcnt() as i32 * UNGUARDED_HILL_PER_SQUARE[1],
+            ENTRY_THREAT_FIRST + ENTRY_THREAT_EXTRA
+        );
+        let _ = p;
     }
 }

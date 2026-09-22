@@ -718,9 +718,16 @@ fn alpha_beta<B: EngineBoard>(
     // damit Elternknoten einen engeren Bound bekommen — analog zum
     // NMP-Cutoff wird nichts in die TT geschrieben.
     // RFP and NMP may both need this node's unchanged static evaluation.
+    //
+    // Varianten-Gating (22.09.2026): RFP und NMP laufen nur dort, wo die
+    // statische Eval bzw. die Zugzwang-Annahme tragen — Standard/960, KotH
+    // und Three-Check (`VariantKind::allows_static_pruning` /
+    // `allows_null_move`). Vorher schaltete `uses_standard_rules()` beides
+    // fuer ALLE shakmaty-Varianten pauschal ab. Fuer `chess::Board` ist
+    // `variant_kind()` die Konstante Standard → Standardpfad unveraendert.
     let mut pruning_eval = None;
     if state.rfp_on
-        && board.uses_standard_rules()
+        && board.variant_kind().allows_static_pruning()
         && ply > 0
         && !is_pv
         && !in_check
@@ -735,7 +742,7 @@ fn alpha_beta<B: EngineBoard>(
     }
 
     if !state.nmp_off
-        && board.uses_standard_rules()
+        && board.variant_kind().allows_null_move()
         && allow_null
         && !is_pv
         && !in_check
@@ -901,6 +908,11 @@ fn alpha_beta<B: EngineBoard>(
         } else {
             0
         };
+        // Verworfen 22.09.2026: eine +1-Extension fuer KotH-Koenigsschritte an
+        // den Huegelrand (analog zur Schach-Extension) kostete im Selfplay
+        // −108 ± 73 Elo (100 Partien 10+0.1) — Koenige am Huegelrand sind in
+        // KotH-Mittelspielen zu haeufig, der Baum explodiert. Details im
+        // Roadmap-Eintrag vom 22.09.2026.
         let ext = if other_cand && extensions_used + 2 <= MAX_EXTENSION_PER_LINE {
             2
         } else if child_in_check && extensions_used + check_ext <= MAX_EXTENSION_PER_LINE {
@@ -1278,7 +1290,18 @@ fn quiescence<B: EngineBoard>(
     // billiger Bitboard-Test pro Zug (kein make_move noetig). Abzugschachs
     // sind hier bewusst NICHT erfasst (separates v2). Bei qply > 0 entfaellt
     // die Check-Generierung, damit Check-auf-Check-Ketten terminieren.
-    let quiet_checks = qply == 0 && board.uses_standard_rules();
+    // Stille Schachgebote nur dort, wo Schach die orthodoxe Bedeutung hat
+    // und ein gegnerischer Koenig auf dem Brett steht (22.09.2026, vorher
+    // pauschal `uses_standard_rules()`): Racing Kings verbietet
+    // Schachgebote (die Maske traefe nie), Horde-Weiss hat keinen Koenig
+    // (`king_square` waere nur ein Platzhalter), Atomic/Crazyhouse/
+    // Antichess bleiben beim bisherigen Verhalten (aus). In Three-Check
+    // ist genau das der wichtige Fall: das dritte Schach am Horizont.
+    let kind = board.variant_kind();
+    let quiet_checks = qply == 0
+        && kind.orthodox_captures()
+        && kind != crate::backend::VariantKind::RacingKings
+        && board.has_king(!board.side_to_move());
     let (knight_chk, bishop_chk, rook_chk, pawn_chk) = if quiet_checks {
         use chess::{get_bishop_moves, get_knight_moves, get_pawn_attacks, get_rook_moves};
         let occ = *board.combined();
@@ -1976,10 +1999,18 @@ fn least_valuable_attacker<B: EngineBoard>(
 pub fn see<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
     // Orthodoxes SEE nimmt an, dass Schlag- und Rueckschlagfigur auf dem
     // Zielfeld stehen bleiben. In Atomic explodiert die Schlagfigur und kann
-    // Nachbarfiguren (bis hin zum Koenig) mitnehmen. Dort ist der unmittelbare
-    // Materialsaldo nach shakmatys regelkonformem Zug die passende statische
-    // Ordnungs-/Pruning-Schaetzung.
-    if !board.uses_standard_rules() {
+    // Nachbarfiguren (bis hin zum Koenig) mitnehmen, in Crazyhouse kommt
+    // der Rueckschlag auch aus der Tasche, in Antichess ist Schlagen Pflicht.
+    // Dort ist der unmittelbare Materialsaldo nach shakmatys regelkonformem
+    // Zug die passende statische Ordnungs-/Pruning-Schaetzung.
+    //
+    // Three-Check, KotH, Horde und Racing Kings schlagen dagegen genau wie
+    // im Standardschach — sie bekommen das echte SEE (22.09.2026). Vorher
+    // lief hier `uses_standard_rules()`, und `variant_capture_value` kennt
+    // keinen Rueckschlag: jeder Schlag sah "gewinnend" aus, das Bad-
+    // Capture-Pruning der Quiescence griff nie (siehe
+    // `VariantKind::orthodox_captures`).
+    if !board.variant_kind().orthodox_captures() {
         return variant_capture_value(board, mv);
     }
 
@@ -2781,5 +2812,141 @@ mod tests {
         // (Margin 240) nicht mehr.
         assert!(!rfp_cutoff(300, 200, 2));
         assert!(rfp_cutoff(440, 200, 2));
+    }
+}
+
+#[cfg(test)]
+mod variant_see_tests {
+    //! 22.09.2026: SEE- und Quiescence-Gating fuer Varianten mit orthodoxer
+    //! Schlagmechanik (Three-Check, KotH, Horde, Racing Kings). Hintergrund
+    //! siehe `VariantKind::orthodox_captures`.
+    use super::*;
+    use crate::board_shak::{BoardHorde, BoardKingOfTheHill, BoardRacingKings, BoardThreeCheck};
+    use crate::eval_config::EvalParams;
+    use crate::polyglot::BookSet;
+    use chess::{Board, MoveGen};
+    use std::path::Path;
+    use std::str::FromStr;
+
+    /// Fuer jeden legalen Schlagzug der Standard-Stellung muss das
+    /// Varianten-Backend exakt denselben SEE-Wert liefern wie `chess::Board`
+    /// — gleiche Mechanik, gleiche Aussage. Vor dem Fix lieferte
+    /// `variant_capture_value` fuer eine gedeckte Bauernnahme mit dem
+    /// Springer +100 statt -200.
+    fn assert_see_matches_standard<B: EngineBoard>(fen_std: &str, fen_var: &str) {
+        let std_board = Board::from_str(fen_std).expect("Standard-FEN");
+        let var_board = B::from_fen(fen_var).expect("Varianten-FEN");
+        let mut captures = 0;
+        let mut losing = 0;
+        for mv in MoveGen::new_legal(&std_board) {
+            if !EngineBoard::is_capture(&std_board, mv) {
+                continue;
+            }
+            captures += 1;
+            let expected = see(&std_board, mv);
+            assert_eq!(expected, see(&var_board, mv), "SEE {} in {}", mv, fen_std);
+            if expected < 0 {
+                losing += 1;
+            }
+        }
+        assert!(captures >= 2, "Testposition braucht mehrere Schlagzuege: {}", fen_std);
+        assert!(losing >= 1, "Testposition braucht einen verlierenden Schlag: {}", fen_std);
+    }
+
+    // Italienisch nach 4.Nf3: Bxf7+ (-200) und Nxe5 (-200) verlieren beide
+    // Material — genau die Schlagzuege, die in der Quiescence gepruned
+    // gehoeren.
+    const ITALIAN_STD: &str = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5";
+
+    #[test]
+    fn see_matches_standard_in_three_check() {
+        assert_see_matches_standard::<BoardThreeCheck>(
+            ITALIAN_STD,
+            "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 3+3 4 5",
+        );
+        // Mit schon gegebenen Schachs (2+1) aendert sich am SEE nichts.
+        assert_see_matches_standard::<BoardThreeCheck>(
+            ITALIAN_STD,
+            "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 2+1 4 5",
+        );
+    }
+
+    #[test]
+    fn see_matches_standard_in_king_of_the_hill() {
+        assert_see_matches_standard::<BoardKingOfTheHill>(ITALIAN_STD, ITALIAN_STD);
+    }
+
+    #[test]
+    fn see_matches_standard_in_racing_kings() {
+        // Rxc8+ (Turm gegen gedeckten Springer, -200) und Rxb2 (+500).
+        // Rxc8+ gaebe Schach und ist in Racing Kings illegal — SEE ist
+        // aber ein reiner Bitboard-Wert und muss trotzdem uebereinstimmen.
+        let fen = "2n1R3/2k3K1/8/4N3/1R6/8/1r6/8 w - - 6 29";
+        assert_see_matches_standard::<BoardRacingKings>(fen, fen);
+    }
+
+    #[test]
+    fn see_in_horde_without_white_king() {
+        // Horde-Weiss hat keinen Koenig; `chess::Board` kann so eine
+        // Stellung nicht darstellen, deshalb mit erwarteten Werten:
+        // Nxd2 nimmt einen ungedeckten Bauern (+P), Nxe3 einen vom
+        // d2-Bauern gedeckten (P - N = -200).
+        let board = BoardHorde::from_fen("4k3/8/8/8/2n5/4P3/3P4/8 b - - 0 1").unwrap();
+        let nxd2 = board.parse_uci_move("c4d2").unwrap();
+        let nxe3 = board.parse_uci_move("c4e3").unwrap();
+        assert_eq!(see(&board, nxd2), see_piece_value(Piece::Pawn));
+        assert_eq!(
+            see(&board, nxe3),
+            see_piece_value(Piece::Pawn) - see_piece_value(Piece::Knight)
+        );
+    }
+
+    fn run_variant_search<B: EngineBoard>(board: B, depth: u32) -> ChessMove {
+        let req = SearchRequest {
+            board,
+            history: Vec::new(),
+            halfmove_clock: 0,
+            params: GoParams {
+                depth: Some(depth),
+                ..GoParams::default()
+            },
+            tt: Arc::new(Mutex::new(TranspositionTable::new(1))),
+            book: Arc::new(BookSet::load(Path::new("."), &[])),
+            eval: Arc::new(EvalParams::default()),
+            stop: Arc::new(AtomicBool::new(false)),
+            pondering: Arc::new(AtomicBool::new(false)),
+            move_overhead: 0,
+            syzygy: None,
+        };
+        search(req).expect("Suche liefert ein Ergebnis").best
+    }
+
+    #[test]
+    fn horde_search_with_kingless_white_does_not_panic() {
+        // Schwarz am Zug, Weiss ohne Koenig: die stillen Schachgebote der
+        // Quiescence duerfen `king_square(White)` (Platzhalter A1) nicht
+        // anfassen — `has_king`-Guard.
+        let board = BoardHorde::from_fen(
+            "rnbqkbnr/pppppppp/8/1PP2PP1/PPPPPPPP/PPPPPPPP/PPPPPPPP/PPPPPPPP b kq - 0 1",
+        )
+        .unwrap();
+        let best = run_variant_search(board, 4);
+        assert_ne!(best, ChessMove::default());
+    }
+
+    #[test]
+    fn three_check_and_koth_search_run_with_pruning_enabled() {
+        // Rauchtest: NMP/RFP/Quiet-Checks sind fuer diese Varianten jetzt
+        // aktiv (inkl. `BoardShak::null_move`) — die Suche muss sauber
+        // durchlaufen und einen legalen Zug liefern.
+        let tc = BoardThreeCheck::from_fen(
+            "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 3+3 4 5",
+        )
+        .unwrap();
+        let mv = run_variant_search(tc.clone(), 5);
+        assert!(tc.legal_gen().any(|m| m == mv));
+        let koth = BoardKingOfTheHill::from_fen(ITALIAN_STD).unwrap();
+        let mv = run_variant_search(koth.clone(), 5);
+        assert!(koth.legal_gen().any(|m| m == mv));
     }
 }

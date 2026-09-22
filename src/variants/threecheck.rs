@@ -26,8 +26,13 @@
 //!      berechnet und mit einem kraeftigen Faktor obendrauf gelegt — so
 //!      bleibt eval.rs unangetastet (Standardpfad bit-exakt), und der
 //!      Verstaerkungsfaktor ist an EINER Stelle als Konstante sichtbar.
+//!   4. Dass ein Stein direkt neben dem Koenig, den ausser dem Koenig
+//!      niemand deckt und den ein gegnerischer Langschrittler MIT SCHACH
+//!      schlagen kann, in dieser Variante eine Einladung ist (Lxf7+ Kxf7
+//!      und der Koenig steht im Freien). Deshalb ein "Opferfeld"-Malus —
+//!      seit 22.09.2026, Befund der Blunder-Analyse (siehe Term 4).
 //!
-//! Terme 2 und 3 werden nach dem "Schach-Stand" des ANGREIFERS eskaliert:
+//! Terme 2 bis 4 werden nach dem "Schach-Stand" des ANGREIFERS eskaliert:
 //! braucht der Gegner nur noch ein Schach, ist jede Luecke in der
 //! Koenigsstellung doppelt so gefaehrlich wie zu Partiebeginn.
 //!
@@ -35,14 +40,14 @@
 //! Leichtfigur 300, Turm 500, Dame 900). `base` bleibt vollstaendig
 //! erhalten (Material, PSTs, Bauernstruktur, Koenigssicherheit usw. gelten
 //! unveraendert), dieses Modul addiert die Differenz Weiss − Schwarz der
-//! drei Zusatzterme. Rueckgabe aus Sicht von Weiss; Signatur und Konvention
+//! vier Zusatzterme. Rueckgabe aus Sicht von Weiss; Signatur und Konvention
 //! siehe `crate::variants` (Modul-Doku).
 
 use crate::backend::EngineBoard;
 use crate::eval_config::EvalParams;
 use chess::{
-    get_bishop_moves, get_king_moves, get_knight_moves, get_rook_moves, BitBoard, Color, Piece,
-    EMPTY,
+    get_bishop_moves, get_king_moves, get_knight_moves, get_pawn_attacks, get_rook_moves,
+    BitBoard, Color, Piece, EMPTY,
 };
 
 // ---------------------------------------------------------------------------
@@ -74,7 +79,7 @@ const DECIDED: i32 = 10_000;
 // etwas mehr als einen Bauern, das zweite kommt einem Turm nahe (+210 auf
 // das erste, insgesamt +330).
 // ---------------------------------------------------------------------------
-const CHECK_GIVEN_BONUS: [i32; 3] = [0, 120, 330];
+const CHECK_GIVEN_BONUS: [i32; 3] = [0, 220, 450];
 
 // ---------------------------------------------------------------------------
 // Eskalation der Koenigs-Terme (2 und 3) nach dem Schach-Stand des
@@ -131,13 +136,13 @@ const ESCALATION_PERMILLE: [i32; 3] = [1000, 1500, 2200];
 // ---------------------------------------------------------------------------
 /// Centipawns je freiem Strahlfeld (Distanz ≥ 2), von dem ein gegnerischer
 /// Langschrittler den Koenig im Schach haette.
-const RAY_SQUARE_WEIGHT: i32 = 8;
+const RAY_SQUARE_WEIGHT: i32 = 24;
 /// Centipawns je freiem Springer-Sprungfeld um den Koenig, wenn der Gegner
 /// noch einen Springer hat. Kleiner als der Strahlwert: der Springer muss
 /// das Feld erst erreichen, ein Langschrittler wirkt aus der Ferne.
-const KNIGHT_SQUARE_WEIGHT: i32 = 4;
+const KNIGHT_SQUARE_WEIGHT: i32 = 12;
 /// Gutschrift je eigenem Stein in der 3x3-Koenigszone (ohne Koenig).
-const DEFENDER_WEIGHT: i32 = 4;
+const DEFENDER_WEIGHT: i32 = 6;
 
 // ---------------------------------------------------------------------------
 // Term 3: Verstaerkung der vorhandenen Angriffsdruck-Rechnung.
@@ -159,6 +164,49 @@ const DEFENDER_WEIGHT: i32 = 4;
 // zusaetzlich bestraft.
 // ---------------------------------------------------------------------------
 const KS_EXTRA_PERMILLE: i32 = 1000;
+
+// ---------------------------------------------------------------------------
+// Term 4: Opferfelder — das Lxf7+-Muster (seit 22.09.2026).
+//
+// Ein Feld direkt neben dem Koenig, auf dem ein eigener Stein steht, den
+// ein gegnerischer Langschrittler MIT SCHACH schlagen kann, und das ausser
+// dem Koenig niemand deckt. Der Gegner opfert dort (Laeufer gegen Bauer),
+// das Schach zaehlt so oder so, und schlaegt der Koenig zurueck, steht er
+// danach im Freien — das naechste Schach ist nur noch eine Damenreise
+// entfernt. In Three-Check ist das keine Kombination fuer Spezialisten,
+// sondern DIE Eroeffnungswaffe (1.e4 e5 2.Lc4 gegen f7, gespiegelt gegen
+// f2). Die Suche sieht das Opfer selbst, aber nicht den Nachschlag: die
+// Widerlegung von 1.Sc3 e5 2.e3 Sf6 3.Lc4 Sc6?? lautet 4.Lxf7+ Kxf7 5.Dh5+
+// Sxh5 6.Sf3 Kg8 7.Sd5 a5 8.Se7# — zehn Halbzuege, in Bullet ausserhalb
+// des Horizonts. Befund der Blunder-Analyse vom 22.09.2026: 30 von 148
+// Live-Partien liefen in genau diese Linien, und die Bewertung nach
+// 3.Lc4 gab dem Angriff auf f7 ganze +1 cp (Term 3 nutzt die milde
+// Standard-Tabelle: ein Angreifer ≈ 0).
+//
+// Gezaehlt wird je Zonenfeld (die acht Nachbarn des Koenigs):
+//   - ein eigener Stein steht darauf,
+//   - ein gegnerischer Laeufer/Turm/Dame greift es an UND wuerde von dort
+//     Schach geben (Laeufer/Dame auf einem Diagonal-Nachbarfeld, Turm/Dame
+//     auf einem Geraden-Nachbarfeld — fuer Nachbarfelder ist das reine
+//     Geometrie, dazwischen kann nichts stehen),
+//   - kein eigener Stein ausser dem Koenig deckt das Feld.
+// Springer entfallen (ein Springer neben dem Koenig gibt nie Schach),
+// Bauern als Angreifer ebenfalls (ein Bauernopfer zieht den Koenig nicht
+// heraus). Ein gegnerischer Stein, der schon auf dem Feld steht, ist ein
+// Schach bzw. Zonen-Druck (Term 3), kein Opferfeld.
+//
+// Malus je Feld SAC_SQUARE_PENALTY, eskaliert nach dem Schach-Stand des
+// Angreifers wie die Terme 2 und 3: braucht der Gegner nur noch ein
+// Schach, IST das Opferfeld die Partie (×2,2 = 176 cp).
+//
+// Kalibrierung: 80 cp ist knapp unter dem, was der Angreifer fuer das
+// Opfer investiert (Laeufer gegen Bauer = 200 cp), abgezinst darauf, dass
+// nicht jedes Opfer durchschlaegt. Nach 3.Lc4 kostet das ungedeckte f7
+// damit genug, dass ...De7/...Sh6 (decken) oder ...d5 (verstellt) den
+// Mobilitaets-Nachteil solcher Deckungszuege aufwiegen. Erstentwurf —
+// Wert per Selfplay-A/B in der Variante zu pruefen.
+// ---------------------------------------------------------------------------
+const SAC_SQUARE_PENALTY: i32 = 80;
 
 /// Eigene Steine in der 3x3-Zone um den Koenig (ohne den Koenig selbst).
 #[inline]
@@ -243,9 +291,56 @@ fn zone_pressure<B: EngineBoard>(board: &B, us: Color, p: &EvalParams) -> i32 {
     p.safety_table[idx]
 }
 
+/// Term 4, roh: Anzahl Opferfelder (siehe oben) mal Malus. Sicht:
+/// positiver Wert = Malus fuer `us`.
+fn sac_squares<B: EngineBoard>(board: &B, us: Color) -> i32 {
+    let king_sq = board.king_square(us);
+    let occ = *board.combined();
+    let own = *board.color_combined(us);
+    let enemy = *board.color_combined(!us);
+    let enemy_bq = (*board.pieces(Piece::Bishop) | *board.pieces(Piece::Queen)) & enemy;
+    let enemy_rq = (*board.pieces(Piece::Rook) | *board.pieces(Piece::Queen)) & enemy;
+    let own_n = *board.pieces(Piece::Knight) & own;
+    let own_bq = (*board.pieces(Piece::Bishop) | *board.pieces(Piece::Queen)) & own;
+    let own_rq = (*board.pieces(Piece::Rook) | *board.pieces(Piece::Queen)) & own;
+    let own_p = *board.pieces(Piece::Pawn) & own;
+
+    // Diagonal- bzw. Geraden-Nachbarn des Koenigs: Leerbrett-Strahlen,
+    // auf die acht Nachbarfelder beschraenkt.
+    let near = get_king_moves(king_sq);
+    let diag_near = get_bishop_moves(king_sq, EMPTY) & near;
+    let orth_near = get_rook_moves(king_sq, EMPTY) & near;
+
+    let mut count = 0;
+    for sq in near & own {
+        let sq_bb = BitBoard::from_square(sq);
+        // Gegnerische Gleiter, die sq angreifen und von dort Schach gaeben.
+        let mut checking = EMPTY;
+        if diag_near & sq_bb != EMPTY {
+            checking |= get_bishop_moves(sq, occ) & enemy_bq;
+        }
+        if orth_near & sq_bb != EMPTY {
+            checking |= get_rook_moves(sq, occ) & enemy_rq;
+        }
+        if checking == EMPTY {
+            continue;
+        }
+        // Eigene Deckung ohne den Koenig (Springer, Gleiter, Bauern —
+        // Bauern per gespiegelter Angriffsrichtung wie in `all_attackers_to`).
+        let defended = get_knight_moves(sq) & own_n != EMPTY
+            || get_bishop_moves(sq, occ) & own_bq != EMPTY
+            || get_rook_moves(sq, occ) & own_rq != EMPTY
+            || get_pawn_attacks(sq, !us, own_p) != EMPTY;
+        if !defended {
+            count += 1;
+        }
+    }
+    count * SAC_SQUARE_PENALTY
+}
+
 /// Gesamtbeitrag einer Seite (Sicht dieser Seite, positiv = gut fuer sie):
 /// Term 1 fuer die eigenen Schachs minus die eskalierten Koenigs-Terme 2
-/// und 3, die der Gegner mit seinem Schach-Stand gegen uns ausspielt.
+/// bis 4, die der Gegner mit seinem Schach-Stand gegen uns ausspielt.
 fn side_score<B: EngineBoard>(
     board: &B,
     p: &EvalParams,
@@ -268,7 +363,9 @@ fn side_score<B: EngineBoard>(
 
     let exposure = king_exposure(board, us);
     let extra_pressure = zone_pressure(board, us, p) * KS_EXTRA_PERMILLE / 1000;
-    let king_terms = (exposure + extra_pressure) * ESCALATION_PERMILLE[their_given] / 1000;
+    let sac = sac_squares(board, us);
+    let king_terms =
+        (exposure + extra_pressure + sac) * ESCALATION_PERMILLE[their_given] / 1000;
 
     check_bonus - king_terms
 }
@@ -565,5 +662,64 @@ mod tests {
             crate::position::move_to_uci(result.best)
         );
         assert_eq!(result.best, b.parse_uci_move("g2g3").unwrap());
+    }
+}
+
+#[cfg(test)]
+mod sac_square_tests {
+    //! Term 4 (22.09.2026): Opferfelder / Lxf7+-Muster.
+    use super::*;
+    use crate::board_shak::BoardThreeCheck;
+
+    fn board(fen: &str) -> BoardThreeCheck {
+        BoardThreeCheck::from_fen(fen).unwrap_or_else(|e| panic!("FEN {} ungueltig: {}", fen, e))
+    }
+
+    /// 1.Sc3 e5 2.e3 Sf6 3.Lc4 — Schwarz am Zug, f7 haengt nur am Koenig.
+    const AFTER_BC4: &str = "rnbqkb1r/pppp1ppp/5n2/4p3/2B5/2N1P3/PPPP1PPP/R1BQK1NR b KQkq - 3+3 2 3";
+
+    #[test]
+    fn detects_the_bxf7_pattern_and_its_cures() {
+        assert_eq!(sac_squares(&board(AFTER_BC4), Color::Black), SAC_SQUARE_PENALTY);
+        // f2: kein schwarzer Laeufer auf der Diagonale → nichts.
+        assert_eq!(sac_squares(&board(AFTER_BC4), Color::White), 0);
+        // ...Sc6?? aendert nichts am Muster.
+        let nc6 = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B5/2N1P3/PPPP1PPP/R1BQK1NR w KQkq - 3+3 3 4";
+        assert_eq!(sac_squares(&board(nc6), Color::Black), SAC_SQUARE_PENALTY);
+        // ...De7 deckt f7, ...d5 verstellt die Diagonale, ...Sh6 (andere
+        // Linie: 1.e4 e5 2.Lc4 Sh6) deckt f7 mit dem Springer.
+        for fen in [
+            "rnb1kb1r/ppppqppp/5n2/4p3/2B5/2N1P3/PPPP1PPP/R1BQK1NR w KQkq - 3+3 3 4",
+            "rnbqkb1r/ppp2ppp/5n2/3pp3/2B5/2N1P3/PPPP1PPP/R1BQK1NR w KQkq - 3+3 0 4",
+            "rnbqkb1r/pppp1ppp/7n/4p3/2B1P3/8/PPPP1PPP/RNBQK1NR w KQkq - 3+3 1 3",
+        ] {
+            assert_eq!(sac_squares(&board(fen), Color::Black), 0, "{}", fen);
+        }
+    }
+
+    #[test]
+    fn enemy_piece_already_on_the_square_is_not_a_sac_square() {
+        // Nach 4.Lxf7+ steht der Laeufer selbst auf f7: Schach (Suche),
+        // Zonen-Druck (Term 3) — aber kein Opferfeld mehr.
+        let after = "r1bqkb1r/pppp1Bpp/2n2n2/4p3/8/2N1P3/PPPP1PPP/R1BQK1NR b KQkq - 2+3 0 4";
+        assert_eq!(sac_squares(&board(after), Color::Black), 0);
+    }
+
+    #[test]
+    fn white_side_is_symmetric() {
+        // 1.e4 e5 2.Sf3 Sc6 3.Sc3 Lc5: f2 haengt am Koenig, Lc5 zielt darauf.
+        let fen = "r1bqk1nr/pppp1ppp/2n5/2b1p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R w KQkq - 3+3 4 4";
+        assert_eq!(sac_squares(&board(fen), Color::White), SAC_SQUARE_PENALTY);
+        assert_eq!(sac_squares(&board(fen), Color::Black), 0);
+    }
+
+    #[test]
+    fn sac_square_escalates_with_enemy_checks() {
+        let p = EvalParams::default();
+        let b = board(AFTER_BC4);
+        let calm = side_score(&b, &p, Color::Black, 3, 3);
+        let urgent = side_score(&b, &p, Color::Black, 3, 1);
+        assert!(calm < 0, "Opferfeld muss Schwarz belasten: {}", calm);
+        assert!(urgent < calm, "{} vs {}", urgent, calm);
     }
 }

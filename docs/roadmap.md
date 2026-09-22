@@ -10,6 +10,155 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**22.09.2026 (Sitzung, Teil 2) — Varianten-Suche repariert, Three-check-
+und KotH-Eval nachgeschärft. Code in der Arbeitskopie, A/Bs laufen,
+Rollout offen.** Tobias-Entscheid: Punkte 1–3 der Auswertung nacheinander,
+Crazyhouse-Eval später (siehe „Offene Themen — Evaluation").
+- **Punkt 1 — SEE-Fix + Gating (Suche):** `VariantKind` bekommt drei
+  Prädikate (`orthodox_captures`, `allows_null_move`,
+  `allows_static_pruning`, backend.rs). `see()` rechnet für Three-check,
+  KotH, Horde und Racing Kings jetzt das echte SEE (vorher
+  `variant_capture_value` ohne Rückschlag ⇒ jeder Schlag „gewinnend",
+  Bad-Capture-Pruning und MovePicker-Klassifikation griffen nie);
+  stille Schachs in der Quiescence mit `has_king`-Guard (Horde-Weiß);
+  RFP und NMP für KotH und Three-check wieder an, dafür
+  `BoardShak::null_move` über shakmatys `swap_turn` (Three-check-Zähler
+  bleibt im Hash). Atomic/Crazyhouse/Antichess unverändert (Node-Counts
+  identisch). **Messung:** Knoten bei Tiefe 6 aus 1.Nc3 e5 2.e3 Nf6 3.Bc4:
+  Three-check 5,87 M → 886 k, KotH 10,8 M → 779 k, Racing Kings (Tiefe 5,
+  Startstellung) 1,60 M → 900 k, Horde 335 k → 320 k. Tiefe bei 1,5 s:
+  Three-check 5 → 6, KotH 4 → 7, Racing Kings 4 → 5, Horde 6 → 6.
+  Standard bit-exakt: `tools/perf_regression.py` — alle sieben
+  Standard-/960-/Atomic-/Crazyhouse-/Antichess-Fälle identisch, nur die
+  vier orthodoxen Varianten-Fälle differieren (gewollt). **Selfplay neu
+  vs. Live-Stand (10+0.1, UHO-Eröffnungen, `tools/variant_match.py`):**
+  KotH 100 Partien **79-5-16 = 81,5 % (+258 ± 88 Elo)**; Three-check,
+  Racing Kings, Horde: siehe Ergebniszeilen unten.
+- **Punkt 2 — Three-check-Falle (Tobias-Entscheid: Eval-Term statt
+  Buch):** Die Widerlegung von 3...Nc6?? ist zehn Halbzüge lang
+  (4.Bxf7+ Kxf7 5.Qh5+ Nxh5 6.Nf3 Kg8 7.Nd5 a5 8.Ne7#, mit python-chess
+  per Brute-Force bestätigt) — mit dem SEE-Fix allein (Tiefe 6–7 in
+  Bullet) bleibt Nc6 die Wahl. Neuer **Term 4 „Opferfelder"**
+  (`sac_squares`): Zonenfeld mit eigenem Stein, das ein gegnerischer
+  Gleiter MIT Schach schlagen kann und das nur der König deckt; 80 cp,
+  eskaliert nach Schach-Stand. Allein reicht er nicht (die Suche opfert
+  einfach und bewertet das Blatt nach Kxf7 mit Material, −173 für Weiß);
+  erst mit **Gewichten ×3** (RAY 8 → 24, KNIGHT 4 → 12, DEFENDER 4 → 6,
+  CHECK_GIVEN 120/330 → 220/450) kippt es: Wurzel bei Tiefe 5/7 → Qe7,
+  statisch nach Kxf7 +68 für Weiß, in der zweiten Fallenlinie 1.e4 e5
+  2.Bc4 → Nh6/Qf6 statt Nf6. 17 Modul-Tests grün (vier neue). **A/B
+  läuft:** `matches/3check_sac3_20260922` (150 Paare, gegen Punkt-1-
+  Stand) — Ergebnis unten.
+- **Punkt 3 — KotH-Königsmarsch:** Befund vertieft: alle 26 Verluste
+  enden mit dem gegnerischen Königsmarsch, aber Martuni sah das Ende
+  selbst schon 4–6 Züge vorher (#5…#1 in den eigenen `%eval`s); die
+  Stellungen kippen früher — SF −25…−29 Bauern bei Martuni-Statik ±0,
+  weil der Hügeleinstieg nur „einfach gedeckt" ist und das kein Term
+  sieht. Eval ist farbsymmetrisch (geprüft), Selfplay-Farben 46/49
+  (Schwarz 29 % live = Gegnermix). Zwei Hebel, getrennt gemessen:
+  (a) **Such-Extension +1** für Königszüge an den Hügelrand
+  (`king_step_to_hill_rim`, search.rs neben der Schach-Extension;
+  Mini-Bench auf 24 Blunder-FENs bei Tiefe 6 ohne sichtbaren Effekt);
+  (b) **Term 5 `SINGLE_GUARD_ENTRY` = 120 cp** je Hügelfeld neben dem
+  König, das genau ein gegnerischer Stein deckt (`guard_count`). Beispiel
+  3r4/5p2/p2k4/1p4pp/2pRn3/1P2PN2/P1P2PPP/R5K1 b: KotH-Anteil −41 → −281.
+  **A/Bs laufen:** `matches/koth_ext_20260922` (Ext vs. Punkt 1) und
+  `matches/koth_t5_20260922` (Term 5 vs. Ext), je 50 Paare.
+- **Werkzeuge:** `tools/variant_match.py` (python-chess-Runner mit echter
+  Uhr, UHO-Eröffnungen für 3check/KotH, Elo ± CI, PGN); Scratchpad-
+  Skripte `uci_probe.py` (wartet auf `bestmove`), `uci_eval.py`
+  (Breakdown), `koth_bench.py`. Lehre: `pkill -f` mit einem Muster aus der
+  eigenen Kommandozeile killt die eigene Shell — Warteschlangen per PID.
+- **Stand Binaries:** Live `target/release/martuni` unberührt (Backup
+  `martuni-live-20260922`), Entwicklungs-Builds in `target/dev`.
+  Rollout/Commit nach den A/Bs — Tobias entscheidet.
+- **Ergebnisse (Selfplay 10+0.1, Runner `tools/variant_match.py`, 2 Kerne
+  geteilt mit dem Live-Bot):**
+  - KotH SEE-Fix vs. Live: 100 P, **79-5-16 = 81,5 %, +258 ± 88 Elo**.
+  - Three-check SEE-Fix vs. Live: 100 P, **83-0-17 = 83,0 %, +276 ± 96 Elo**.
+  - Three-check SAC3 (Term 4 + Gewichte) vs. SEE-Fix: 300 P,
+    **167-5-128 = 56,5 %, +45 ± 40 Elo** (PGN-farbkorrekt: 91 Siege als
+    Weiß, 76 als Schwarz; beide Zeitverluste beim Vergleichs-Binary).
+  - KotH Rand-Extension vs. SEE-Fix: 100 P, **33-8-59 = 37,0 %, −93 ± 69
+    Elo → verworfen** (Könige am Hügelrand sind zu häufig, der Baum
+    explodiert). Code entfernt, Kommentar in search.rs.
+  - KotH Term 5 (mit Extension) vs. Extension: 100 P, 47-3-50 = 48,5 %,
+    −10 ± 68 Elo — **unbrauchbar**: 21 Partien durch Zeitverlust (Server
+    mit Load 8: Live-Bot-Partie, Fremdagenten, Crons), Log durch einen
+    überlebenden Runner-Prozess kontaminiert. **Wiederholen** als
+    „Term 5 ohne Extension vs. SEE-Fix" bei ruhigem Server (Binary
+    `martuni-t5` liegt bereit).
+  - Racing Kings / Horde SEE-Fix vs. Live: **offen** — erster Lauf durch
+    einen Runner-Bug (FEN-Header nach der Zufallseröffnung) abgestürzt,
+    Runner repariert, Wiederholung bei ruhigem Server.
+- **Lehren:** Matches tagsüber konkurrieren mit dem Live-Bot und den
+  Handels-Crons (8–21 Uhr) — Zeitverluste bei 10+0.1 mit MoveOverhead 0;
+  Nachtfenster oder `--concurrency 1` nehmen. Queue-Skripte per PID
+  beenden, aber Kindprozesse (Runner) explizit mit — `kill` auf die
+  Bash-Hülle lässt den Python-Runner weiterlaufen.
+
+**22.09.2026 — Auswertung `analyse-06.10.2026.json` + `-varianten.json`
+(erste Grok-Schleuse-Charge, 1044 Partien 11.–22.09., alle post PR #4).
+Kein Standard-Regress; Varianten-Suche hat einen strukturellen Defekt.**
+- **Datenlage:** 541 Standard/960-Partien (368 Std, 173 960; 637 Blunder)
+  und 503 Varianten-Partien (2625 Blunder). Schleuse läuft rund:
+  1044/1045 analysiert, 0 in Quarantäne (4 PGNs brauchten Wiederholungen,
+  alle später erfolgreich). Skript:
+  `scratchpad/cluster_2026_09_22.py` (Join Blunder × PGN-Header).
+- **Rating 22.09.:** Bullet 2205, Blitz 2130, Rapid 2271, Classical 2230,
+  960 1720; Atomic 1571, Crazyhouse 1366, Antichess 2132, KotH 1652,
+  Horde 1802 (prog −20), Three-check 1796, Racing Kings 1382. Gegen die
+  Anker vom 11.08. (960 1720 / Blitz 2159 / Rapid 2290): 960 ±0, Blitz −29,
+  Rapid −19 — im Rauschen, **PR #4-A/B-Trigger („sichtbar nachlassen") nicht
+  ausgelöst**, weiter beobachten. Standard-Score 46,6 % bei Ø Gegner 2236
+  vs. Martuni 2197 (Erwartung ≈ 44 %) → spielt auf Rating.
+- **Standard gesund:** B/P 1,10 (Rapid 0,88 / Blitz 0,92 / Bullet 1,74 /
+  Classical 0,72), Eval-Abweichung zu SF am Blunder median −7 cp,
+  ply≤16-Blunder 0,05/P; Motive diffus (motivlos 155, allows_mate 71,
+  missed_capture 44), Endspiel-Anteil 39 %. 34 „Abandoned"-Partien sind
+  24× JewkieBot-Dev (07–09 UTC, Gegner zieht nie; unbewertet `*`) —
+  harmlos, ggf. Block-Liste. Kein Tageszeit-Muster (keine CPU-Starvation).
+- **960:** Score 51,2 %, B/P 1,35, ply≤16-Blunder 0,13/P (11.08.: 0,21),
+  Eval-Optimismus +88 cp (11.08.: +67). Blitz nur 34,9 % (ix-bot 51 P /
+  44 %, Ursus_bot 17 P / 6 % bei 2367), Bullet 72,7 %.
+- **Varianten (Bullet-lastig, Fairy-SF 17):** Three-check 148 P, 59 %,
+  B/P 4,3, **65 % der Blunder in der Eröffnung** (2,30/P bei ply≤16);
+  deterministische Falle als Schwarz: 1.Nc3 e5 2.e3 Nf6 3.Bc4 **Nc6??**
+  (14 Partien, SF: forcierter Drei-Schach-Gewinn, best Qe7) plus 1.e4 e5
+  2.Bc4 Nh6/Nf6-Linien (16 Partien). Repro mit Live-Binary: spielt Nc6 bei
+  `movetime 1500` (nur Tiefe 4!) und bei Tiefe 6. — KotH 48 P, 43,8 %
+  (Weiß 70,6 % / Schwarz 29,0 %), B/P 6,8, Martuni am Blunder Ø +500 cp
+  optimistischer als SF (r = 0,88), **alle 26 Verluste enden mit
+  gegnerischem Königsmarsch** (Kxe4#, Kd4#, Ke5#, Kd5#); Term 1 gibt bei
+  voller Gegnerarmee nur 8–20 cp für Distanz 1–2. — Atomic 120 P, 48 %
+  (Bullet 31,6 %, Blitz 75 %, Rapid 82 %), B/P 3,4, Falle als Weiß 1.d4 f5
+  2.Ng5 e4 3.**Nxh7??** (3× vs EngineMotor26, best e3); Leetomic 0/28.
+  — Crazyhouse 40 P, 41 %, B/P 7,9, Eval-Offset **+855 vs. SF +96
+  (r = 0,37)** → Skala kaputt (85/319 Blunder ≥ 800 cp zu optimistisch).
+  — Horde 65 P, 27 %, aber Ø Gegner 2025 vs. 1842 → rating-konform; 54 %
+  der Blunder bei |eval| ≥ 1000 = Rauschen entschiedener Stellungen.
+  — Racing Kings 41 P, 38 %, hangs_bishop 68, Offset +500. — Antichess
+  41 P, 43 %, Eval-Korrelation zu SF nur r = 0,25, Rating aber 2132.
+- **Neuer Kernbefund (Suche):** Knoten bei fester Tiefe 6 aus derselben
+  Stellung (1.Nc3 e5 2.e3 Nf6 3.Bc4, Buch aus): Standard 767k / 0,4 s,
+  Three-check 5,87 M / 4,4 s, KotH 10,8 M / 9,0 s; bei Tiefe 2 schon 403
+  vs. 16k vs. 22,6k (40–56×). Ursache: `see()` delegiert für alle
+  shakmaty-Varianten an `variant_capture_value` (Materialsaldo unmittelbar
+  nach dem Schlag, **kein Rückschlag modelliert**) → jeder Schlag ist ≥ 0
+  → Bad-Capture-Pruning in der Quiescence (`see_val < 0`) und die
+  good/bad-Klassifikation im MovePicker greifen nie → Quiescence
+  explodiert. Dazu NMP/RFP/stille Schachs pauschal aus. Das macht
+  „Nächste Schritte" Punkt 2 zum wichtigsten Hebel: (a) orthodoxes SEE
+  für Three-check/KotH/Horde/Racing Kings (gleiche Schlagmechanik),
+  (b) NMP/RFP für KotH/Three-check.
+- **Vorschläge (Tobias entscheidet):** 1. SEE-Fix + Gating (a/b), Messung
+  Tiefe bei `movetime 1500` je Variante + Selfplay je Variante;
+  2. Three-check-Falle danach erneut prüfen (Eval-Term Königsexposition
+  vs. kleines Varianten-Buch); 3. KotH-Königsmarsch (Pfad-Bedrohung
+  ≤ 2 Schritte / Extension für Königszüge Richtung Hügel); 4. Crazyhouse-
+  Eval-Skala (Pocket-Term) prüfen; 5. Standard: keine Maßnahme,
+  Countermove-SPRT und PR #4-A/B weiter offen.
+
 **14.09.2026 — Blunder-Analyse auf den Grok-Bot ausgelagert (Grok-Schleuse);
 `analyze_cron.py` hier abgeschaltet.**
 - **Warum:** Server am Limit (Abend-Fenster schon am 12.09. abgeschaltet,
@@ -1437,6 +1586,13 @@ Verlauf dokumentiert: Aspiration und MVV-CP verworfen, CR30 ausgerollt).
 - **Pawn-Shield bei nach vorne gegangenem König** — kleine Schwäche, in
   [eval-kalibrierung.md](eval-kalibrierung.md) notiert.
 - **Eskalierender Rochade-Malus (960)** — siehe „Nächste Schritte" Punkt 4.
+- **Crazyhouse-Eval-Skala (Auswertung 22.09.2026, zurückgestellt)** —
+  Martunis Eval liegt am Blunder im Schnitt 855 cp über Fairy-Stockfish
+  (Korrelation 0,37; 85 von 319 Blundern ≥ 800 cp zu optimistisch),
+  Rating 1366 = schwächste Variante. Verdacht: Taschen-Term
+  (`pocket_material_score`) bzw. King Safety ohne Drop-Bedrohung.
+  Einstieg: Stellung r1b1kbnr/ppp1pppp/2n5/1B6/1q6/p1N1BN2/PPP2PPP/R2QK2R[Pp] b
+  (Martuni +954, SF −100) mit `eval`-Breakdown zerlegen.
 - **Varianten-Evals kalibrieren** — die fünf neuen Varianten-Module in
   `src/variants/` sind Erstentwürfe; Konstanten sind noch nicht in
   `eval.toml`, kein A/B. Horde: statische Bewertung einer bereits

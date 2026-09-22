@@ -326,12 +326,17 @@ impl<P: ShakVariant> EngineBoard for BoardShak<P> {
         Some(crate::variant_material::balance_after(&self.pos, entry.sm, values))
     }
 
-    // Null-Move-Pruning ist fuer alle Varianten dieses Adapters aus:
-    // Schlagzwang (Antichess), Zielfeld-Siege (KotH/Racing Kings) und
-    // Schachzaehlung (Three-Check) machen "passen ist nie besser als ziehen"
-    // zu einer unzuverlaessigen Annahme.
+    /// Nullzug (die Seite am Zug passt) fuer Null-Move-Pruning. shakmatys
+    /// `swap_turn` uebernimmt Brett, Rochaderechte und Varianten-Zustand
+    /// (Three-Check-Zaehler) und verwirft das En-passant-Feld; steht die
+    /// Seite am Zug im Schach, meldet es einen Fehler → `None` (die Suche
+    /// prueft `!in_check` ohnehin vorher). OB eine Variante NMP ueberhaupt
+    /// vertraegt, entscheidet nicht der Adapter, sondern
+    /// `VariantKind::allows_null_move` in der Suche (KotH und Three-Check
+    /// ja; Antichess, Horde, Racing Kings nein). Bis 22.09.2026 stand hier
+    /// pauschal `None`.
     fn null_move(&self) -> Option<Self> {
-        None
+        self.pos.clone().swap_turn().ok().map(Self::from_pos)
     }
 
     fn legal_gen(&self) -> GenShak {
@@ -698,5 +703,46 @@ mod tests {
         assert!(quiet.parse_uci_move("g1g2").is_err());
         assert!(quiet.parse_uci_move("g1g3").is_ok());
         assert!(!BoardRacingKings::startpos().has_castle_rights());
+    }
+}
+
+#[cfg(test)]
+mod null_move_tests {
+    //! 22.09.2026: `null_move` fuer Null-Move-Pruning in KotH/Three-Check.
+    use super::*;
+
+    #[test]
+    fn null_move_swaps_turn_and_keeps_variant_state() {
+        let b = BoardThreeCheck::from_fen(
+            "rnbqkb1r/pppp1ppp/5n2/4p3/2B5/2N1P3/PPPP1PPP/R1BQK1NR b KQkq - 2+3 2 3",
+        )
+        .unwrap();
+        let n = b.null_move().expect("nicht im Schach → Nullzug moeglich");
+        assert_eq!(n.side_to_move(), Color::White);
+        assert_eq!(n.checks_remaining(Color::White), Some(2));
+        assert_eq!(n.checks_remaining(Color::Black), Some(3));
+        assert_eq!(*n.combined(), *b.combined());
+        assert_ne!(n.get_hash(), b.get_hash());
+        // Zweimal passen = Ausgangsstellung, inklusive Zaehler im Hash.
+        assert_eq!(n.null_move().unwrap().get_hash(), b.get_hash());
+    }
+
+    #[test]
+    fn null_move_drops_en_passant_square() {
+        let b = BoardKingOfTheHill::from_fen(
+            "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3",
+        )
+        .unwrap();
+        assert_eq!(b.en_passant(), Some(Square::D5));
+        let n = b.null_move().unwrap();
+        assert_eq!(n.en_passant(), None);
+        assert_eq!(n.side_to_move(), Color::Black);
+    }
+
+    #[test]
+    fn null_move_is_refused_in_check() {
+        let b = BoardKingOfTheHill::from_fen("4k3/8/8/8/8/8/4R3/4K3 b - - 0 1").unwrap();
+        assert!(b.checkers().popcnt() > 0);
+        assert!(b.null_move().is_none());
     }
 }

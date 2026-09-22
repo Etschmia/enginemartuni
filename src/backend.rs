@@ -46,6 +46,58 @@ pub enum VariantKind {
     RacingKings,
 }
 
+impl VariantKind {
+    /// Gilt in dieser Variante die orthodoxe Schlagmechanik — die schlagende
+    /// Figur landet auf dem Zielfeld, die geschlagene verschwindet, und der
+    /// Gegner darf (muss aber nicht) zurueckschlagen? Dann liefern das
+    /// orthodoxe SEE (`search::see`) und alles, was darauf aufbaut
+    /// (Bad-Capture-Pruning in der Quiescence, good/bad-Captures im
+    /// MovePicker, stille Schachgebote am Quiescence-Eintritt), dieselbe
+    /// Aussage wie im Standardschach.
+    ///
+    /// Nicht orthodox: Atomic (die Schlagfigur explodiert, Nachbarn gehen
+    /// mit), Crazyhouse (geschlagene Steine wechseln in die Tasche und
+    /// koennen als Drop zurueckschlagen — Angreifer, die SEE nicht sieht)
+    /// und Antichess (Schlagzwang: "aufhoeren" ist keine Option, und
+    /// Material gewinnen ist dort meist schlecht).
+    ///
+    /// Befund 22.09.2026: `variant_capture_value` (Materialsaldo direkt nach
+    /// dem Schlag, OHNE Rueckschlag) lieferte fuer jeden Schlagzug einen
+    /// Wert >= 0. Damit griff in Three-Check/KotH/Horde/Racing Kings kein
+    /// SEE-Pruning mehr — bei fester Tiefe 6 aus derselben Stellung 7,6x
+    /// (Three-Check) bzw. 14x (KotH) so viele Knoten wie im Standardpfad,
+    /// bei Tiefe 2 schon 40–56x (403 vs. 16k/22,6k). Live war das in Bullet
+    /// nur Tiefe 4 statt 6–7.
+    pub fn orthodox_captures(self) -> bool {
+        matches!(
+            self,
+            Self::Standard | Self::KingOfTheHill | Self::Horde | Self::ThreeCheck | Self::RacingKings
+        )
+    }
+
+    /// Darf die Suche in dieser Variante Null-Move-Pruning anwenden? Die
+    /// Annahme dahinter: "passen ist selten besser als ziehen". KotH und
+    /// Three-Check haben orthodoxe Schach-/Mattregeln plus ein Zusatzziel,
+    /// das ein Nullzug nicht erreicht — die Annahme haelt. Racing Kings:
+    /// ein Nullzug verschiebt das Wettrennen um ein Tempo, die Seite mit
+    /// dem schnelleren Koenig gewinnt den Vergleich dann fast immer —
+    /// bewusst aus. Horde: die koenigslose Bauernseite hat keinen
+    /// Zugzwang-Schutz ueber `has_non_pawn_material` — aus. Antichess,
+    /// Atomic, Crazyhouse: aus (Schlagzwang, Explosionen, Drops).
+    pub fn allows_null_move(self) -> bool {
+        matches!(self, Self::Standard | Self::KingOfTheHill | Self::ThreeCheck)
+    }
+
+    /// Darf die Suche ihre statische Bewertung als Pruning-Grundlage nehmen
+    /// (Reverse Futility Pruning)? Das verlangt eine Eval, die nahe am
+    /// Blatt grob richtig liegt. Gleiche Menge wie `allows_null_move`: die
+    /// Varianten-Evals von Horde und Racing Kings sind Erstentwuerfe, dort
+    /// erst nach eigener Messung.
+    pub fn allows_static_pruning(self) -> bool {
+        matches!(self, Self::Standard | Self::KingOfTheHill | Self::ThreeCheck)
+    }
+}
+
 /// Immutable metadata carried by variant legal-move entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MoveMetadata {
