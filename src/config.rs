@@ -15,7 +15,10 @@ pub struct Config {
 impl Config {
     pub fn load() -> Self {
         let candidates = env_candidates();
-        let (env_map, base_dir, source) = find_and_parse_env(&candidates);
+        let (env_map, base_dir, source) = match explicit_env_file() {
+            Some(hit) => hit,
+            None => find_and_parse_env(&candidates),
+        };
 
         match source {
             Some(p) => println!("info string config loaded from {}", p.display()),
@@ -88,10 +91,37 @@ fn resolve_path(path: &Path, base: &Path) -> PathBuf {
     }
 }
 
+/// Explizit per Umgebungsvariable `MARTUNI_ENV` gesetzte .env-Datei.
+/// Relative Pfade in der Datei werden gegen deren Verzeichnis aufgeloest.
+fn explicit_env_file() -> Option<(HashMap<String, String>, PathBuf, Option<PathBuf>)> {
+    let raw = env::var_os("MARTUNI_ENV").filter(|v| !v.is_empty())?;
+    let path = PathBuf::from(raw);
+    match fs::read_to_string(&path) {
+        Ok(content) => {
+            let base = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            Some((parse_env(&content), base, Some(path)))
+        }
+        Err(e) => {
+            println!(
+                "info string MARTUNI_ENV={} not readable ({e}), falling back to search",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 /// Kandidaten fuer .env-Suche und Base-Directory relativer Pfade:
-/// 1) aktuelles Arbeitsverzeichnis
-/// 2) Verzeichnis der Binary selbst
-/// 3) zwei Ebenen darueber (typischer Projekt-Root bei target/{debug,release}/)
+/// 1) Verzeichnis der Binary selbst
+/// 2) zwei Ebenen darueber (typischer Projekt-Root bei target/{debug,release}/)
+/// 3) aktuelles Arbeitsverzeichnis
+///
+/// Die Binary-Verzeichnisse kommen bewusst vor dem CWD: Martuni wird von
+/// lichess-bot aus dessen Verzeichnis gestartet, und eine fremde `.env` dort
+/// (z. B. nur mit einem Token) hat sonst Buch- und Syzygy-Pfade verdeckt.
 fn env_candidates() -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let push_unique = |p: PathBuf, out: &mut Vec<PathBuf>| {
@@ -100,9 +130,6 @@ fn env_candidates() -> Vec<PathBuf> {
         }
     };
 
-    if let Ok(cwd) = env::current_dir() {
-        push_unique(cwd, &mut out);
-    }
     if let Ok(exe) = env::current_exe() {
         if let Some(dir) = exe.parent() {
             if let Ok(c) = dir.canonicalize() {
@@ -115,6 +142,9 @@ fn env_candidates() -> Vec<PathBuf> {
                 push_unique(c, &mut out);
             }
         }
+    }
+    if let Ok(cwd) = env::current_dir() {
+        push_unique(cwd, &mut out);
     }
     out
 }

@@ -41,7 +41,7 @@ Martuni supports **Polyglot opening books** (`.bin` format). Books are read from
 See [Configuration](#configuration) below for details.
 
 ### Configuration
-Martuni reads a `.env` file on startup (searched in the working directory, binary directory, and project root — in that order). A documented template is provided as `.env.example`.
+Martuni reads a `.env` file on startup (searched in the binary directory, the project root and the working directory — in that order; the environment variable `MARTUNI_ENV` can point to an explicit file instead). A documented template is provided as `.env.example`.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
