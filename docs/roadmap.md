@@ -10,6 +10,37 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**30.09.2026 — Konzept eigenes Eröffnungsbuch (nur Doku, kein Code).**
+Anlass ist Sparks Eigen-Buch (+70 Elo, gemessen gegen *kein* Buch, also
+nicht direkt übertragbar). Konzept und Datenlage stehen in
+[eigenes-eroeffnungsbuch.md](eigenes-eroeffnungsbuch.md), die Auswertung
+macht das neue `tools/book_audit.py`.
+- **Nebenbefund:** Wegen der fremden `.env` in `~/lichess-bot` spielte
+  Martuni vom **06.09. bis 24.09. ohne Buch** (Fix `845708b`, stand bisher
+  nicht in der Roadmap). Live-Vergleich gegen Elo-Erwartung: mit Buch
+  +28/+18 Elo, ohne Buch −10 Elo. Die fremden Bücher sind also grob
+  30 Elo wert. Das ist die Latte für ein eigenes Buch.
+- In der Zeit ohne Buch spielte Martuni 5-mal den eigenen Zug 8…Nxf2??
+  (Spanisch/Berliner-Nebenlinie). rodent.bin kennt dort das richtige 8…d5.
+  43 von 51 frühen Blundern passieren nach dem Buchausgang.
+- Empfehlung: Hybrid aus eigener Analyse, Stockfish-Veto über die Schleuse
+  und Gewichten nach Martunis Lichess-Ergebnissen. Beginnen mit einem
+  Varianten-Buch für Three-check und KotH (dort gibt es kein fremdes Buch).
+  **Entschieden 30.09.:** Stockfish-Veto ja; zuerst Three-check und KotH,
+  dann Standard, Chess960 gar nicht; mindestens 2 Züge pro Stellung.
+  Format: Polyglot-Dateiaufbau und vorhandener Loader bleiben, Schlüssel ist
+  der shakmaty-Zobrist-Hash (für Standard identisch mit Polyglot, für
+  Three-check inklusive der fehlenden Schachgebote, die Polyglot nicht
+  kennt). Laufzeit ist kein Kriterium: Die Abfrage kostet Mikrosekunden, das
+  Laden der vier Bücher heute ca. 150 ms pro Start. Bau-Werkzeug in Rust
+  (`src/bin/bookbuild.rs`, Tobias).
+- **Lauf gestartet 30.09. 23:21:** `tools/book_collect.py` (Three-check
+  137 Stellungen ≥3×, KotH 75 ≥2×) → `tools/book_analyze.py` (Martuni
+  bewertet Kandidaten über die Folgestellung, da kein MultiPV) → danach
+  automatisch `tools/book_veto.py` lokal (Fairy-Stockfish Tiefe 18,
+  Veto ab 60 cp Verlust, Tobias-OK). Daten in `book_work/` (nicht
+  versioniert), Logs `book_work/analyze.log` / `veto.log`.
+
 **22.09.2026 (Sitzung, Teil 2) — Varianten-Suche repariert, Three-check-
 und KotH-Eval nachgeschärft. AUSGEROLLT 18:19 LIVE (Commit `1ceaabe`,
 Bot „Welcome Martuni" 18:19:22).** Tobias-Entscheid: Punkte 1–3 der
