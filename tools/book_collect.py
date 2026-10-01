@@ -8,6 +8,10 @@ Grundstellung (fuer `position startpos moves ...` an der Engine).
 
 Aufruf: python3 tools/book_collect.py 3check|koth [--max-ply 16] [--min-count 3]
 Ausgabe: book_work/<variante>_positions.json
+
+Seit 01.10.2026 zusaetzlich `exp` je Stellung und Zug: die aus der
+Elo-Differenz erwarteten Punkte (Summe ueber die Partien), damit die
+Gewichtsformel die Gegnerstaerke beruecksichtigt (tools/book_weights.py).
 """
 import argparse, collections, glob, json, os
 import chess, chess.pgn, chess.variant
@@ -16,6 +20,10 @@ VARIANTS = {
     "3check": ("Three-check", chess.variant.ThreeCheckBoard),
     "koth": ("King of the Hill", chess.variant.KingOfTheHillBoard),
 }
+
+def expected(diff):
+    """Erwartete Punkte bei Elo-Differenz diff = Gegner - Martuni."""
+    return 1 / (1 + 10 ** (diff / 400))
 
 def key(board):
     # FEN ohne Zugzaehler; bei Three-check enthaelt sie die Schach-Zaehler.
@@ -48,6 +56,10 @@ def main():
             continue
         res = h["Result"]
         score = 0.5 if res == "1/2-1/2" else float((res == "1-0") == (col == chess.WHITE))
+        try:
+            exp = expected(int(h.get("BlackElo" if col else "WhiteElo")) - int(h.get("WhiteElo" if col else "BlackElo")))
+        except (TypeError, ValueError):
+            exp = 0.5
         games += 1
         b = cls(); moves = []
         for ply, mv in enumerate(g.mainline_moves()):
@@ -56,10 +68,10 @@ def main():
             if b.turn == col:
                 k = key(b)
                 p = pos.setdefault(k, {"fen": k, "ply": ply, "moves_from_start": list(moves),
-                                       "count": 0, "score": 0.0, "played": {}})
-                p["count"] += 1; p["score"] += score
-                st = p["played"].setdefault(mv.uci(), {"n": 0, "score": 0.0})
-                st["n"] += 1; st["score"] += score
+                                       "count": 0, "score": 0.0, "exp": 0.0, "played": {}})
+                p["count"] += 1; p["score"] += score; p["exp"] += exp
+                st = p["played"].setdefault(mv.uci(), {"n": 0, "score": 0.0, "exp": 0.0})
+                st["n"] += 1; st["score"] += score; st["exp"] += exp
             moves.append(mv.uci()); b.push(mv)
     sel = sorted((p for p in pos.values() if p["count"] >= a.min_count), key=lambda p: (p["ply"], -p["count"]))
     out = f"book_work/{a.variant}_positions.json"

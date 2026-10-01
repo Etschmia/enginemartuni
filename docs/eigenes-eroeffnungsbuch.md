@@ -353,3 +353,40 @@ Cluster). Dort rechnet Martuni selbst. Grundstellung: KotH e4/d4/Nf3/Nc3,
 Three-check Nf3/e4/Nc3. Gegen 1.e4 in Three-check bleiben e6/b6/Nc6/Nf6,
 1…e5 ist gestrichen. Damit ist die Datenbasis für Gewichtsformel und
 `bookbuild` fertig (`book_work/<variante>_analysis.json` + `_veto.json`).
+
+## 10. Gewichtsformel (Tobias-Entscheid 01.10.2026)
+
+Umgesetzt in `tools/book_weights.py` → `book_work/<variante>_book.json`
+(Eingabe für `bookbuild`: FEN, Zugfolge ab Grundstellung, Züge mit
+Polyglot-Gewicht).
+
+```
+roh  = Q_SF · Q_M · L
+Q_SF = exp(−SF-Verlust / T)              Abstand zum Stockfish-Bestzug
+Q_M  = exp(−min(M-Abstand, 300) / T)     Abstand zu Martunis bestem Buchzug
+L    = 2 · (0,5 + (Punkte − Erwartet) / (n + k)),  k = 4,  begrenzt auf [0,05; 2]
+T    = Veto-Schwelle (Three-check 100, KotH 60)
+Anteil = roh / Summe, jeder Zug mindestens 10 %; Gewicht = Anteil · 1000
+```
+
+- **Q_SF**: objektive Qualität. **Q_M**: wie gut Martuni die Folgestellung
+  versteht (Stärken). **L**: Live-Bilanz (Schwächen), **gegen die
+  Elo-Erwartung** gerechnet, so dass Verluste gegen stärkere Gegner nicht
+  unfair bestrafen. Ohne Live-Partien gilt L = 1. Die k = 4 Pseudo-Partien
+  auf Erwartungsniveau dämpfen kleine Stichproben.
+- Multiplikativ: Ein Zug muss in allen drei Quellen ordentlich sein.
+- `book_collect.py` speichert dafür seit 01.10. je Zug die erwarteten Punkte
+  (`exp`).
+
+Beispiele (Stand 01.10.):
+
+| Stellung | Gewichte |
+|---|---|
+| 3check Grundstellung | e4 405, Nc3 369 (89,5/159, erw. 82,9 → L 1,08), Nf3 227 |
+| 3check nach 1.e4 | e6 485, Nc6 217 (8/42, erw. 13 → L 0,78), Nf6 193, b6 104 |
+| KotH Grundstellung | e4 375, d4 349 (27/41, erw. 22,4 → L 1,21), Nc3 146, Nf3 130 |
+| KotH nach 1.d4 | d5 469 (16/46, erw. 22,2 → L 0,75), Nf6 310, e6 222 |
+
+Ergebnis: Three-check 90 Stellungen / 242 Züge, KotH 56 / 164. Neu
+hinzugekommene Live-Stellungen (Three-check 5, KotH 2) sind noch nicht
+analysiert und bleiben bis zu einem späteren Lauf draußen.

@@ -49,6 +49,11 @@ macht das neue `tools/book_audit.py`.
   Varianten-Abfrage in der Engine.
 - **Nachlauf fertig 01.10. 09:03:** buchfähig KotH 56/75 (164 Züge),
   Three-check 90/137 (242 Züge). Datenbasis für das Buch steht.
+- **Gewichtsformel entschieden 01.10.** (Konzept Abschnitt 10):
+  Q_SF·Q_M·L mit T = Veto-Schwelle, Live-Faktor Elo-korrigiert, k = 4,
+  Mindestanteil 10 %. `tools/book_weights.py` → `book_work/<v>_book.json`.
+  Nächstes (Tobias): `bookbuild` (Rust, shakmaty-Zobrist, Polyglot-Layout)
+  und Varianten-Buchabfrage in der Engine.
 
 **22.09.2026 (Sitzung, Teil 2) — Varianten-Suche repariert, Three-check-
 und KotH-Eval nachgeschärft. AUSGEROLLT 18:19 LIVE (Commit `1ceaabe`,
