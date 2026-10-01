@@ -16,6 +16,12 @@ Scores sind aus Sicht der Seite, die in der Buchstellung am Zug ist
 Fortsetzbar: bereits analysierte Stellungen werden uebersprungen, das
 Ergebnis wird nach jeder Stellung geschrieben.
 
+Nachlauf (--refine, Tobias-Entscheid 01.10.2026): nur Stellungen, in denen
+nach dem Veto (book_work/<variante>_veto.json, Schwelle wie in
+book_veto.py) weniger als zwei Zuege uebrig sind. Dort wird neu gescannt und
+die besten --top Zuege (Default im Nachlauf 8) werden zusaetzlich tief
+gerechnet; schon vorhandene Kandidaten und die Wurzelsuche bleiben.
+
 Rechenlast: EIN Engine-Prozess (Server hat 2 Kerne, der Lichess-Bot braucht
 einen). Mit `nice -n 10` starten.
 
@@ -104,9 +110,13 @@ def main():
     ap.add_argument("--root-ms", type=int, default=5000)
     ap.add_argument("--scan-ms", type=int, default=150)
     ap.add_argument("--deep-ms", type=int, default=6000)
-    ap.add_argument("--top", type=int, default=4)
+    ap.add_argument("--top", type=int, default=None, help="Default 4, im Nachlauf 8")
     ap.add_argument("--hash", type=int, default=64)
+    ap.add_argument("--refine", action="store_true", help="Nachlauf fuer Stellungen mit < 2 Zuegen")
+    ap.add_argument("--max-loss", type=int, default=None, help="Veto-Schwelle fuer --refine")
     a = ap.parse_args()
+    if a.top is None:
+        a.top = 8 if a.refine else 4
 
     src = json.load(open(f"book_work/{a.variant}_positions.json"))
     out_path = f"book_work/{a.variant}_analysis.json"
@@ -116,7 +126,15 @@ def main():
     settings = {k: getattr(a, k.replace("-", "_")) for k in ("root_ms", "scan_ms", "deep_ms", "top")}
 
     eng = Engine(a.variant, a.hash)
-    todo = [p for p in src["positions"] if p["fen"] not in done]
+    if a.refine:
+        from book_veto import MAX_LOSS, kept_moves
+        max_loss = a.max_loss if a.max_loss is not None else MAX_LOSS[a.variant]
+        veto = json.load(open(f"book_work/{a.variant}_veto.json"))["results"]
+        thin = {r["fen"] for r in veto if len(kept_moves(r, max_loss)) < 2}
+        todo = [p for p in src["positions"] if p["fen"] in thin and p["fen"] in done]
+        print(f"Nachlauf: {len(todo)} Stellungen mit < 2 Zuegen bei {max_loss} cp, Top {a.top}", flush=True)
+    else:
+        todo = [p for p in src["positions"] if p["fen"] not in done]
     print(f"{a.variant}: {len(done)} fertig, {len(todo)} offen", flush=True)
     t0 = time.time()
     for i, p in enumerate(todo, 1):
@@ -125,7 +143,12 @@ def main():
         for m in moves:
             board.push_uci(m)
         eng.newgame()
-        root_best, root_score, root_depth = eng.search(moves, a.root_ms)
+        old = done.get(p["fen"]) if a.refine else None
+        if old:
+            r0 = old["root"]
+            root_best, root_score, root_depth = r0["move"], r0["score"], r0["depth"]
+        else:
+            root_best, root_score, root_depth = eng.search(moves, a.root_ms)
 
         scan = {}
         for mv in board.legal_moves:
@@ -134,9 +157,9 @@ def main():
         ranked = sorted((m for m in scan if scan[m] is not None), key=lambda m: -scan[m])
         cands = list(dict.fromkeys(ranked[: a.top] + [root_best] + list(p["played"])))
 
-        deep = {}
+        deep = dict(old["candidates"]) if old else {}
         for mv in cands:
-            if mv not in scan:  # z. B. illegaler/alter Zug
+            if mv not in scan or mv in deep:  # illegal/alt bzw. schon gerechnet
                 continue
             s, d = child_score(eng, board, moves, mv, a.deep_ms)
             deep[mv] = {"score": s, "depth": d, "scan": scan[mv],
@@ -147,6 +170,8 @@ def main():
             "live_score": p["score"], "root": {"move": root_best, "score": root_score, "depth": root_depth},
             "candidates": deep,
         }
+        if old:
+            done[p["fen"]]["refined_top"] = a.top
         json.dump({"variant": a.variant, "settings": settings, "results": list(done.values())},
                   open(out_path + ".tmp", "w"), indent=1)
         os.replace(out_path + ".tmp", out_path)

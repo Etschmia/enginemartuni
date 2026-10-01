@@ -289,3 +289,53 @@ geschenkt aus shakmaty.
    Selfplay-Kontrolle in der Variante mit Zufallsauswahl, dann live und
    Lookback mit `tools/book_audit.py` (braucht dafür noch eine
    Varianten-Erweiterung).
+
+## 9. Ergebnis Lauf 30.09./01.10.2026 (Martuni-Analyse + Stockfish-Veto)
+
+Martuni-Analyse 23:21–01:16, Veto (Fairy-Stockfish Tiefe 18, 60 cp)
+01:16–02:14. Daten in `book_work/` (nicht versioniert).
+
+| | KotH | Three-check |
+|---|---:|---:|
+| Stellungen | 75 | 137 |
+| davon ≥ 2 Züge nach Veto (buchfähig) | **49** | **53** |
+| nur 1 Zug übrig | 25 | 83 |
+| Martunis eigener Wurzelzug gestrichen | 19 | 40 |
+| SF-Bestzug war unter Martunis Kandidaten | 73 | 133 |
+
+Fast immer war Stockfishs Bestzug schon unter Martunis eigenen
+Kandidaten. Das Buch kommt also mit Martunis Zügen aus, Stockfish muss nur
+aussortieren.
+
+**Live oft gespielte Züge, die das Veto streicht** (Auswahl, n = Anzahl
+Live-Partien, Score aus Martuni-Sicht):
+
+- KotH: 9.…dxe4 nach 1.d4 d5 2.c4 Nf6 3.Nc3 e6 4.Bg5 Bb4 5.e4 (31×,
+  10/31 Punkte, −262 cp), danach 11.…Bxc3 (23×, 4/23).
+- Three-check: 1.e4 e5 (54×, −172 cp) und 1.Nc3 e5 (33×, −124 cp). Die
+  bekannte Falle 1.Nc3 e5 2.e3 Nf6 3.Bc4 Nc6?? (25×, 6/25) ist ein
+  erzwungener Verlust (Matt-Score). 2.…Nf6 nach 1.e4 e5 2.Bc4 (14×,
+  −639 cp). 6.…Nxf2 / 7.…Bxc3+ in einer Nebenlinie (je 12×, 0 Punkte).
+
+**Engpass ist die Mindestzahl von zwei Zügen**, vor allem in Three-check.
+Die Bewertungen schwanken dort stark, und 60 cp sind streng. Buchfähige
+Stellungen bei anderer Schwelle:
+
+| Schwelle | KotH | Three-check |
+|---:|---:|---:|
+| 60 cp | 49 | 53 |
+| 100 cp | 59 | 72 |
+| 150 cp | 67 | 91 |
+
+Stellungen mit nur einem Zug bleiben laut Tobias-Entscheid draußen, dort
+rechnet Martuni selbst. Ausnahmen gibt es nicht. Zur Entscheidung steht:
+(a) eine eigene Schwelle je Variante (z. B. Three-check 100 cp), (b) ein
+zweiter Analyselauf nur für die Stellungen mit einem Zug, mit mehr
+Kandidaten (z. B. Top 8 statt Top 4), oder (c) beides.
+
+**Tobias-Entscheid 01.10.2026:** Veto-Schwelle **Three-check 100 cp,
+KotH 60 cp**, dazu ein Nachlauf für alle Stellungen mit weniger als zwei
+Zügen: Martuni bewertet dort die besten 8 statt 4 Kandidaten
+(`book_analyze.py --refine`), danach ein neues Veto nur für die geänderten
+Stellungen (`book_veto.py`, übernimmt vorhandene Urteile mit der neuen
+Schwelle).

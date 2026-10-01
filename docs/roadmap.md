@@ -40,6 +40,13 @@ macht das neue `tools/book_audit.py`.
   automatisch `tools/book_veto.py` lokal (Fairy-Stockfish Tiefe 18,
   Veto ab 60 cp Verlust, Tobias-OK). Daten in `book_work/` (nicht
   versioniert), Logs `book_work/analyze.log` / `veto.log`.
+- **Ergebnis 01.10. 02:14** (Details Abschnitt 9 im Konzept): buchfähig
+  mit ≥2 Zügen KotH 49/75, Three-check 53/137. Das Veto streicht viele
+  live oft gespielte Fehlzüge (3check 1.e4 e5 54×, Falle 3.Bc4 Nc6?? 25×;
+  KotH 9.…dxe4 31×). **Entschieden 01.10.:** Schwelle Three-check 100 cp,
+  KotH 60 cp, plus Nachlauf (Top 8 Kandidaten) für Stellungen mit weniger
+  als zwei Zügen. Danach Tobias: Gewichtsformel, `bookbuild`,
+  Varianten-Abfrage in der Engine.
 
 **22.09.2026 (Sitzung, Teil 2) — Varianten-Suche repariert, Three-check-
 und KotH-Eval nachgeschärft. AUSGEROLLT 18:19 LIVE (Commit `1ceaabe`,

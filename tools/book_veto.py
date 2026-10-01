@@ -8,7 +8,12 @@ Martunis Kandidaten plus Stockfishs freien Bestzug (`searchmoves`); alle
 Scores stammen aus derselben Suche. Ein Kandidat faellt raus, wenn er mehr als
 --max-loss cp hinter dem Stockfish-Bestzug liegt.
 
-Aufruf: python3 tools/book_veto.py 3check|koth [--depth 18] [--max-loss 60]
+Schwelle je Variante (Tobias-Entscheid 01.10.2026): Three-check 100 cp,
+KotH 60 cp. Inkrementell: Stellungen, deren Kandidaten sich seit dem letzten
+Lauf nicht geaendert haben, werden nicht neu gerechnet, nur mit der
+aktuellen Schwelle neu beurteilt (sf_loss bleibt gespeichert).
+
+Aufruf: python3 tools/book_veto.py 3check|koth [--depth 18] [--max-loss N]
 Eingabe: book_work/<variante>_analysis.json (tools/book_analyze.py)
 Ausgabe: book_work/<variante>_veto.json
 """
@@ -17,6 +22,13 @@ import argparse, json, os, subprocess
 ENGINE = os.path.expanduser("~/tools/fairy-stockfish")
 UCI_NAME = {"3check": "3check", "koth": "kingofthehill"}
 MATE = 30000
+MAX_LOSS = {"3check": 100, "koth": 60}
+
+
+def kept_moves(result, max_loss):
+    """Zuege einer Veto-Stellung, die die Schwelle einhalten."""
+    return [m for m, v in result["verdict"].items()
+            if v["sf_loss"] is not None and v["sf_loss"] <= max_loss]
 
 
 class Fairy:
@@ -72,16 +84,29 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("variant", choices=UCI_NAME)
     ap.add_argument("--depth", type=int, default=18)
-    ap.add_argument("--max-loss", type=int, default=60)
+    ap.add_argument("--max-loss", type=int, default=None, help="Default je Variante (MAX_LOSS)")
     ap.add_argument("--hash", type=int, default=128)
     ap.add_argument("--threads", type=int, default=1)
     a = ap.parse_args()
 
+    if a.max_loss is None:
+        a.max_loss = MAX_LOSS[a.variant]
     src = json.load(open(f"book_work/{a.variant}_analysis.json"))
+    out_path = f"book_work/{a.variant}_veto.json"
+    prev = {}
+    if os.path.exists(out_path):
+        prev = {r["fen"]: r for r in json.load(open(out_path))["results"]}
     fy = Fairy(a.variant, a.hash, a.threads)
     out = []
     for i, r in enumerate(src["results"], 1):
         cands = list(r["candidates"])
+        old = prev.get(r["fen"])
+        if old and set(old["verdict"]) == set(cands):
+            # Kandidaten unveraendert: nur mit aktueller Schwelle neu urteilen.
+            for v in old["verdict"].values():
+                v["veto"] = v["sf_loss"] is None or v["sf_loss"] > a.max_loss
+            out.append(old)
+            continue
         fy.send("ucinewgame")
         # Erst frei suchen, um Stockfishs Bestzug zu kennen; verglichen wird
         # aber nur innerhalb EINER MultiPV-Suche (Kandidaten + Bestzug), weil
@@ -102,8 +127,15 @@ def main():
         kept = sum(not v["veto"] for v in verdict.values())
         print(f"[{i}/{len(src['results'])}] ply {r['ply']:2d} SF {sf_best_move} {sf_best} "
               f"| {kept}/{len(cands)} Kandidaten bleiben", flush=True)
-        json.dump({"variant": a.variant, "depth": a.depth, "max_loss": a.max_loss, "results": out},
-                  open(f"book_work/{a.variant}_veto.json", "w"), indent=1)
+        json.dump({"variant": a.variant, "depth": a.depth, "max_loss": a.max_loss,
+                   "results": out + [prev[f] for f in prev if f not in {o["fen"] for o in out}]},
+                  open(out_path + ".tmp", "w"), indent=1)
+        os.replace(out_path + ".tmp", out_path)
+    json.dump({"variant": a.variant, "depth": a.depth, "max_loss": a.max_loss, "results": out},
+              open(out_path + ".tmp", "w"), indent=1)
+    os.replace(out_path + ".tmp", out_path)
+    kept = sum(1 for o in out if len(kept_moves(o, a.max_loss)) >= 2)
+    print(f"{a.variant}: {kept}/{len(out)} Stellungen mit >= 2 Zuegen bei {a.max_loss} cp", flush=True)
     fy.quit()
 
 
