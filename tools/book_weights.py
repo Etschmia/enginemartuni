@@ -23,9 +23,15 @@ Live-Daten kommen frisch aus book_work/<variante>_positions.json
 (tools/book_collect.py), Analyse und Veto aus *_analysis.json / *_veto.json.
 
 Aufruf: python3 tools/book_weights.py 3check|koth
-Ausgabe: book_work/<variante>_book.json  — Eingabe fuer bookbuild (Rust):
-  {"variant", "formula": {...}, "positions": [
-     {"fen", "moves_from_start": [uci...], "moves": [{"uci", "san", "weight", "share", ...}]}]}
+Ausgabe:
+  book_work/<variante>_book.json  — alle Zwischenwerte zum Nachvollziehen:
+    {"variant", "formula": {...}, "positions": [
+       {"fen", "moves_from_start": [uci...], "moves": [{"uci", "san", "weight", "share", ...}]}]}
+  book_work/<variante>_book.txt   — Eingabe fuer bookbuild (Rust), eine Zeile
+    pro Buchzug, ohne JSON-Parser lesbar:
+      <Zugfolge ab Grundstellung, UCI, Leerzeichen-getrennt> | <Buchzug UCI> <Gewicht>
+    Grundstellung = leere Zugfolge (Zeile beginnt mit "| "). Rochade steht in
+    Standard-UCI (e1g1); "#"-Zeilen sind Kommentare.
 """
 import argparse, json, math, sys, os
 
@@ -60,6 +66,17 @@ def apply_min_share(share):
         rest = 1 - MIN_SHARE * len(fixed)
         free = sum(share[m] for m in share if m not in fixed)
         share = {m: (MIN_SHARE if m in fixed else share[m] / free * rest) for m in share}
+
+
+def write_txt(variant, positions, path):
+    """Schlichte Textausgabe fuer bookbuild: '<zugfolge> | <zug> <gewicht>'."""
+    with open(path, "w") as f:
+        f.write(f"# Martuni-Eigenbuch {variant}, erzeugt von tools/book_weights.py\n")
+        f.write("# Format: <Zugfolge ab Grundstellung> | <Buchzug> <Gewicht>\n")
+        for p in positions:
+            seq = " ".join(p["moves_from_start"])
+            for m in p["moves"]:
+                f.write(f"{seq} | {m['uci']} {m['weight']}\n")
 
 
 def main():
@@ -106,9 +123,10 @@ def main():
                                          "L_range": [L_MIN, L_MAX], "scale": SCALE,
                                          "live": "elo-korrigiert"},
                "positions": out}, open(f"book_work/{v}_book.json", "w"), indent=1)
+    write_txt(v, out, f"book_work/{v}_book.txt")
     n_moves = sum(len(p["moves"]) for p in out)
     missing = sum(1 for f in live if f not in analysis)
-    print(f"{v}: {len(out)} Buchstellungen, {n_moves} Zuege -> book_work/{v}_book.json"
+    print(f"{v}: {len(out)} Buchstellungen, {n_moves} Zuege -> book_work/{v}_book.json + .txt"
           f"  ({missing} neue Live-Stellungen noch ohne Analyse)")
 
 
