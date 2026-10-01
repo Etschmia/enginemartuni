@@ -339,3 +339,17 @@ Zügen: Martuni bewertet dort die besten 8 statt 4 Kandidaten
 (`book_analyze.py --refine`), danach ein neues Veto nur für die geänderten
 Stellungen (`book_veto.py`, übernimmt vorhandene Urteile mit der neuen
 Schwelle).
+
+**Nachlauf 01.10.2026 07:41–09:03** (Top 8, Schwellen 3check 100 / KotH 60 cp):
+
+| | KotH | Three-check |
+|---|---:|---:|
+| buchfähige Stellungen (≥ 2 Züge) | **56 / 75** | **90 / 137** |
+| Buchzüge insgesamt (Ø je Stellung) | 164 (2,9) | 242 (2,7) |
+| Martunis eigene Wahl bleibt im Buch | 46 | 82 |
+
+Die übrigen 19 bzw. 47 Stellungen sind über alle Halbzüge verteilt (kein
+Cluster). Dort rechnet Martuni selbst. Grundstellung: KotH e4/d4/Nf3/Nc3,
+Three-check Nf3/e4/Nc3. Gegen 1.e4 in Three-check bleiben e6/b6/Nc6/Nf6,
+1…e5 ist gestrichen. Damit ist die Datenbasis für Gewichtsformel und
+`bookbuild` fertig (`book_work/<variante>_analysis.json` + `_veto.json`).

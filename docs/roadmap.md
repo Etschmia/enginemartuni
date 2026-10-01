@@ -47,6 +47,8 @@ macht das neue `tools/book_audit.py`.
   KotH 60 cp, plus Nachlauf (Top 8 Kandidaten) für Stellungen mit weniger
   als zwei Zügen. Danach Tobias: Gewichtsformel, `bookbuild`,
   Varianten-Abfrage in der Engine.
+- **Nachlauf fertig 01.10. 09:03:** buchfähig KotH 56/75 (164 Züge),
+  Three-check 90/137 (242 Züge). Datenbasis für das Buch steht.
 
 **22.09.2026 (Sitzung, Teil 2) — Varianten-Suche repariert, Three-check-
 und KotH-Eval nachgeschärft. AUSGEROLLT 18:19 LIVE (Commit `1ceaabe`,
