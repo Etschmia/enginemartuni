@@ -3,10 +3,15 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::backend::VariantKind;
+
 pub struct Config {
     pub hash_size_mb: usize,
     pub book_dir: PathBuf,
     pub book_files: Vec<String>,
+    /// Martunis Eigenbuecher je Variante (Datei relativ zu `book_dir`).
+    /// Leer gesetzter Schluessel (`BOOK_3CHECK=`) = diese Variante ohne Buch.
+    pub variant_book_files: Vec<(VariantKind, String)>,
     /// Pfad(e) zu den Syzygy-Tablebases (Doppelpunkt-getrennt möglich).
     /// Leer = keine Tablebases (Engine arbeitet rein mit eigener Suche/Eval).
     pub syzygy_path: String,
@@ -56,6 +61,22 @@ impl Config {
                 ]
             });
 
+        // Varianten-Buecher: BOOK_3CHECK / BOOK_KOTH. Fehlt der Schluessel,
+        // gilt das mitgelieferte Eigenbuch; ein leerer Wert schaltet es ab.
+        let variant_book_files = [
+            (VariantKind::ThreeCheck, "BOOK_3CHECK", "martuni_3check.bin"),
+            (VariantKind::KingOfTheHill, "BOOK_KOTH", "martuni_koth.bin"),
+        ]
+        .into_iter()
+        .filter_map(|(kind, key, default)| {
+            let name = env_map
+                .get(key)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|| default.to_string());
+            (!name.is_empty()).then_some((kind, name))
+        })
+        .collect();
+
         // SYZYGY_PATH: leer lassen = aus. Einen einzelnen *relativen* Pfad
         // lösen wir gegen das Base-Dir auf (wie book_dir), damit z. B.
         // SYZYGY_PATH=syzygy/3-4-5 vom Projekt-Root aus funktioniert; absolute
@@ -78,6 +99,7 @@ impl Config {
             hash_size_mb,
             book_dir,
             book_files,
+            variant_book_files,
             syzygy_path,
         }
     }

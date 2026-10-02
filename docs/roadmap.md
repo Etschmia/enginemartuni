@@ -68,6 +68,17 @@ macht das neue `tools/book_audit.py`.
   wie in der Engine. Die Bücher sind noch nicht aktiv. Als Nächstes kommt
   die Varianten-Buchabfrage in der Engine: Schlüssel per `zobrist_hash` auf
   der shakmaty-Stellung und 16 Bit → shakmaty-Zug.
+- **Varianten-Buchabfrage in der Engine 02.10.** (Tobias-Entscheid: Claude
+  schreibt sie): `BookSet::probe_variant` in `src/polyglot/book.rs`. Schlüssel
+  ist `board.get_hash()`, das ist bei `BoardShak` schon genau der shakmaty-
+  Zobrist64 (Legal), den `bookbuild` schreibt. Die Zug-Dekodierung ist die
+  vorhandene (e8h8 → e8g8), nur gegen die legalen Varianten-Züge geprüft.
+  `search.rs`: ohne Standard-Sicht → Varianten-Buch. Chess960 findet keins
+  und spielt weiter ohne Buch. Der Standard-Pfad ist unverändert.
+  Konfiguration `BOOK_3CHECK` / `BOOK_KOTH`: fehlt der Schlüssel, gilt das
+  Eigenbuch, ein leerer Wert schaltet es ab. 223 Tests grün (5 neue).
+  Smoke: 3check/KotH „book hit“, auch in einer 3check-Stellung nach
+  gegebenem Schach. Live wird es erst nach Neustart des Bots.
 
 **22.09.2026 (Sitzung, Teil 2) — Varianten-Suche repariert, Three-check-
 und KotH-Eval nachgeschärft. AUSGEROLLT 18:19 LIVE (Commit `1ceaabe`,

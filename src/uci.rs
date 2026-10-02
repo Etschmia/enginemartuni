@@ -21,7 +21,11 @@ use std::thread;
 
 pub fn uci_loop() {
     let cfg = Config::load();
-    let book = Arc::new(BookSet::load(&cfg.book_dir, &cfg.book_files));
+    let book = Arc::new(BookSet::load_with_variants(
+        &cfg.book_dir,
+        &cfg.book_files,
+        &cfg.variant_book_files,
+    ));
     let eval_params = Arc::new(EvalParams::load());
     let tt = Arc::new(Mutex::new(TranspositionTable::new(cfg.hash_size_mb)));
 

@@ -329,11 +329,17 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
     // (vorheriger Zuege) als veraltet gelten und leichter verdraengt werden.
     tt_guard.new_search();
 
-    // Eroeffnungsbuch zuerst — auch im Ponder-Modus erlaubt
-    // Polyglot-Buecher sind Standard-Schach — nur probieren, wenn das
-    // Backend eine Standard-Sicht hat (960-Backend: as_std() == None).
+    // Eroeffnungsbuch zuerst — auch im Ponder-Modus erlaubt.
+    // Standard-Sicht vorhanden → die Polyglot-Buecher (Standard-Schach).
+    // Sonst (Varianten, 960) → Martunis Varianten-Buch, falls es fuer diese
+    // Variante eines gibt (seit 02.10.2026: Three-check, KotH). 960 hat
+    // keins und spielt weiter ohne Buch.
     if !req.book.is_empty() {
-        if let Some(m) = req.board.as_std().and_then(|b| req.book.probe(b)) {
+        let hit = match req.board.as_std() {
+            Some(b) => req.book.probe(b),
+            None => req.book.probe_variant(&req.board),
+        };
+        if let Some(m) = hit {
             println!("info string book hit");
             let ponder = ponder_move_from_tt(&req.board, m, &tt_guard);
             return Some(SearchResult { best: m, ponder, score: 0 });
