@@ -54,6 +54,20 @@ macht das neue `tools/book_audit.py`.
   Mindestanteil 10 %. `tools/book_weights.py` → `book_work/<v>_book.json`.
   Nächstes (Tobias): `bookbuild` (Rust, shakmaty-Zobrist, Polyglot-Layout)
   und Varianten-Buchabfrage in der Engine.
+- **Bücher gebaut 02.10.** (Tobias-Entscheid: Claude schreibt `bookbuild`,
+  da Werkzeug statt Engine-Logik): eigenes Crate `tools/bookbuild/`
+  (shakmaty `=0.29.4` wie die Engine, 7 Tests, u. a. Grundstellung
+  `0x463b96181691fc9c`, Three-check-Schachzähler, Rochade als e1h1).
+  Aufruf `bookbuild <3check|koth> book_work/<v>_book.txt <ausgabe.bin>`.
+  Ergebnis: `src/polyglot/martuni_3check.bin` (242 Einträge, 90 Stellungen)
+  und `src/polyglot/martuni_koth.bin` (164 Einträge, 56 Stellungen).
+  Gegenprobe python-chess: KotH 164/164, Three-check 196/196 (alle Züge
+  aus Stellungen ohne bisheriges Schach; die übrigen 46 kann python-chess
+  nicht prüfen). Gotcha: Mit Standard-Release-Profil stürzt rustc 1.94
+  beim Übersetzen von shakmaty ab (SIGSEGV), deshalb `lto`/`codegen-units = 1`
+  wie in der Engine. Die Bücher sind noch nicht aktiv. Als Nächstes kommt
+  die Varianten-Buchabfrage in der Engine: Schlüssel per `zobrist_hash` auf
+  der shakmaty-Stellung und 16 Bit → shakmaty-Zug.
 
 **22.09.2026 (Sitzung, Teil 2) — Varianten-Suche repariert, Three-check-
 und KotH-Eval nachgeschärft. AUSGEROLLT 18:19 LIVE (Commit `1ceaabe`,

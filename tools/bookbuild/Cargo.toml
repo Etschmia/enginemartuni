@@ -1,0 +1,17 @@
+[package]
+name = "bookbuild"
+version = "0.1.0"
+edition = "2021"
+description = "Baut Martunis Eigenbuch (Polyglot-Layout, shakmaty-Zobrist) aus book_work/<variante>_book.txt"
+
+# Exakt dieselbe shakmaty-Version wie die Engine (Cargo.lock: 0.29.4).
+# Nur dann sind die Zobrist-Schluessel hier und in der Engine garantiert gleich.
+[dependencies]
+shakmaty = { version = "=0.29.4", features = ["variant"] }
+
+# Wie in der Engine. Mit den Standardeinstellungen (16 Codegen-Units, ThinLTO)
+# stürzt rustc 1.94 beim Übersetzen von shakmaty mit SIGSEGV ab.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
