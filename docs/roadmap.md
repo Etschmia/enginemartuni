@@ -78,7 +78,18 @@ macht das neue `tools/book_audit.py`.
   Konfiguration `BOOK_3CHECK` / `BOOK_KOTH`: fehlt der Schlüssel, gilt das
   Eigenbuch, ein leerer Wert schaltet es ab. 223 Tests grün (5 neue).
   Smoke: 3check/KotH „book hit“, auch in einer 3check-Stellung nach
-  gegebenem Schach. Live wird es erst nach Neustart des Bots.
+  gegebenem Schach. **LIVE seit 02.10. 20:39** (Commit `a0634a3`). Ein
+  Bot-Neustart ist nicht nötig: lichess-bot startet das Binary für jede
+  Partie neu (`lib/lichess_bot.py:702`), also gilt der Build-Zeitpunkt.
+  Live bestätigt: In der ersten Three-check-Partie danach (LNjeKYXv) kamen
+  1.Nc3 und 2.e3 aus dem Buch (ohne Eval im PGN), die Suche begann bei Zug 3.
+  Rollback: `BOOK_3CHECK=` / `BOOK_KOTH=` in `.env` (wirkt ab der nächsten
+  Partie).
+- **Archiviert 02.10.2026 21:50** (Cut = Build 20:39): 932 Partien →
+  `game_archiv/`, Analysedateien `analyse-22.09.2026.json` /
+  `-varianten.json` → `archiv/`, neue Dateien `analyse-02.10.2026.json` /
+  `analyse-02.10.2026-varianten.json`. Lookback 3check/KotH gegen die Anker
+  vom 22.09. (3check 1796 / KotH 1652).
 
 **22.09.2026 (Sitzung, Teil 2) — Varianten-Suche repariert, Three-check-
 und KotH-Eval nachgeschärft. AUSGEROLLT 18:19 LIVE (Commit `1ceaabe`,

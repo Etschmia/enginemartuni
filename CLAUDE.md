@@ -52,7 +52,8 @@ Restart:          always
 - **Hard Restart** (unterbricht laufende Partien): `sudo systemctl restart lichess-bot.service`
 - **Graceful:** `quit_after_all_games_finish: true` in config.yml setzen, warten bis keine Partie läuft, dann restart.
 - **Logs:** `journalctl -u lichess-bot.service -f`
-- Config-Änderungen und Engine-Rebuilds (`cargo build --release`) werden erst nach Restart wirksam.
+- Änderungen an `config.yml` werden erst nach einem Restart wirksam.
+- Engine-Rebuilds (`cargo build --release`) und `.env`-Änderungen brauchen **keinen** Restart: lichess-bot startet das Binary für jede Partie neu (`lib/lichess_bot.py:702`). Sie gelten ab der nächsten Partie; Rollout-Zeitpunkt = mtime von `target/release/martuni`.
 
 ### Challenge-Cron
 
