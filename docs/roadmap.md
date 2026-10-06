@@ -10,6 +10,38 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**06.10.2026 — Lookback Eigenbuch Three-check/KotH: technisch sauber,
+Wirkung nicht messbar (neutral).** Vergleich vor dem Buch (22.09. 18:19
+bis 02.10. 20:39, gleiche Engine) mit danach (bis 06.10.):
+
+| | vorher | nachher |
+|---|---|---|
+| 3check Partien / Score | 128 / 40,6 % (erw. 44,3 %) | 35 / 25,7 % (erw. 28,7 %) |
+| 3check gegen Erwartung | −26 Elo | −26 Elo |
+| KotH Partien / Score | 11 / 9,1 % (erw. 16,3 %) | 12 / 16,7 % (erw. 19,1 %) |
+| KotH gegen Erwartung | −116 Elo | −29 Elo (n = 12, Rauschen) |
+| Rating (aus PGN) | 3check 1794→1749, KotH 1652→1641 | 3check 1747→1736, KotH 1641→1636 |
+| frühe Fehler (Halbzug ≤ 16) pro Partie | 3check 0,78, KotH 0,36 | 3check 0,65, KotH 0,17 |
+
+- Das Buch greift in **allen** 47 Partien, aber nur kurz: im Schnitt 1,8
+  (3check) bzw. 1,9 (KotH) eigene Züge. Das Buch endete jedes Mal, weil der
+  Gegner eine Stellung herbeiführte, die nicht im Buch steht. Die maximale
+  Buchtiefe (15 Halbzüge) wurde nie erreicht.
+- Fehler im Buch: nur einer, 6…f6 in `f4U7sndn` (Stockfish Tiefe 17:
+  −168 cp, besser 6…Bxc3+; Stellung war vorher schon −144). Die alte Falle
+  3.Bc4 Nc6?? kam weder vorher noch nachher vor (schon durch Term 4 vom
+  22.09. erledigt).
+- Die Ergebnisse hängen am Gegnerfeld, nicht an der Eröffnung: 3check gegen
+  LinsOfBots (~2110) 1/65 → 0/20, gegen EngineMotor26 (~1530) 50/54 → 9/10.
+  Die Partien entscheiden sich nach dem Buch, im Mittelspiel.
+- **Fazit:** Das Buch bleibt live, es schadet nicht. Ein Elo-Effekt ist bei
+  1–2 Buchzügen nicht zu erwarten und mit 35/12 Partien auch nicht messbar.
+  Mehr Partien kommen vorerst nicht dazu: **Seit 06.10. nimmt der Bot keine
+  Bot-Herausforderungen mehr an** (Tobias, Server-Last durch die Bot-Flut).
+  Ein tieferes Buch würde nur helfen, wenn die Antworten der Gegner
+  abgedeckt wären. Das ist auch die Frage für Phase 2 (Standard): Lohnt
+  sich das, solange die Partien im Mittelspiel verloren gehen?
+
 **30.09.2026 — Konzept eigenes Eröffnungsbuch (nur Doku, kein Code).**
 Anlass ist Sparks Eigen-Buch (+70 Elo, gemessen gegen *kein* Buch, also
 nicht direkt übertragbar). Konzept und Datenlage stehen in
