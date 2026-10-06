@@ -41,6 +41,14 @@ bis 02.10. 20:39, gleiche Engine) mit danach (bis 06.10.):
   Ein tieferes Buch würde nur helfen, wenn die Antworten der Gegner
   abgedeckt wären. Das ist auch die Frage für Phase 2 (Standard): Lohnt
   sich das, solange die Partien im Mittelspiel verloren gehen?
+- Gesamtblick 02.10.–06.10. (367 Partien) gegen Elo-Erwartung: Blitz +24,
+  Rapid +26 (Rating 2160 / 2260), Bullet −6, Chess960 +2. Kein neuer
+  Ansatzpunkt; Antichess 0/16 und Racing Kings 0/6 fast nur gegen
+  SuperGame5, zu wenig für einen Befund.
+- **Archiviert 06.10.2026 18:14** (Cut nach Auswertung, kein Rollout):
+  367 Partien → `game_archiv/`, `analyse-02.10.2026.json` /
+  `-varianten.json` → `archiv/`, neue Dateien `analyse-06.10.2026.json` /
+  `analyse-06.10.2026-varianten.json`. Quarantäne (2) geleert.
 
 **30.09.2026 — Konzept eigenes Eröffnungsbuch (nur Doku, kein Code).**
 Anlass ist Sparks Eigen-Buch (+70 Elo, gemessen gegen *kein* Buch, also
