@@ -39,6 +39,8 @@ die mit gutem Score. Es fängt also nicht bei Zug 1 neu an. Details in
 - Archiviert 12.10. 21:18: 18 Partien → game_archiv, Analysedateien
   `analyse-06.10.2026*` → archiv/, neue Dateien `analyse-12.10.2026.json` /
   `-varianten.json`.
+- **Bot-Challenges 12.10. 21:20 wieder angenommen** (`accept_bot: true`,
+  nur eingehend; die Challenge-Crons bleiben aus).
 - Offen: Lookback, sobald genug Standardpartien da sind (Score gegen
   Elo-Erwartung, Buchausgang, frühe Blunder). Später Ergebnis-Lernen
   (Phase 3): Sammeln und Gewichte mit neuen Partien regelmäßig neu rechnen.
