@@ -32,11 +32,15 @@ def kept_moves(result, max_loss):
 
 
 class Fairy:
-    def __init__(self, variant, hash_mb, threads):
-        self.p = subprocess.Popen([ENGINE], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    def __init__(self, variant, hash_mb, threads, engine=ENGINE):
+        # variant=None: Standardschach (auch fuer das normale Stockfish, das
+        # UCI_Variant nicht kennt; genutzt von book_std_veto.py).
+        self.p = subprocess.Popen([engine], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.DEVNULL, text=True, bufsize=1)
-        for c in ("uci", f"setoption name Hash value {hash_mb}", f"setoption name Threads value {threads}",
-                  f"setoption name UCI_Variant value {UCI_NAME[variant]}"):
+        cmds = ["uci", f"setoption name Hash value {hash_mb}", f"setoption name Threads value {threads}"]
+        if variant is not None:
+            cmds.append(f"setoption name UCI_Variant value {UCI_NAME[variant]}")
+        for c in cmds:
             self.send(c)
         self.sync()
 

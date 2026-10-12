@@ -14,7 +14,14 @@
 //! kann solche Three-check-Schlüssel deshalb nicht nachrechnen, die Engine
 //! (gleiche shakmaty-Version) schon.
 //!
-//! Aufruf:  bookbuild <3check|koth> <eingabe.txt> <ausgabe.bin>
+//! Standardschach (`std`, Phase 2 seit 12.10.2026): Der Engine-Standardpfad
+//! (src/polyglot/hash.rs) mischt en passant nach der Polyglot-Regel ein, also
+//! schon dann, wenn ein Bauer der ziehenden Seite daneben steht, egal ob das
+//! Schlagen legal wäre. Für `std` rechnet bookbuild deshalb mit
+//! `EnPassantMode::PseudoLegal`, für die Varianten weiter mit `Legal`
+//! (so wie `BoardShak::get_hash()` in der Engine).
+//!
+//! Aufruf:  bookbuild <std|3check|koth> <eingabe.txt> <ausgabe.bin>
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -23,7 +30,7 @@ use std::process::ExitCode;
 use shakmaty::uci::UciMove;
 use shakmaty::variant::{KingOfTheHill, ThreeCheck};
 use shakmaty::zobrist::{Zobrist64, ZobristHash};
-use shakmaty::{EnPassantMode, Move, Position, Role, Square};
+use shakmaty::{Chess, EnPassantMode, Move, Position, Role, Square};
 
 /// Ein fertiger Bucheintrag, genau wie er später in der Datei steht.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +43,7 @@ struct Entry {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 4 {
-        eprintln!("Aufruf: bookbuild <3check|koth> <eingabe.txt> <ausgabe.bin>");
+        eprintln!("Aufruf: bookbuild <std|3check|koth> <eingabe.txt> <ausgabe.bin>");
         return ExitCode::from(2);
     }
     let (variant, input, output) = (&args[1], &args[2], &args[3]);
@@ -52,9 +59,10 @@ fn main() -> ExitCode {
     // Die Variante bestimmt nur die Startstellung. Alles andere ist generisch
     // über das Position-Trait von shakmaty, deshalb gibt es build() nur einmal.
     let entries = match variant.as_str() {
-        "3check" => build::<ThreeCheck>(&text),
-        "koth" => build::<KingOfTheHill>(&text),
-        _ => Err(format!("unbekannte Variante '{variant}' (erlaubt: 3check, koth)")),
+        "std" => build::<Chess>(&text, EnPassantMode::PseudoLegal),
+        "3check" => build::<ThreeCheck>(&text, EnPassantMode::Legal),
+        "koth" => build::<KingOfTheHill>(&text, EnPassantMode::Legal),
+        _ => Err(format!("unbekannte Variante '{variant}' (erlaubt: std, 3check, koth)")),
     };
     let entries = match entries {
         Ok(e) => e,
@@ -96,7 +104,10 @@ fn main() -> ExitCode {
 /// `P::default()` ist die Grundstellung der Variante. Jede Zeile wird von dort
 /// aus nachgespielt. So zählt shakmaty die Schachs in Three-check selbst mit,
 /// und wir müssen kein FEN mit Schachzählern parsen.
-fn build<P: Position + Default + Clone + ZobristHash>(text: &str) -> Result<Vec<Entry>, String> {
+fn build<P: Position + Default + Clone + ZobristHash>(
+    text: &str,
+    ep_mode: EnPassantMode,
+) -> Result<Vec<Entry>, String> {
     // Schlüssel -> (Zug -> Gewicht). Die Map erkennt doppelte Einträge:
     // Kommt dieselbe Stellung über zwei Zugfolgen (Zugumstellung) zweimal vor,
     // dürfen die Gewichte nicht verschieden sein, sonst wäre das Buch mehrdeutig.
@@ -121,7 +132,7 @@ fn build<P: Position + Default + Clone + ZobristHash>(text: &str) -> Result<Vec<
         }
 
         // 2. Schlüssel.
-        let key = pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal).0;
+        let key = pos.zobrist_hash::<Zobrist64>(ep_mode).0;
 
         // 3. Buchzug und Gewicht lesen und prüfen.
         let mut parts = rest.split_whitespace();
@@ -187,7 +198,7 @@ fn parse_legal<P: Position>(pos: &P, uci: &str) -> Result<Move, String> {
 fn encode_move(m: &Move) -> u16 {
     let (from, to): (Square, Square) = match *m {
         Move::Castle { king, rook } => (king, rook),
-        _ => (m.from().expect("Einsetzzüge gibt es in 3check/KotH nicht"), m.to()),
+        _ => (m.from().expect("Einsetzzüge gibt es in std/3check/KotH nicht"), m.to()),
     };
     let promo: u16 = match m.promotion() {
         None => 0,
@@ -309,7 +320,7 @@ mod tests {
     #[test]
     fn build_sortiert_und_kodiert_rueckwaerts() {
         let text = "# Kommentar\n | g1f3 300\n | e2e4 700\ne2e4 | e7e5 1000\n";
-        let entries = build::<KingOfTheHill>(text).unwrap();
+        let entries = build::<KingOfTheHill>(text, EnPassantMode::Legal).unwrap();
         assert_eq!(entries.len(), 3);
         assert!(entries.windows(2).all(|w| w[0].key <= w[1].key));
         let start: Vec<_> = entries.iter().filter(|e| e.key == 0x463b96181691fc9c).collect();
@@ -320,8 +331,45 @@ mod tests {
 
     #[test]
     fn build_meldet_illegale_zuege() {
-        assert!(build::<KingOfTheHill>(" | e2e5 100\n").is_err());
-        assert!(build::<KingOfTheHill>("e2e4 e2e4 | e7e5 100\n").is_err());
-        assert!(build::<KingOfTheHill>(" | e2e4 0\n").is_err());
+        let legal = EnPassantMode::Legal;
+        assert!(build::<KingOfTheHill>(" | e2e5 100\n", legal).is_err());
+        assert!(build::<KingOfTheHill>("e2e4 e2e4 | e7e5 100\n", legal).is_err());
+        assert!(build::<KingOfTheHill>(" | e2e4 0\n", legal).is_err());
+    }
+
+    fn std_key_after(moves: &str) -> u64 {
+        let mut pos = Chess::default();
+        for uci in moves.split_whitespace() {
+            let m = parse_legal(&pos, uci).unwrap();
+            pos.play_unchecked(m);
+        }
+        pos.zobrist_hash::<Zobrist64>(EnPassantMode::PseudoLegal).0
+    }
+
+    /// Standard: Schlüsselwerte aus der Polyglot-Spezifikation. Nach
+    /// 1.e4 d5 2.e5 f5 steht der e5-Bauer neben f5, en passant zählt also mit.
+    #[test]
+    fn std_polyglot_schluessel_aus_spezifikation() {
+        assert_eq!(std_key_after(""), 0x463b96181691fc9c);
+        assert_eq!(std_key_after("e2e4"), 0x823c9b50fd114196);
+        assert_eq!(std_key_after("e2e4 d7d5 e4e5 f7f5"), 0x22a48b5a8e47ff78);
+        assert_eq!(std_key_after("e2e4 d7d5 e4e5 f7f5 e1e2"), 0x652a607ca3f242c1);
+        assert_eq!(std_key_after("a2a4 b7b5 h2h4 b5b4 c2c4"), 0x3c8123ea7b067637);
+    }
+
+    /// Standard: en passant zählt schon, wenn der schlagende Bauer gefesselt
+    /// ist (Polyglot-Regel, wie src/polyglot/hash.rs). Mit `Legal` wäre der
+    /// Schlüssel hier ein anderer und die Engine fände die Stellung nicht.
+    /// Stellung: weißer König a5, weißer Bauer d5, schwarzer Bauer gerade e7-e5,
+    /// schwarzer Turm h5. dxe6 e.p. würde die 5. Reihe öffnen (Schach vom Turm).
+    #[test]
+    fn std_en_passant_pseudolegal() {
+        use shakmaty::fen::Fen;
+        use shakmaty::CastlingMode;
+        let fen: Fen = "7k/8/8/K2Pp2r/8/8/8/8 w - e6 0 2".parse().unwrap();
+        let pos: Chess = fen.into_position(CastlingMode::Standard).unwrap();
+        let pseudo = pos.zobrist_hash::<Zobrist64>(EnPassantMode::PseudoLegal).0;
+        let legal = pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal).0;
+        assert_ne!(pseudo, legal, "dxe6 ist gefesselt, zählt für Polyglot aber mit");
     }
 }

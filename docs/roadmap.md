@@ -10,6 +10,25 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**12.10.2026 — Phase 2 Eigenbuch: Standardbuch aus den fremden Büchern
+(in Arbeit).** Tobias-Entscheid: Das eigene Buch soll gm2001, komodo,
+rodent und martuni_patches langfristig ersetzen. Es übernimmt die
+Zugfolgen, die Martuni live aus diesen Büchern gespielt hat, und behält nur
+die mit gutem Score. Es fängt also nicht bei Zug 1 neu an. Details in
+[eigenes-eroeffnungsbuch.md](eigenes-eroeffnungsbuch.md), Abschnitt 11.
+- Datenbasis: kompletter Lichess-Export, 9.340 Standardpartien seit 27.04.
+  (ohne 06.–24.09.), 17.206 Stellungen, 19.775 Buchzüge.
+- Entschieden: harter Wechsel (alte Bücher raus); alle live gespielten
+  Buchzüge rein; Score-Filter ab 10 Partien unter −5 % (geschrumpft);
+  Stockfish-Veto 60 cp; Gewichte = Live-Häufigkeit · Stockfish · Score,
+  Mindestanteil 2 %.
+- Neue Werkzeuge `tools/book_std_collect.py`, `book_std_veto.py`,
+  `book_std_weights.py`, `bookbuild std` (Polyglot-Schlüssel wie
+  `src/polyglot/hash.rs`). Probebuch: python-chess-Gegenprobe und Engine
+  40/40 grün.
+- Veto-Lauf läuft (Start 13:29, ~8 h). Danach Durchsicht, dann live
+  schalten (`BOOK_FILES=martuni_std.bin`) und Archiv-Schnitt.
+
 **06.10.2026 — Lookback Eigenbuch Three-check/KotH: technisch sauber,
 Wirkung nicht messbar (neutral).** Vergleich vor dem Buch (22.09. 18:19
 bis 02.10. 20:39, gleiche Engine) mit danach (bis 06.10.):

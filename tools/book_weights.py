@@ -54,18 +54,19 @@ def live_factor(st):
     return min(max(2 * p, L_MIN), L_MAX)
 
 
-def apply_min_share(share):
-    """Hebt Zuege unter MIN_SHARE an und skaliert den Rest herunter
-    (iterativ, falls dabei weitere Zuege unter die Grenze rutschen)."""
+def apply_min_share(share, min_share=MIN_SHARE):
+    """Hebt Zuege unter min_share an und skaliert den Rest herunter
+    (iterativ, falls dabei weitere Zuege unter die Grenze rutschen).
+    Das Standardbuch (book_std_weights.py) nutzt 2 % statt 10 %."""
     fixed = set()
     while True:
-        low = {m for m in share if m not in fixed and share[m] < MIN_SHARE}
+        low = {m for m in share if m not in fixed and share[m] < min_share}
         if not low:
             return share
         fixed |= low
-        rest = 1 - MIN_SHARE * len(fixed)
+        rest = 1 - min_share * len(fixed)
         free = sum(share[m] for m in share if m not in fixed)
-        share = {m: (MIN_SHARE if m in fixed else share[m] / free * rest) for m in share}
+        share = {m: (min_share if m in fixed else share[m] / free * rest) for m in share}
 
 
 def write_txt(variant, positions, path):

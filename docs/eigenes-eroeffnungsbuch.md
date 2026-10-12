@@ -390,3 +390,78 @@ Beispiele (Stand 01.10.):
 Ergebnis: Three-check 90 Stellungen / 242 Züge, KotH 56 / 164. Neu
 hinzugekommene Live-Stellungen (Three-check 5, KotH 2) sind noch nicht
 analysiert und bleiben bis zu einem späteren Lauf draußen.
+
+## 11. Phase 2: Standardbuch aus den fremden Büchern (ab 12.10.2026)
+
+**Ziel (Tobias, 12.10.2026):** Das eigene Standardbuch soll die fremden
+Bücher (gm2001, komodo, rodent, martuni_patches) langfristig ersetzen, auch
+wenn es nicht messbar besser ist. Die fremden Bücher wurden nie
+systematisch geprüft, nur punktuell korrigiert. Das neue Buch fängt **nicht
+bei Zug 1 neu an**. Es übernimmt die Zugfolgen, die Martuni live aus den
+fremden Büchern gespielt hat, und behält davon die, mit denen Martuni gut
+gepunktet hat.
+
+**Datenbasis:** Die lokalen Partien reichen nicht (nur 743 seit 01.09.).
+Deshalb der komplette Lichess-Export von BOT Martuni (API mit Bot-Token,
+nur lesend) nach `book_work/std_lichess_all.pgn`: 9.960 Standardpartien seit
+27.04.2026. Ohne den buchlosen Zeitraum 06.–24.09. bleiben 9.340 Partien.
+
+**Entscheide 12.10.2026:**
+1. **Harter Wechsel:** `BOOK_FILES=martuni_std.bin`, die alten Bücher sind
+   raus. Grund: Die Engine nimmt das erste Buch mit Treffer. Stünden die
+   alten Bücher dahinter, kämen gestrichene Züge über sie zurück.
+2. **Umfang:** alle live gespielten Buchzüge, auch Stellungen mit nur einer
+   Partie oder einem Zug. Die ≥ 2-Züge-Regel der Varianten gilt hier nicht,
+   sonst würde das Buch flach.
+3. **Score-Filter:** Ein Zug fällt raus, wenn er **mindestens 10 Partien**
+   hat und sein geschrumpfter Score (Punkte − Erwartet) / (n + 4) unter
+   −5 % liegt. Gestrichen wird aber nur, wenn in der Stellung ein anderer Zug
+   bleibt. Das Mindest-n kam nach dem Probelauf dazu, denn mit k = 4 reicht
+   sonst eine einzige verlorene Partie (984 statt 87 Streichungen, 758 davon
+   mit 1–4 Partien).
+4. **Stockfish-Veto** (wie 30.09. entschieden): Stockfish 17.1, Tiefe 18,
+   Schwelle 60 cp. Stockfish streicht nur, er schlägt keine Züge vor. Bleibt
+   in einer Stellung nichts übrig, ist sie nicht im Buch und Martuni rechnet
+   dort selbst. Die Schwelle lässt sich ohne Neurechnen ändern (`sf_loss` ist
+   gespeichert).
+5. **Gewichte:** Basis ist die Live-Häufigkeit, im Kern also die Gewichtung
+   der alten Bücher. Die Formel der Varianten (ohne Q_M) wäre fast
+   gleichverteilt gewesen, 1…c6 (2 Partien) wäre nach 1.d4 fast so oft
+   gekommen wie 1…Nf6 (639 Partien).
+
+```
+roh  = H · Q_SF · L
+H    = n_Zug / n_Stellung              Live-Häufigkeit
+Q_SF = exp(−SF-Verlust / 60)
+L    = 2 · (0,5 + (Punkte − Erwartet) / (n + 4)),  begrenzt auf [0,05; 2]
+Anteil = roh / Summe, jeder Zug mindestens 2 %; Gewicht = Anteil · 1000
+```
+
+**Werkzeuge:**
+
+| Schritt | Werkzeug | Ausgabe |
+|---|---|---|
+| Sammeln | `tools/book_std_collect.py [pgn …]` | `book_work/std_positions.json` |
+| Veto | `tools/book_std_veto.py` (inkrementell, nach Häufigkeit) | `book_work/std_veto.json` |
+| Gewichte | `tools/book_std_weights.py [--max-loss N]` | `book_work/std_book.json` + `.txt` |
+| Bauen | `bookbuild std book_work/std_book.txt <ausgabe.bin>` | Polyglot-Datei |
+
+`bookbuild std` rechnet en passant nach der Polyglot-Regel
+(`EnPassantMode::PseudoLegal`), genau wie der Standardpfad der Engine
+(`src/polyglot/hash.rs`). Die Engine braucht keine Änderung.
+
+**Stand 12.10.2026:**
+- Gesammelt: 17.206 Stellungen, 19.775 Buchzüge.
+- Erste Befunde (Score gegen Elo-Erwartung): Als Weiß ist 1.e4 am besten
+  (+5,5 %, n 1.922), danach 1.d4 (+2,4 %). Schwach sind nach 1.d4 1…d6
+  (−20 %, n 18) und 1…g6 (−15 %), nach 1.e4 1…Nf6 (−13 %).
+- Probebuch aus den ersten 1.020 Stellungen: python-chess liest 1.020/1.020
+  korrekt, die Engine spielt in 40/40 Stichproben den Buchzug.
+- Beispielgewichte: Grundstellung e4 480, d4 362, Nf3 70, c4 48, b3 20,
+  g3 20; nach 1.d4 Nf6 641, d5 299, c6/e6/f5 je 20.
+- Veto-Lauf seit 13:29, etwa 8 Stunden. Danach baut
+  `book_work/std_finish.sh` automatisch `book_work/martuni_std.bin`
+  (Log `book_work/std_finish.log`, Ende „BUCH-FERTIG“). **Live geschaltet
+  wird erst nach Durchsicht:** Datei nach `src/polyglot/` kopieren,
+  `BOOK_FILES=martuni_std.bin` in der `.env`, Archiv-Schnitt für den
+  Lookback. Rollback: alte `BOOK_FILES`-Zeile zurück.
