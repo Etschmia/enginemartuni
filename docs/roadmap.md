@@ -41,8 +41,9 @@ die mit gutem Score. Es fängt also nicht bei Zug 1 neu an. Details in
   `-varianten.json`.
 - **Bot-Challenges 12.10. 21:20 wieder angenommen** (`accept_bot: true`,
   nur eingehend; die Challenge-Crons bleiben aus).
-- Offen: Lookback, sobald genug Standardpartien da sind (Score gegen
-  Elo-Erwartung, Buchausgang, frühe Blunder). Später Ergebnis-Lernen
+- **Lookback geplant um den 16.10.2026** (Tobias, 12.10.): Standardpartien
+  ab dem Schnitt 21:17 gegen die Zeit davor (Score gegen Elo-Erwartung,
+  Buchausgang, frühe Blunder nach Buchende, Anteil Partien mit Buchtreffer). Später Ergebnis-Lernen
   (Phase 3): Sammeln und Gewichte mit neuen Partien regelmäßig neu rechnen.
 
 **06.10.2026 — Lookback Eigenbuch Three-check/KotH: technisch sauber,
