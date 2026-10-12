@@ -11,7 +11,7 @@ Einzeldokumenten:
 ## Aktueller Status
 
 **12.10.2026 — Phase 2 Eigenbuch: Standardbuch aus den fremden Büchern
-(in Arbeit).** Tobias-Entscheid: Das eigene Buch soll gm2001, komodo,
+LIVE seit 21:17.** Tobias-Entscheid: Das eigene Buch soll gm2001, komodo,
 rodent und martuni_patches langfristig ersetzen. Es übernimmt die
 Zugfolgen, die Martuni live aus diesen Büchern gespielt hat, und behält nur
 die mit gutem Score. Es fängt also nicht bei Zug 1 neu an. Details in
@@ -26,8 +26,22 @@ die mit gutem Score. Es fängt also nicht bei Zug 1 neu an. Details in
   `book_std_weights.py`, `bookbuild std` (Polyglot-Schlüssel wie
   `src/polyglot/hash.rs`). Probebuch: python-chess-Gegenprobe und Engine
   40/40 grün.
-- Veto-Lauf läuft (Start 13:29, ~8 h). Danach Durchsicht, dann live
-  schalten (`BOOK_FILES=martuni_std.bin`) und Archiv-Schnitt.
+- Veto fertig 19:59: `martuni_std.bin` mit 17.132 Stellungen / 19.564
+  Zügen. Gestrichen: 124 Züge durch Stockfish, 87 durch den Score-Filter,
+  74 Stellungen leer (dort rechnet Martuni selbst, zusammen nur 114
+  Partien). Das Veto trifft nur Nebenlinien (höchstens 7 Partien je Zug),
+  z. B. Möller-Angriff 9…Nxc3 (−102 cp), Ponziani 9…Ne7 (−95 cp).
+  python-chess-Gegenprobe 0 Abweichungen.
+- **Live 12.10. 21:17:** `BOOK_FILES=martuni_std.bin` (alte Bücher raus,
+  `.env`-Backup `.env.bak-20261012`), kein Neustart nötig. Smoke grün
+  (Buch geladen, Buchtreffer). **Rollback:**
+  `BOOK_FILES=martuni_patches.bin,gm2001.bin,komodo.bin,rodent.bin`.
+- Archiviert 12.10. 21:18: 18 Partien → game_archiv, Analysedateien
+  `analyse-06.10.2026*` → archiv/, neue Dateien `analyse-12.10.2026.json` /
+  `-varianten.json`.
+- Offen: Lookback, sobald genug Standardpartien da sind (Score gegen
+  Elo-Erwartung, Buchausgang, frühe Blunder). Später Ergebnis-Lernen
+  (Phase 3): Sammeln und Gewichte mit neuen Partien regelmäßig neu rechnen.
 
 **06.10.2026 — Lookback Eigenbuch Three-check/KotH: technisch sauber,
 Wirkung nicht messbar (neutral).** Vergleich vor dem Buch (22.09. 18:19

@@ -465,3 +465,8 @@ Anteil = roh / Summe, jeder Zug mindestens 2 %; Gewicht = Anteil · 1000
   wird erst nach Durchsicht:** Datei nach `src/polyglot/` kopieren,
   `BOOK_FILES=martuni_std.bin` in der `.env`, Archiv-Schnitt für den
   Lookback. Rollback: alte `BOOK_FILES`-Zeile zurück.
+
+**Live seit 12.10.2026 21:17** (Tobias-OK nach Durchsicht): 17.132 Stellungen,
+19.564 Züge; gestrichen 124 (Veto) + 87 (Score), 74 Stellungen leer.
+`src/polyglot/martuni_std.bin`, `BOOK_FILES=martuni_std.bin`. Lookback-Dateien
+ab dem Schnitt: `analyse-12.10.2026.json` / `-varianten.json`.
