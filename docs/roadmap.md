@@ -18,7 +18,7 @@ Schleusen-Analyse rechnet). Abgestimmt per SendMessage:
   (nach dem regulären Ende der Classical-Partie gegen Stepbot_Chess, kein
   Partieabbruch). Upstream-Sync-Cron auskommentiert, Crontab-Backup
   `logs/crontab.backup-2026-10-13.txt`.
-- **Horst LIVE 13.10. 14:14** (Engine-Stand 6c5dce7): „Welcome Martuni!“,
+- **Horst LIVE 13.10. 14:14** (Engine-Stand 6c5dce7, Build-mtime dort 2026-10-13 14:00:31): „Welcome Martuni!“,
   NRestarts 0, Martuni in /api/bot/online. PGN-Sync-Timer ab 14:22.
 - Horst: eigener Checkout `lichess-bot-martuni`, Unit
   `lichess-bot-martuni.service` (SIGINT + KillMode=mixed, damit beim Stopp
@@ -39,7 +39,9 @@ Schleusen-Analyse rechnet). Abgestimmt per SendMessage:
   oben) zieht Horst bei sich nach.
 - A/B-Matches dürfen hier jetzt auch tagsüber laufen (Bot-Last weg).
 - Offen: erste Horst-Partie hier angekommen und analysiert → dann
-  `~/lichess-bot` löschen (lose Dateien vorher nach `~/martuni_games/alt/`).
+  `~/lichess-bot` löschen (lose Dateien vorher nach `~/martuni_games/alt/`). Horst hat ~/lichess-bot vorab gesichert:
+  `/var/www/but2/botdir/archiv-martuni-lichess-bot/lichess-bot-martuni.de-2026-10-13.tar.gz`
+  (ohne venv, Partien und Token-Kopien).
 
 **12.10.2026 — Phase 2 Eigenbuch: Standardbuch aus den fremden Büchern
 LIVE seit 21:17.** Tobias-Entscheid: Das eigene Buch soll gm2001, komodo,
