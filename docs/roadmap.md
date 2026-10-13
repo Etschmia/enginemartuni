@@ -44,10 +44,14 @@ Schleusen-Analyse rechnet). Abgestimmt per SendMessage:
   Damit gilt: höchstens 1 Bot-Partie gleichzeitig, eine Bot-Partie darf
   jetzt aber **parallel zu einer Menschen-Partie** laufen (2 Engines auf
   4 Kernen). Für Zeitnot- und Blunder-Auswertungen ab hier beachten.
-- Offen: erste Horst-Partie hier angekommen und analysiert → dann
-  `~/lichess-bot` löschen (lose Dateien vorher nach `~/martuni_games/alt/`). Horst hat ~/lichess-bot vorab gesichert:
-  `/var/www/but2/botdir/archiv-martuni-lichess-bot/lichess-bot-martuni.de-2026-10-13.tar.gz`
-  (ohne venv, Partien und Token-Kopien).
+- Erledigt 13.10.: erste Horst-Partie „EngineMotor26 vs Martuni - Kydy81Vl“
+  14:22 angekommen, 14:50 analysiert importiert → `~/lichess-bot` gelöscht.
+  Lose Dateien (Challenge-Statistik, Notizen, Skripte) in
+  `~/martuni_games/alt/`, alte Archiv-Tarballs in `~/martuni_games/`.
+  Komplettsicherung bei Horst:
+  `/var/www/but2/botdir/archiv-martuni-lichess-bot/lichess-bot-martuni.de-2026-10-13.tar.gz`.
+  `~/cron/cron_spielbetrieb` / `cron_analyse` (Vorlagen von `spiel`):
+  lichess-bot-Zeilen auskommentiert.
 
 **12.10.2026 — Phase 2 Eigenbuch: Standardbuch aus den fremden Büchern
 LIVE seit 21:17.** Tobias-Entscheid: Das eigene Buch soll gm2001, komodo,
