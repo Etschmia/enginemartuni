@@ -38,6 +38,12 @@ Schleusen-Analyse rechnet). Abgestimmt per SendMessage:
   mehr aus dem lokalen Binary). `.env`-Änderungen (z. B. Buch-Rollback
   oben) zieht Horst bei sich nach.
 - A/B-Matches dürfen hier jetzt auch tagsüber laufen (Bot-Last weg).
+- 13.10. 14:37 (Horst): Fork auf Upstream gemergt (b57ce45). Der Annahme-Patch
+  c4200bd (Bot-Challenges warten, solange irgendeine Partie läuft) ist
+  ersetzt durch Upstream-`games_reserved_for_humans: 1`, preference human.
+  Damit gilt: höchstens 1 Bot-Partie gleichzeitig, eine Bot-Partie darf
+  jetzt aber **parallel zu einer Menschen-Partie** laufen (2 Engines auf
+  4 Kernen). Für Zeitnot- und Blunder-Auswertungen ab hier beachten.
 - Offen: erste Horst-Partie hier angekommen und analysiert → dann
   `~/lichess-bot` löschen (lose Dateien vorher nach `~/martuni_games/alt/`). Horst hat ~/lichess-bot vorab gesichert:
   `/var/www/but2/botdir/archiv-martuni-lichess-bot/lichess-bot-martuni.de-2026-10-13.tar.gz`
