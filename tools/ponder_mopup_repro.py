@@ -15,7 +15,7 @@ import subprocess, sys, threading, queue, time, random
 import chess, chess.pgn
 
 ENGINE = "./target/release/martuni"
-PGN = "/home/librechat/lichess-bot/game_records/Martuni vs AetherBot - zKfpQEn8.pgn"
+PGN = "/home/librechat/martuni_games/game_records/Martuni vs AetherBot - zKfpQEn8.pgn"
 random.seed(42)
 
 

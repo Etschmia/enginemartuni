@@ -40,7 +40,7 @@ def mart_eval(node):  # white-pov from sibling %eval
 
 # 1) Pool: Martuni-MG-Zuege mit %eval
 pool=[]
-for path in sorted(glob.glob("/home/librechat/lichess-bot/game_records/*.pgn")):
+for path in sorted(glob.glob("/home/librechat/martuni_games/game_records/*.pgn")):
     with open(path,encoding="utf-8",errors="ignore") as fh:
         while True:
             try: g=chess.pgn.read_game(fh)

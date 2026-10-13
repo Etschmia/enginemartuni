@@ -193,12 +193,12 @@ python tools/analyze_blunders.py game1.pgn game2.pgn game3.pgn
 
 ```bash
 # alle PGN-Dateien im Verzeichnis
-python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/
+python tools/analyze_blunders.py --game-dir ../martuni_games/game_records/
 
 # nur Dateien, die nach einem bestimmten Zeitpunkt geschrieben wurden
-python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+python tools/analyze_blunders.py --game-dir ../martuni_games/game_records/ \
     --since 2026-04-12
-python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+python tools/analyze_blunders.py --game-dir ../martuni_games/game_records/ \
     --since 2026-04-12T16:38
 ```
 
@@ -206,16 +206,16 @@ python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
 
 ```bash
 # nur Verlustpartien analysieren (spart Stockfish-Zeit)
-python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+python tools/analyze_blunders.py --game-dir ../martuni_games/game_records/ \
     --losses-only
 
 # Buchzüge / Pre-Moves ignorieren — Schwelle wird pro Partie aus dem
 # [TimeControl]-Tag abgeleitet (Defaults: bullet 0s, blitz 1s, rapid 3s,
 # classical 5s). Bei fehlendem/unparsbarem Tag greift --min-movetime.
-python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/
+python tools/analyze_blunders.py --game-dir ../martuni_games/game_records/
 
 # Strenger filtern: in Rapid-Partien erst ab 5s als „echte Überlegung"
-python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+python tools/analyze_blunders.py --game-dir ../martuni_games/game_records/ \
     --min-movetime-rapid 5
 
 # anderen Spieler analysieren (z. B. für Vergleichszwecke)
@@ -232,7 +232,7 @@ python tools/analyze_blunders.py game.pgn --movetime 1.0
 python tools/analyze_blunders.py game.pgn --depth 18
 
 # mehr RAM und Threads (für schnelle Batch-Läufe)
-python tools/analyze_blunders.py --game-dir ../lichess-bot/game_records/ \
+python tools/analyze_blunders.py --game-dir ../martuni_games/game_records/ \
     --threads 4 --hash 512
 
 # anderen Stockfish-Pfad
@@ -259,12 +259,12 @@ verarbeitet wurde, wird beim nächsten Lauf übersprungen.
 ```bash
 # Erster Lauf: legt analysis_state.json neu an
 python tools/analyze_blunders.py \
-    --game-dir ../lichess-bot/game_records/ \
+    --game-dir ../martuni_games/game_records/ \
     --output analysis_state.json
 
 # Folgeläufe: nur neue PGNs werden analysiert, Rest übersprungen
 python tools/analyze_blunders.py \
-    --game-dir ../lichess-bot/game_records/ \
+    --game-dir ../martuni_games/game_records/ \
     --output analysis_state.json
 
 # Kumulierten Report anzeigen, ohne Stockfish zu starten.
@@ -290,7 +290,7 @@ automatisch frisch.
 
 ```bash
 python tools/analyze_blunders.py \
-    --game-dir ../lichess-bot/game_records/ \
+    --game-dir ../martuni_games/game_records/ \
     --since 2026-04-12T16:38 \
     --losses-only \
     --threshold 150 \

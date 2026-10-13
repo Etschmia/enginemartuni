@@ -6,10 +6,11 @@ eingeflossen sind, aus `game_records/` verschwinden, und alles, was danach
 kommt, klar als "neue Partien" erkennbar sein — im Ordner wie in der
 Analysedatei. Der Ablauf (bisher von Hand, seit 22.09.2026 hier):
 
-  1. Cut bestimmen: `--cut "YYYY-MM-DD HH:MM[:SS]"` (lokale Zeit) oder, wenn
-     nicht angegeben, die mtime des Live-Binaries `target/release/martuni`
-     — ab diesem Moment starten neue Partien mit dem neuen Binary
-     (lichess-bot startet die Engine pro Partie).
+  1. Cut bestimmen: `--cut "YYYY-MM-DD HH:MM[:SS]"` (lokale Zeit), Pflicht.
+     Seit 13.10.2026 spielt der Bot auf Horst (SYR-PE-BUTDEV); der Cut ist
+     die Build-mtime, die Horst nach dem Rollout zurückmeldet. Das lokale
+     `target/release/martuni` ist nur noch ein Entwicklungs-Build und
+     taugt nicht mehr als Default.
   2. Alte Partien = PGNs in `game_records/`, deren Startzeit (Header
      UTCDate/UTCTime, hilfsweise Datei-mtime) VOR dem Cut liegt.
   3. Drain: solange alte Partien weder analysiert noch in Quarantäne sind
@@ -54,7 +55,6 @@ import analyze_cron as ac  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-LIVE_BINARY = REPO_ROOT / "target" / "release" / "martuni"
 ARCHIV_DIR = REPO_ROOT / "archiv"
 SYNC_SCRIPT = SCRIPT_DIR / "schleuse_sync.py"
 DEFAULT_SCHLEUSE = Path.home() / "grok_bot_schleuse"
@@ -85,9 +85,9 @@ def parse_cut(text: str | None) -> datetime:
             except ValueError:
                 continue
         sys.exit(f"--cut nicht lesbar: {text!r} (erwartet 'YYYY-MM-DD HH:MM[:SS]', lokale Zeit)")
-    if not LIVE_BINARY.exists():
-        sys.exit(f"Live-Binary fehlt: {LIVE_BINARY} — bitte --cut angeben")
-    return datetime.fromtimestamp(LIVE_BINARY.stat().st_mtime).astimezone()
+    # Seit dem Umzug des Bots zu Horst (13.10.2026) ist das lokale Binary
+    # nicht mehr das Live-Binary — ohne explizite Schnittzeit kein Lauf.
+    sys.exit("--cut fehlt: Rollout-Zeit (Build-mtime auf Horst) als 'YYYY-MM-DD HH:MM' angeben")
 
 
 def unique_target(dir_: Path, name: str) -> Path:
@@ -132,7 +132,7 @@ def rewrite_config(cfg_path: Path, new_output: str, new_variant: str, execute: b
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--execute", action="store_true", help="scharf ausführen (sonst Probelauf)")
-    ap.add_argument("--cut", help="Schnittzeit lokal 'YYYY-MM-DD HH:MM[:SS]' (Default: mtime des Live-Binaries)")
+    ap.add_argument("--cut", help="Schnittzeit lokal 'YYYY-MM-DD HH:MM[:SS]' (Pflicht: Build-mtime auf Horst)")
     ap.add_argument("--date", help="Datum für die neuen Analysedateien, DD.MM.YYYY (Default: heute)")
     ap.add_argument("--timeout", type=int, default=30, help="Drain-Wartezeit in Minuten (Default 30)")
     ap.add_argument("--force", action="store_true", help="nicht auf ausstehende Schleusen-Ergebnisse warten")

@@ -40,7 +40,7 @@ RETRO_LOG = Path(
     os.environ.get("SCHLEUSE_RETRO_LOG", str(REPO_ROOT / "logs" / "schleuse_retro.log"))
 )
 REMOTE_GAME_DIR = os.environ.get(
-    "SCHLEUSE_REMOTE_GAME_DIR", "/home/librechat/lichess-bot/game_records"
+    "SCHLEUSE_REMOTE_GAME_DIR", "/home/librechat/martuni_games/game_records"
 )
 QUARANTINE = os.environ.get(
     "SCHLEUSE_REMOTE_QUARANTINE",

@@ -10,6 +10,37 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**13.10.2026 — Lichess-Bot zieht zu Horst um; dieser Server macht nur
+noch Engine-Entwicklung.** Tobias-Entscheid: Martuni spielt künftig auf
+Horst (SYR-PE-BUTDEV, Claude-Session „Horst“, der auch schon die
+Schleusen-Analyse rechnet). Abgestimmt per SendMessage:
+- Hier: `lichess-bot.service` gestoppt + disabled am 13.10. 14:12:54
+  (nach dem regulären Ende der Classical-Partie gegen Stepbot_Chess, kein
+  Partieabbruch). Upstream-Sync-Cron auskommentiert, Crontab-Backup
+  `logs/crontab.backup-2026-10-13.txt`.
+- **Horst LIVE 13.10. 14:14** (Engine-Stand 6c5dce7): „Welcome Martuni!“,
+  NRestarts 0, Martuni in /api/bot/online. PGN-Sync-Timer ab 14:22.
+- Horst: eigener Checkout `lichess-bot-martuni`, Unit
+  `lichess-bot-martuni.service` (SIGINT + KillMode=mixed, damit beim Stopp
+  nicht die Engine mitstirbt; quit_after_all_games_finish),
+  concurrency 2, `.env` + Syzygy 3-4-5 + config.yml von hier übernommen.
+  Er übernimmt auch den Upstream-Sync des Forks (der scheitert seit 10.10.
+  an einem Konflikt mit unserem Reconnect-Patch, weil Upstream den Fix
+  selbst übernommen hat (PR #1201); Horst löst das nach dem Umzug).
+- Partien: Horst spiegelt beendete PGNs alle 10 Min per rsync (eigene
+  `sent.log`) nach `~/martuni_games/game_records/`. `game_records` und
+  `game_archiv` sind dorthin umgezogen; Analyse-Config (`game-dir`), `info`,
+  `tools/*`, `docs/blunder-analyse.md` und der Skill `martuni-archiv`
+  sind umgestellt.
+- **Rollout künftig:** push auf master → Hash an Horst → er baut und meldet
+  die Build-mtime; die ist der Rollout-Zeitpunkt.
+  `archive_after_rollout.py` verlangt deshalb jetzt `--cut` (kein Default
+  mehr aus dem lokalen Binary). `.env`-Änderungen (z. B. Buch-Rollback
+  oben) zieht Horst bei sich nach.
+- A/B-Matches dürfen hier jetzt auch tagsüber laufen (Bot-Last weg).
+- Offen: erste Horst-Partie hier angekommen und analysiert → dann
+  `~/lichess-bot` löschen (lose Dateien vorher nach `~/martuni_games/alt/`).
+
 **12.10.2026 — Phase 2 Eigenbuch: Standardbuch aus den fremden Büchern
 LIVE seit 21:17.** Tobias-Entscheid: Das eigene Buch soll gm2001, komodo,
 rodent und martuni_patches langfristig ersetzen. Es übernimmt die

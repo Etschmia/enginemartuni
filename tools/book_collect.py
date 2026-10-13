@@ -36,8 +36,8 @@ def main():
     ap.add_argument("--min-count", type=int, default=3)
     a = ap.parse_args()
     name, cls = VARIANTS[a.variant]
-    files = glob.glob(os.path.expanduser("~/lichess-bot/game_records/*.pgn")) + \
-            glob.glob(os.path.expanduser("~/lichess-bot/game_archiv/*.pgn"))
+    files = glob.glob(os.path.expanduser("~/martuni_games/game_records/*.pgn")) + \
+            glob.glob(os.path.expanduser("~/martuni_games/game_archiv/*.pgn"))
     pos = {}
     seen = set(); games = 0
     for f in files:

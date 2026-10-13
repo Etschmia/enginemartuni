@@ -26,7 +26,7 @@ import chess.pgn
 import chess.polyglot
 
 BOOKS = ["martuni_patches.bin", "gm2001.bin", "komodo.bin", "rodent.bin"]
-GAME_DIRS = ["~/lichess-bot/game_records", "~/lichess-bot/game_archiv"]
+GAME_DIRS = ["~/martuni_games/game_records", "~/martuni_games/game_archiv"]
 NO_BOOK_FROM = "2026-09-06"
 NO_BOOK_UNTIL = "2026-09-24 16:00"
 

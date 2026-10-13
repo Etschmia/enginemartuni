@@ -671,7 +671,7 @@ def main() -> int:
         type=Path,
         default=None,
         metavar="DIR",
-        help="Directory with PGN files to analyze (e.g. ../lichess-bot/game_records/). "
+        help="Directory with PGN files to analyze (e.g. ../martuni_games/game_records/). "
              "Scans all *.pgn files. Combine with --since to filter by date.",
     )
     parser.add_argument(

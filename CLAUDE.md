@@ -32,34 +32,35 @@ Alle ursprünglichen Phase-1/2-Ziele sind umgesetzt:
 Nächste Schritte, offene Themen und Verlauf der bisherigen Maßnahmen
 stehen in [docs/roadmap.md](docs/roadmap.md).
 
-## Lichess-Anbindung
+## Lichess-Anbindung (seit 13.10.2026 auf Horst)
 
-Martuni spielt auf Lichess als **BOT Martuni** via `~/lichess-bot/` (Upstream: `lichess-bot-devs/lichess-bot`). Die Martuni-spezifische Config und Skripte liegen im Unterordner `lichess-bot/` dieses Repos (Token ist maskiert, das Original liegt unter `~/lichess-bot/config.yml`).
+Martuni spielt auf Lichess als **BOT Martuni** — aber **nicht mehr von diesem
+Server**. Seit 13.10.2026 läuft der Bot auf **Horst** (Rechner SYR-PE-BUTDEV,
+eine Claude-Session namens „Horst“, per `SendMessage` erreichbar):
+Checkout `/var/www/but2/botdir/lichess-bot-martuni` (Fork `Etschmia/lichess-bot`),
+Unit `lichess-bot-martuni.service`, Engine aus
+`/var/www/but2/botdir/enginemartuni`. Hier läuft **kein** lichess-bot mehr;
+`lichess-bot.service` ist gestoppt und disabled — **nie wieder starten**
+(doppelte Lichess-Session mit demselben Token). Dieser Server ist nur noch für
+die Engine-Entwicklung da (Code, A/B-Matches — auch tagsüber —, Auswertungen).
 
-### Systemd-Service
+- **Rollout:** Hier auf `master` committen und nach `origin` pushen, Horst den
+  Commit-Hash per `SendMessage` schicken. Horst macht `git pull` +
+  `cargo build --release` + Smoke-Test und meldet Hash und Build-mtime zurück.
+  Diese **Build-mtime auf Horst ist der Rollout-Zeitpunkt** (Lookback, Cut für
+  die Archivierung) — in der Roadmap festhalten. Kein Bot-Restart nötig
+  (lichess-bot startet die Engine pro Partie neu).
+- **`.env`-Änderungen** (Buch, Hash, Syzygy) muss Horst bei sich nachziehen —
+  die `.env` hier gilt nur für lokale Tests.
+- **Partien:** Horst spiegelt beendete Partien alle 10 Minuten nach
+  `~/martuni_games/game_records/` (rsync mit eigener `sent.log`, also robust
+  gegen das Archivieren). Archiv: `~/martuni_games/game_archiv/`. Von dort
+  laufen Schleuse, `info` und Auswertungen wie gewohnt.
+- **Betrieb des Bots** (config.yml, Upstream-Sync des Forks, Restarts, Logs):
+  alles bei Horst. Betriebs-Doku von damals: `~/grok_bot_schleuse/BETRIEB-lichess-bot.md`.
+- Challenge-Crons sind aus; eingehende Bot-Challenges werden angenommen.
 
-Der Bot läuft als **`lichess-bot.service`** — nicht manuell starten, sonst entstehen doppelte Lichess-Sessions!
-
-```
-# Pfade sind serverspezifisch
-Unit:             /etc/systemd/system/lichess-bot.service
-User:             <systemuser>
-WorkingDirectory: <homedir>/lichess-bot
-ExecStart:        venv/bin/python lichess-bot.py
-Restart:          always
-```
-
-- **Hard Restart** (unterbricht laufende Partien): `sudo systemctl restart lichess-bot.service`
-- **Graceful:** `quit_after_all_games_finish: true` in config.yml setzen, warten bis keine Partie läuft, dann restart.
-- **Logs:** `journalctl -u lichess-bot.service -f`
-- Änderungen an `config.yml` werden erst nach einem Restart wirksam.
-- Engine-Rebuilds (`cargo build --release`) und `.env`-Änderungen brauchen **keinen** Restart: lichess-bot startet das Binary für jede Partie neu (`lib/lichess_bot.py:702`). Sie gelten ab der nächsten Partie; Rollout-Zeitpunkt = mtime von `target/release/martuni`.
-
-### Challenge-Cron
-
-`challenge_cron.py` läuft stündlich (Crontab, `45 * * * *`) und fordert automatisch einen Online-Bot heraus (abwechselnd 5+0 Blitz und 15+10 Rapid). Ergebnisse werden in `challenge_cron_tracking.json` erfasst. Log: `lichess_bot_auto_logs/challenge_cron.log`.
-
-### Blunder-Analyse (seit 14.09.2026 ausgelagert auf den Grok-Bot)
+### Blunder-Analyse (seit 14.09.2026 ausgelagert, Worker heute auf Horst)
 
 Dieser Server rechnet **keine Stockfish-Analysen mehr selbst** (Server am
 Limit). `tools/analyze_cron.py` ist in der Crontab auskommentiert. Stattdessen
