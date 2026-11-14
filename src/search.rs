@@ -2281,10 +2281,20 @@ fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Op
     let increment = inc.unwrap_or(0);
 
     // ~1/30 der verbleibenden Zeit + 80% des Inkrements, minus Overhead,
-    // gedeckelt auf "verbleibende Zeit minus Sicherheitsabstand".
+    // mindestens 50 ms — gedeckelt auf "verbleibende Zeit minus 50 ms
+    // Sicherheitsabstand".
+    //
+    // Der Deckel ist die HARTE Grenze: frueher wurde auch er auf mindestens
+    // 50 ms angehoben, sodass die Engine bei weniger als 100 ms Restzeit
+    // mehr Zeit einplante, als sie noch hatte (bei 1 ms Rest: 50 ms Budget
+    // → Zeitueberschreitung, Code-Review 14.11.2026, #9). Jetzt gilt das
+    // Mindestbudget nur, solange die Uhr es hergibt; darunter bleibt 1 ms,
+    // also "sofort ziehen": Tiefe 1 ist bis zur ersten Deadline-Pruefung
+    // (alle 2048 Knoten) praktisch immer fertig, sonst greift der legale
+    // Fallback-Zug.
     let budget = remaining / 30 + (increment * 8 / 10);
     let budget = budget.saturating_sub(move_overhead).max(50);
-    let ceiling = remaining.saturating_sub(50).max(50);
+    let ceiling = remaining.saturating_sub(50).max(1);
     Some(Duration::from_millis(budget.min(ceiling)))
 }
 
@@ -2854,6 +2864,35 @@ mod tests {
         assert_eq!(tt_key(42, TT_HALFMOVE_SPLIT_FROM - 1), 42);
         assert_ne!(tt_key(42, TT_HALFMOVE_SPLIT_FROM), 42);
         assert_ne!(tt_key(42, 98), tt_key(42, 99));
+    }
+
+    /// Code-Review 14.11.2026, #9: das Budget darf die Restzeit nie
+    /// ueberschreiten; ab 100 ms Restzeit bleibt alles wie vorher.
+    #[test]
+    fn think_time_never_exceeds_remaining_clock() {
+        let ms = |wtime: u64, winc: u64| {
+            let p = GoParams {
+                wtime: Some(wtime),
+                btime: Some(wtime),
+                winc: Some(winc),
+                binc: Some(winc),
+                ..GoParams::default()
+            };
+            calculate_think_time(&p, 10, Color::White).unwrap().as_millis() as u64
+        };
+        for remaining in [1, 10, 49, 50, 51, 60, 99] {
+            let t = ms(remaining, 0);
+            assert!(t < remaining.max(2), "rest {remaining} ms → budget {t} ms");
+            // Auch ein grosses Inkrement hebt die harte Grenze nicht an.
+            assert!(ms(remaining, 2_000) < remaining.max(2));
+        }
+        assert_eq!(ms(1, 0), 1);
+        assert_eq!(ms(60, 0), 10);
+        // Unveraenderte Faelle: Deckel bzw. Mindestbudget wie bisher.
+        assert_eq!(ms(100, 0), 50);
+        assert_eq!(ms(1_000, 0), 50);
+        assert_eq!(ms(180_000, 0), 5_990);
+        assert_eq!(ms(60_000, 2_000), 3_590);
     }
 
     fn run_search_scored(
