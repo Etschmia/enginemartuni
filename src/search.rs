@@ -592,6 +592,20 @@ fn alpha_beta<B: EngineBoard>(
             return 0;
         }
         if halfmove >= 100 {
+            // 50-Zuege-Regel — aber ein Matt geht vor: setzt der 100.
+            // Halbzug matt, ist die Partie gewonnen, nicht remis. Vorher
+            // gab es hier pauschal 0, und die Engine verwarf bei Zaehler
+            // 99 ein vorhandenes Matt in 1 zugunsten eines Remiszugs
+            // (Code-Review 14.11.2026, #5). Dasselbe gilt fuer sofortige
+            // Varianten-Enden (dritter Schach, Koenig auf dem Huegel, …):
+            // dort liefert das Backend ebenfalls keine legalen Zuege mehr.
+            // Die Zuggenerierung faellt nur an Knoten mit Zaehler >= 100
+            // an, also praktisch nie im Hot-Path.
+            if board.legal_gen().count_remaining() == 0 {
+                // Patt liefert hier ebenfalls 0 — faellt mit dem Remis zusammen.
+                let in_check = board.checkers().popcnt() > 0;
+                return terminal_score(board, in_check, ply);
+            }
             return 0;
         }
     }
@@ -2724,6 +2738,41 @@ mod tests {
         let result = search(req).expect("Crazyhouse-Suche liefert einen Zug");
         assert_eq!(result.best, winning);
         assert!(result.score > MATE_THRESHOLD);
+    }
+
+    /// Suche aus einer FEN mit vorgegebenem Halbzugzaehler (50-Zuege-Tests).
+    fn run_search_hmc(
+        fen: &str,
+        halfmove_clock: u8,
+        depth: u32,
+        tt: Arc<Mutex<TranspositionTable>>,
+    ) -> SearchResult {
+        let board = Board::from_str(fen).unwrap();
+        let req = SearchRequest {
+            history: vec![board.get_hash()],
+            board,
+            halfmove_clock,
+            params: GoParams { depth: Some(depth), ..GoParams::default() },
+            tt,
+            book: Arc::new(BookSet::load(Path::new("."), &[])),
+            eval: Arc::new(EvalParams::default()),
+            stop: Arc::new(AtomicBool::new(false)),
+            pondering: Arc::new(AtomicBool::new(false)),
+            move_overhead: 0,
+            syzygy: None,
+        };
+        search(req).expect("Suche liefert einen Zug")
+    }
+
+    /// Code-Review 14.11.2026, #5: ein Matt mit dem 100. Halbzug gewinnt —
+    /// die 50-Zuege-Pruefung darf es nicht als Remis abschneiden.
+    #[test]
+    fn mate_on_hundredth_halfmove_beats_fifty_move_draw() {
+        let fen = "7k/8/5KQ1/8/8/8/8/8 w - - 99 1";
+        let tt = Arc::new(Mutex::new(TranspositionTable::new(1)));
+        let r = run_search_hmc(fen, 99, 1, tt);
+        assert_eq!(move_to_uci(r.best), "g6g7");
+        assert!(r.score > MATE_THRESHOLD, "score {}", r.score);
     }
 
     fn run_search_scored(
