@@ -10,6 +10,26 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**14.11.2026 — Code-Review abgearbeitet: zehn Befunde, alle stichhaltig, alle behoben (lokal, nicht ausgerollt).**
+Details und Commits in [code-review-2026-11-14.md](code-review-2026-11-14.md),
+Abschnitt „Nachverfolgung“.
+
+- UCI: `isready` blockiert nicht mehr, Ponder-Ergebnisse warten auf
+  `ponderhit`/`stop`, `go infinite` läuft bis `stop`, `SyzygyPath`-Wechsel
+  lädt neu.
+- Suche: Matt geht vor 50-Züge-Remis; TT-Schlüssel ab Halbzugzähler 80 an
+  den Zähler gebunden (Schwelle geschätzt, Tobias-Entscheid offen);
+  Three-Check-FEN liefert den richtigen Zähler; Zeitbudget überschreitet
+  die Restzeit nicht mehr (wirkt unter 100 ms).
+- Werkzeuge: Schleusen-Import speichert vor dem Bestätigen; Archivierung
+  und Sync teilen sich einen Lock.
+- Tests: 230 Engine-, 8 UCI-Integrations- und 5 Python-Tests grün.
+- Wettkampf alt (`cdedb76`) gegen neu (`4d2c880`), 15 Partien 3+0:
+  neu 6 : 9 (+2 =8 −5), Elo −70, 95-%-Bereich −211 bis +50 — kein belegter
+  Unterschied. Die geänderten Stellen waren in keiner entschiedenen Partie
+  aktiv (höchster Halbzugzähler dort 13, niedrigste Restzeit 13,9 s).
+- Offen: Rollout (push, Hash an Horst); bei Bedarf ein längerer A/B.
+
 **13.10.2026 — Lichess-Bot zieht zu Horst um; dieser Server macht nur
 noch Engine-Entwicklung.** Tobias-Entscheid: Martuni spielt künftig auf
 Horst (SYR-PE-BUTDEV, Claude-Session „Horst“, der auch schon die

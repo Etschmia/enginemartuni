@@ -405,5 +405,33 @@ Der gemeldete unbenutzte `MoveGen`-Import in `src/syzygy.rs` ist mit Commit
 
 - Kein Rollout: Die Commits liegen lokal auf `master`, nicht gepusht, Horst
   nicht informiert.
-- Wettkampf alte gegen neue Engine (15 Partien, 3+0, Standard) wegen der
-  Befunde 5, 6 und 9: Ergebnis siehe unten.
+- Die Schwelle 80 aus Befund 6 ist geschätzt; die Entscheidung über den
+  Ansatz liegt bei Tobias.
+
+### Wettkampf alt gegen neu (14.11.2026, 19:14–20:22)
+
+15 Partien, 3+0, Standardschach, in der engine-arena:
+`~/engine-arena/match-martuni-review-2026-11-14/`. Alt = `cdedb76`,
+neu = `4d2c880`. Beide mit derselben `.env` (Buch `martuni_std.bin`,
+Hash 256 MB, Syzygy 3-4-5) und derselben `eval.toml`. 8 Arena-Eröffnungen,
+7 davon mit beiden Farben; neu hatte 8-mal Weiß.
+
+| | Siege | Remis | Niederlagen | Punkte |
+|---|---|---|---|---|
+| neu gegen alt | 2 | 8 | 5 | 6 : 9 |
+
+- Elo aus Sicht von neu: −70, 95-%-Bereich −211 bis +50, LOS 12,8 %.
+  Gleichstand liegt im Bereich; 15 Partien belegen keinen Unterschied.
+- Keine Zeitüberschreitung, kein illegaler Zug, kein Absturz. Alle 7
+  entschiedenen Partien endeten matt, alle 8 Remis durch Wiederholung.
+  Niedrigste Restzeit der Serie: 13,9 s.
+- **Die geänderten Stellen waren in keiner entschiedenen Partie aktiv.**
+  Befund 9 greift erst unter 100 ms Restzeit, Befund 6 erst ab
+  Halbzugzähler 80, Befund 5 bei Zähler 100. In den 7 entschiedenen
+  Partien lag der höchste Zähler bei 13. Nur Partie 10 (Remis, 261
+  Halbzüge) erreichte Zähler 99. Die fünf Niederlagen lassen sich deshalb
+  nicht auf die Fixes zurückführen; zusammen mit den knotengleichen
+  Stichproben spricht das für Streuung zwischen zwei in diesen Partien
+  gleich rechnenden Engines. Bewiesen ist das mit 15 Partien nicht.
+- Mittlere Suchtiefe (Median der Partiemediane): neu 11, alt 12; je Partie
+  höchstens 1 Unterschied.
