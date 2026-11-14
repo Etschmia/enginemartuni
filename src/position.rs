@@ -45,11 +45,7 @@ impl<B: EngineBoard> Position<B> {
 
     pub fn set_fen(&mut self, fen: &str) -> Result<(), String> {
         let board = B::from_fen(fen)?;
-        let hmc = fen
-            .split_whitespace()
-            .nth(4)
-            .and_then(|s| s.parse::<u8>().ok())
-            .unwrap_or(0);
+        let hmc = halfmove_clock_from_fen(fen);
         self.board = board;
         self.hash_history = vec![self.board.get_hash()];
         self.halfmove_clock = hmc;
@@ -74,6 +70,25 @@ impl<B: EngineBoard> Position<B> {
         }
         Ok(())
     }
+}
+
+/// Liest den Halbzugzaehler (50-Zuege-Regel) aus einer FEN.
+///
+/// Standard-FEN: Brett, Seite, Rochade, en passant, **Halbzugzaehler**,
+/// Zugnummer — der Zaehler ist das fuenfte Feld. Three-Check schiebt aber
+/// die verbleibenden Schachs davor (`... - - 3+3 0 1`, Lichess-Format);
+/// die feste Position lieferte dort "3+3", das Parsen scheiterte und der
+/// Zaehler wurde stillschweigend 0 (Code-Review 14.11.2026, #7). Deshalb:
+/// ab dem fuenften Feld das erste nehmen, das eine reine Zahl ist. Das
+/// aeltere Format mit angehaengtem Zaehler (`... - - 0 1 +0+0`) passt
+/// ebenfalls, dort steht der Halbzugzaehler regulaer an fuenfter Stelle.
+fn halfmove_clock_from_fen(fen: &str) -> u8 {
+    fen.split_whitespace()
+        .skip(4)
+        .find(|s| s.bytes().all(|b| b.is_ascii_digit()))
+        // Werte ueber 255 (ungueltig, die Regel greift bei 100) saettigen.
+        .map(|s| s.parse::<u8>().unwrap_or(u8::MAX))
+        .unwrap_or(0)
 }
 
 /// Zug → UCI-Text. Funktioniert fuer beide Backends: im 960-Backend ist die
@@ -110,4 +125,38 @@ pub fn move_to_uci(m: ChessMove) -> String {
         s.push(ch);
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board_shak::BoardThreeCheck;
+    use chess::Board;
+
+    #[test]
+    fn halfmove_clock_standard_fen() {
+        assert_eq!(halfmove_clock_from_fen("7k/8/8/8/8/8/8/R3K3 w - - 99 1"), 99);
+        assert_eq!(halfmove_clock_from_fen("7k/8/8/8/8/8/8/R3K3 w - - 0 1"), 0);
+        // Verkuerzte FEN ohne Zaehler → 0.
+        assert_eq!(halfmove_clock_from_fen("7k/8/8/8/8/8/8/R3K3 w - -"), 0);
+    }
+
+    #[test]
+    fn halfmove_clock_three_check_fen() {
+        // Lichess-Format: Schachzaehler VOR dem Halbzugzaehler.
+        assert_eq!(halfmove_clock_from_fen("7k/8/8/8/8/8/8/R3K3 w - - 3+3 99 1"), 99);
+        // Aelteres Format: Schachzaehler am Ende.
+        assert_eq!(halfmove_clock_from_fen("7k/8/8/8/8/8/8/R3K3 w - - 42 1 +0+0"), 42);
+    }
+
+    #[test]
+    fn set_fen_keeps_halfmove_clock_per_backend() {
+        let mut std_pos: Position<Board> = Position::new();
+        std_pos.set_fen("7k/8/8/8/8/8/8/R3K3 w - - 99 1").unwrap();
+        assert_eq!(std_pos.halfmove_clock(), 99);
+
+        let mut tc: Position<BoardThreeCheck> = Position::new();
+        tc.set_fen("7k/8/8/8/8/8/8/R3K3 w - - 3+3 99 1").unwrap();
+        assert_eq!(tc.halfmove_clock(), 99);
+    }
 }
