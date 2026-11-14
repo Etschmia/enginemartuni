@@ -65,9 +65,13 @@ pub fn uci_loop() {
                 println!("uciok");
             }
             "isready" => {
-                if let Some(h) = search_handle.take() {
-                    let _ = h.join();
-                }
+                // Sofort antworten — auch waehrend einer laufenden Suche
+                // (UCI: "isready" muss jederzeit beantwortet werden). Frueher
+                // stand hier ein join() auf den Such-Thread: der einzige
+                // Eingabe-Thread hing dann bis zum Suchende fest und konnte
+                // weder `stop` noch `quit` lesen (Code-Review 14.11.2026, #1).
+                // println! lockt stdout zeilenweise, die Antwort kann sich
+                // also nicht mit einer info-Zeile der Suche vermischen.
                 println!("readyok");
             }
             "setoption" => {
