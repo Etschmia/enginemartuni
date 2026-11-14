@@ -153,3 +153,27 @@ fn go_after_unreleased_ponder_does_not_hang() {
     assert!(e.bestmove(2 * SEC).is_some(), "bestmove der abgebrochenen Ponder-Suche");
     assert!(e.bestmove(2 * SEC).is_some(), "bestmove der neuen Suche");
 }
+
+/// Befund 8: `go infinite` laeuft, bis `stop` kommt — nicht nur ~1 s.
+#[test]
+fn go_infinite_runs_until_stop() {
+    let mut e = Engine::start();
+    e.send("position startpos");
+    e.send("go infinite");
+    assert!(e.silent("bestmove", 2 * SEC), "kein bestmove ohne stop");
+    e.send("stop");
+    assert!(e.bestmove(5 * SEC).is_some(), "bestmove nach stop");
+}
+
+/// Befund 8: auch ein sofort fertiges Ergebnis (hier: Matt in 1) wird bei
+/// `go infinite` bis zum `stop` gehalten.
+#[test]
+fn go_infinite_holds_early_result() {
+    let mut e = Engine::start();
+    e.send("position fen 7k/8/5KQ1/8/8/8/8/8 w - - 0 1");
+    e.send("go infinite");
+    assert!(e.silent("bestmove", SEC / 2));
+    e.send("stop");
+    let bm = e.bestmove(2 * SEC).expect("bestmove nach stop");
+    assert!(bm.starts_with("bestmove g6g7"), "{bm}");
+}

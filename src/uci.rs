@@ -41,7 +41,7 @@ pub fn uci_loop() {
     let pondering = Arc::new(AtomicBool::new(false));
     let mut search_handle: Option<thread::JoinHandle<()>> = None;
     // True, wenn die zuletzt gestartete Suche ihr Ergebnis zurueckhaelt, bis
-    // die GUI es freigibt (`go ponder`). Nur fuer den Schutz im `go`-Zweig.
+    // die GUI es freigibt (`go ponder`, `go infinite`). Nur fuer den Schutz im `go`-Zweig.
     let mut open_ended = false;
 
     let stdin = io::stdin();
@@ -116,7 +116,7 @@ pub fn uci_loop() {
             }
             "go" => {
                 if let Some(h) = search_handle.take() {
-                    // Eine Suche, die auf ihre Freigabe wartet (Ponder),
+                    // Eine Suche, die auf ihre Freigabe wartet (Ponder, infinite),
                     // endet nie von selbst. Kommt trotzdem ein neues `go`
                     // (Protokollverstoss der GUI), brechen wir sie ab, statt
                     // im join() fuer immer zu haengen. Zeitgesteuerte Suchen
@@ -131,7 +131,7 @@ pub fn uci_loop() {
                 stop.store(false, Ordering::Relaxed);
                 let params = parse_go_params(&tokens);
                 pondering.store(params.ponder, Ordering::Relaxed);
-                open_ended = params.ponder;
+                open_ended = params.ponder || params.infinite;
 
                 search_handle = Some(with_game_pos!(&position, |p| spawn_search(
                     p,
@@ -294,7 +294,11 @@ fn spawn_search<B: EngineBoard>(
     // `search()` kann aber frueher fertig sein (Buchtreffer, gefundenes Matt,
     // Tiefenlimit). Dann halten wir das fertige Ergebnis hier zurueck
     // (Code-Review 14.11.2026, #2).
+    //
+    // `go infinite` (Befund #8): gleiche Idee, aber die Freigabe ist allein
+    // `stop` — auch ein Buchtreffer oder Matt wird bis dahin gehalten.
     let hold_until_released = req.params.ponder;
+    let hold_until_stop = req.params.infinite;
     let stop_flag = Arc::clone(stop);
     let ponder_flag = Arc::clone(pondering);
 
@@ -305,6 +309,11 @@ fn spawn_search<B: EngineBoard>(
             // das Stop-Flag. 1 ms Schlafintervall: die Freigabe kommt ohne
             // spuerbare Verzoegerung an, der Thread kostet im Leerlauf nichts.
             while ponder_flag.load(Ordering::Relaxed) && !stop_flag.load(Ordering::Relaxed) {
+                thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        if hold_until_stop {
+            while !stop_flag.load(Ordering::Relaxed) {
                 thread::sleep(std::time::Duration::from_millis(1));
             }
         }
@@ -422,6 +431,10 @@ fn parse_go_params(tokens: &[&str]) -> GoParams {
             }
             "ponder" => {
                 params.ponder = true;
+                i += 1;
+            }
+            "infinite" => {
+                params.infinite = true;
                 i += 1;
             }
             _ => { i += 1; }

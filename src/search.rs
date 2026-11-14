@@ -134,6 +134,9 @@ pub struct GoParams {
     pub depth: Option<u32>,
     pub movetime: Option<u64>,
     pub ponder: bool,
+    /// `go infinite`: ohne Zeitlimit suchen, bis `stop` kommt. Das Ergebnis
+    /// wird in uci.rs bis zum `stop` zurueckgehalten.
+    pub infinite: bool,
 }
 
 impl Default for GoParams {
@@ -146,6 +149,7 @@ impl Default for GoParams {
             depth: None,
             movetime: None,
             ponder: false,
+            infinite: false,
         }
     }
 }
@@ -2185,6 +2189,12 @@ fn see_quiet<B: EngineBoard>(board: &B, mv: ChessMove) -> i32 {
 }
 
 fn calculate_think_time(params: &GoParams, move_overhead: u64, stm: Color) -> Option<Duration> {
+    // `go infinite` hat keine Uhr — es endet nur durch `stop`. Frueher wurde
+    // das Token ignoriert und die Suche lief in den 30-s-Default unten
+    // (= 1 s Bedenkzeit, Code-Review 14.11.2026, #8).
+    if params.infinite {
+        return None;
+    }
     if let Some(movetime) = params.movetime {
         let ms = movetime.saturating_sub(move_overhead).max(1);
         return Some(Duration::from_millis(ms));
