@@ -40,6 +40,9 @@ pub fn uci_loop() {
     let stop = Arc::new(AtomicBool::new(false));
     let pondering = Arc::new(AtomicBool::new(false));
     let mut search_handle: Option<thread::JoinHandle<()>> = None;
+    // True, wenn die zuletzt gestartete Suche ihr Ergebnis zurueckhaelt, bis
+    // die GUI es freigibt (`go ponder`). Nur fuer den Schutz im `go`-Zweig.
+    let mut open_ended = false;
 
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
@@ -113,12 +116,22 @@ pub fn uci_loop() {
             }
             "go" => {
                 if let Some(h) = search_handle.take() {
+                    // Eine Suche, die auf ihre Freigabe wartet (Ponder),
+                    // endet nie von selbst. Kommt trotzdem ein neues `go`
+                    // (Protokollverstoss der GUI), brechen wir sie ab, statt
+                    // im join() fuer immer zu haengen. Zeitgesteuerte Suchen
+                    // laufen wie bisher regulaer zu Ende.
+                    if open_ended && !h.is_finished() {
+                        stop.store(true, Ordering::Relaxed);
+                        pondering.store(false, Ordering::Relaxed);
+                    }
                     let _ = h.join();
                 }
 
                 stop.store(false, Ordering::Relaxed);
                 let params = parse_go_params(&tokens);
                 pondering.store(params.ponder, Ordering::Relaxed);
+                open_ended = params.ponder;
 
                 search_handle = Some(with_game_pos!(&position, |p| spawn_search(
                     p,
@@ -276,8 +289,26 @@ fn spawn_search<B: EngineBoard>(
         syzygy: syzygy.as_ref().map(Arc::clone),
     };
 
+    // Ponder-Suche: das Ergebnis darf erst nach `ponderhit` oder `stop`
+    // veroeffentlicht werden — die Engine rechnet auf der Zeit des Gegners.
+    // `search()` kann aber frueher fertig sein (Buchtreffer, gefundenes Matt,
+    // Tiefenlimit). Dann halten wir das fertige Ergebnis hier zurueck
+    // (Code-Review 14.11.2026, #2).
+    let hold_until_released = req.params.ponder;
+    let stop_flag = Arc::clone(stop);
+    let ponder_flag = Arc::clone(pondering);
+
     thread::spawn(move || {
-        if let Some(result) = search(req) {
+        let result = search(req);
+        if hold_until_released {
+            // `ponderhit` loescht das Ponder-Flag, `stop`/`quit`/EOF setzen
+            // das Stop-Flag. 1 ms Schlafintervall: die Freigabe kommt ohne
+            // spuerbare Verzoegerung an, der Thread kostet im Leerlauf nichts.
+            while ponder_flag.load(Ordering::Relaxed) && !stop_flag.load(Ordering::Relaxed) {
+                thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        if let Some(result) = result {
             match result.ponder {
                 Some(p) => println!(
                     "bestmove {} ponder {}",

@@ -116,3 +116,40 @@ fn isready_and_stop_work_during_search() {
     e.send("stop");
     assert!(e.bestmove(5 * SEC).is_some(), "bestmove nach stop");
 }
+
+/// Befund 2: eine Ponder-Suche, die frueh fertig ist (Tiefenlimit), darf
+/// ihr Ergebnis erst nach `ponderhit` ausgeben.
+#[test]
+fn ponder_depth_limit_waits_for_ponderhit() {
+    let mut e = Engine::start();
+    e.send("position startpos");
+    e.send("go ponder depth 1");
+    assert!(e.silent("bestmove", SEC / 2), "kein bestmove vor ponderhit");
+    e.send("ponderhit");
+    assert!(e.bestmove(2 * SEC).is_some(), "bestmove nach ponderhit");
+}
+
+/// Befund 2: ein im Ponder-Modus gefundenes Matt wird bis `stop` gehalten.
+#[test]
+fn ponder_mate_waits_for_stop() {
+    let mut e = Engine::start();
+    e.send("position fen 7k/8/5KQ1/8/8/8/8/8 w - - 0 1");
+    e.send("go ponder wtime 60000 btime 60000");
+    assert!(e.silent("bestmove", SEC / 2), "kein bestmove vor stop");
+    e.send("stop");
+    let bm = e.bestmove(2 * SEC).expect("bestmove nach stop");
+    assert!(bm.starts_with("bestmove g6g7"), "{bm}");
+}
+
+/// Ein neues `go` waehrend eines gehaltenen Ponder-Ergebnisses darf den
+/// UCI-Thread nicht aufhaengen.
+#[test]
+fn go_after_unreleased_ponder_does_not_hang() {
+    let mut e = Engine::start();
+    e.send("position startpos");
+    e.send("go ponder depth 1");
+    assert!(e.silent("bestmove", SEC / 4));
+    e.send("go depth 1");
+    assert!(e.bestmove(2 * SEC).is_some(), "bestmove der abgebrochenen Ponder-Suche");
+    assert!(e.bestmove(2 * SEC).is_some(), "bestmove der neuen Suche");
+}
