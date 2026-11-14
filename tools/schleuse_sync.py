@@ -173,7 +173,14 @@ def import_results(
         output_path: load_state(output_path),
         variant_output_path: load_state(variant_output_path),
     }
-    dirty: set[Path] = set()
+    # Erst speichern, dann bestätigen: die Ergebnisdateien bleiben in inbox/
+    # (und die PGNs in outbox/), bis ihre Zustandsdatei auf der Platte ist.
+    # Vorher wurde jede Datei sofort nach done/ verschoben, der Zustand aber
+    # erst am Ende des Stapels geschrieben — ein Abbruch dazwischen ließ
+    # bestätigte Ergebnisse zurück, die in keiner Analysedatei standen und
+    # nie wieder importiert wurden (Code-Review 14.11.2026, #3).
+    # pending[Zustandsdatei] = [(Ergebnisdatei, PGN-Name), …]
+    pending: dict[Path, list[tuple[Path, str]]] = {}
     imported = failed = 0
 
     for res in files:
@@ -222,15 +229,19 @@ def import_results(
         imported += 1
         if dry_run:
             continue
-        dirty.add(target)
+        pending.setdefault(target, []).append((res, pgn_name))
         if failures.pop(pgn_name, None) is not None:
             logging.info("frühere Fehlschläge für %s zurückgesetzt", pgn_name)
-        move_to_done(res, done)
-        (outbox / pgn_name).unlink(missing_ok=True)
 
-    if not dry_run:
-        for path in dirty:
-            save_state(path, states[path])
+    # Pro Zustandsdatei: speichern, danach ihre Ergebnisse bestätigen. Bricht
+    # der Lauf zwischen Speichern und Verschieben ab, liegt das Ergebnis noch
+    # in inbox/ und wird beim nächsten Tick erneut importiert — merge_result
+    # dedupliziert über (game_id, ply), es entstehen keine Doppelten.
+    for path, confirmed in pending.items():
+        save_state(path, states[path])
+        for res, pgn_name in confirmed:
+            move_to_done(res, done)
+            (outbox / pgn_name).unlink(missing_ok=True)
     return imported, failed
 
 
