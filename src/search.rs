@@ -345,7 +345,7 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
         };
         if let Some(m) = hit {
             println!("info string book hit");
-            let ponder = ponder_move_from_tt(&req.board, m, &tt_guard);
+            let ponder = ponder_move_from_tt(&req.board, m, req.halfmove_clock, &tt_guard);
             return Some(SearchResult { best: m, ponder, score: 0 });
         }
     }
@@ -364,7 +364,7 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
         if root_moves.len() == 1 {
             let only = root_moves[0];
             println!("info string forced move");
-            let ponder = ponder_move_from_tt(&req.board, only, &tt_guard);
+            let ponder = ponder_move_from_tt(&req.board, only, req.halfmove_clock, &tt_guard);
             return Some(SearchResult { best: only, ponder, score: 0 });
         }
     }
@@ -380,7 +380,7 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
                 syz.probe_root_move(&req.board, req.halfmove_clock)
             {
                 println!("info string syzygy root hit");
-                let ponder = ponder_move_from_tt(&req.board, tb_move, &tt_guard);
+                let ponder = ponder_move_from_tt(&req.board, tb_move, req.halfmove_clock, &tt_guard);
                 return Some(SearchResult {
                     best: tb_move,
                     ponder,
@@ -499,7 +499,7 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
     }
 
     last_move.map(|best| {
-        let ponder = ponder_move_from_tt(&req.board, best, &*state.tt);
+        let ponder = ponder_move_from_tt(&req.board, best, req.halfmove_clock, &*state.tt);
         SearchResult {
             best,
             ponder,
@@ -514,18 +514,67 @@ pub fn search<B: EngineBoard>(req: SearchRequest<B>) -> Option<SearchResult> {
 fn ponder_move_from_tt<B: EngineBoard>(
     board: &B,
     best: ChessMove,
+    halfmove: u8,
     tt: &TranspositionTable,
 ) -> Option<ChessMove> {
     let next = board.make_move_new(best);
     if next.status() != BoardStatus::Ongoing {
         return None;
     }
-    let key = next.get_hash();
+    // Derselbe TT-Schluessel, unter dem die Suche die Antwortstellung
+    // abgelegt hat (inkl. Halbzugzaehler-Anteil, siehe `tt_key`).
+    let next_halfmove = if board.resets_halfmove(best) {
+        0
+    } else {
+        halfmove.saturating_add(1)
+    };
+    let key = tt_key(next.get_hash(), next_halfmove);
     let mv = tt.probe(key).and_then(|e| e.best_move)?;
     if next.legal_gen().any(|m| m == mv) {
         Some(mv)
     } else {
         None
+    }
+}
+
+/// Ab diesem Halbzugzaehler bekommt jede Stellung pro Zaehlerstand einen
+/// eigenen TT-Schluessel (siehe `tt_key`).
+const TT_HALFMOVE_SPLIT_FROM: u8 = 80;
+
+/// TT-Schluessel einer Stellung unter Beruecksichtigung der 50-Zuege-Regel.
+///
+/// Der Zobrist-Hash kennt den Halbzugzaehler nicht. Ein Score, der mit
+/// frischem Zaehler berechnet wurde ("gewinnt in 15 Zuegen"), ist kurz vor
+/// der Remisgrenze aber falsch — dort endet derselbe Teilbaum im 50-Zuege-
+/// Remis. Ohne Trennung uebernahm die Suche solche Scores per TT-Cutoff,
+/// ohne die Remisblaetter je zu besuchen (Code-Review 14.11.2026, #6).
+///
+/// Loesung: nahe der Grenze (Zaehler >= `TT_HALFMOVE_SPLIT_FROM`) wird der
+/// Zaehler in den Schluessel gemischt. Dieselbe Stellung mit Zaehler 85 und
+/// 98 belegt dann zwei getrennte Eintraege, jeder exakt fuer seinen Stand.
+///
+/// Warum nicht immer mischen? Zugumstellungen mit einem Bauernzug an
+/// verschiedener Stelle (1.a3 Nf6 2.Nf3 gegen 1.Nf3 Nf6 2.a3) erreichen
+/// dieselbe Stellung mit verschiedenem Zaehler — im normalen Mittelspiel
+/// gingen diese Transpositionen verloren, obwohl die 50-Zuege-Regel dort
+/// keine Rolle spielt. Unterhalb der Schwelle bleibt der Schluessel deshalb
+/// der reine Hash (Suche dort bit-identisch zu vorher). Die Schwelle 80
+/// laesst 20 Halbzuege Abstand zur Grenze: ein unterhalb abgelegter Eintrag
+/// koennte nur mit einem Teilbaum von 20+ Halbzuegen Tiefe ein 50-Zuege-Blatt
+/// gesehen haben, und selbst dann weichen die Zaehlerstaende zweier Wege zur
+/// selben Stellung nur um wenige Halbzuege voneinander ab.
+///
+/// Die Wiederholungserkennung nutzt weiter den reinen Hash — fuer sie ist
+/// der Zaehler egal.
+#[inline]
+fn tt_key(hash: u64, halfmove: u8) -> u64 {
+    if halfmove < TT_HALFMOVE_SPLIT_FROM {
+        hash
+    } else {
+        // Ungerade 64-Bit-Konstante (Goldener Schnitt): verteilt den kleinen
+        // Zaehlerwert ueber alle Bits, damit sich Index UND Pruefschluessel
+        // des TT-Eintrags aendern.
+        hash ^ (halfmove as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
     }
 }
 
@@ -665,7 +714,10 @@ fn alpha_beta<B: EngineBoard>(
     // Richtungen heikel — zu pessimistisch verzerrt Wurzelzuege auf 0,
     // zu optimistisch laesst Engine in 3-fold laufen, obwohl Mate da ist.
     let tt_move: Option<ChessMove>;
-    if let Some(entry) = state.tt.probe(key) {
+    // TT-Zugriffe laufen ueber `tt_key` (Hash + ggf. Halbzugzaehler), die
+    // Wiederholungserkennung weiter ueber den reinen Hash `key`.
+    let tt_key = tt_key(key, halfmove);
+    if let Some(entry) = state.tt.probe(tt_key) {
         if entry.depth as i32 >= depth && ply > 0 {
             // Mate-Distanzen liegen knotenrelativ in der TT (siehe
             // mate_score_to_tt) — erst auf die aktuelle Wurzel
@@ -1166,7 +1218,7 @@ fn alpha_beta<B: EngineBoard>(
     // sonst transportiert der Eintrag die Wurzeldistanz DIESER Suche
     // als Fossil in alle spaeteren Suchen.
     state.tt.store(
-        key,
+        tt_key,
         best_move,
         mate_score_to_tt(best_score, ply),
         depth as i8,
@@ -2773,6 +2825,35 @@ mod tests {
         let r = run_search_hmc(fen, 99, 1, tt);
         assert_eq!(move_to_uci(r.best), "g6g7");
         assert!(r.score > MATE_THRESHOLD, "score {}", r.score);
+    }
+
+    /// Code-Review 14.11.2026, #6: ein mit frischem Zaehler berechneter
+    /// TT-Score darf kurz vor der 50-Zuege-Grenze nicht uebernommen werden.
+    /// K+T gegen K kann in zwei verbleibenden Halbzuegen weder mattsetzen
+    /// noch den Zaehler zuruecksetzen → 0, auch mit vorgewaermter TT.
+    #[test]
+    fn tt_score_is_not_reused_across_fifty_move_boundary() {
+        let fen = "7k/8/8/8/8/8/8/R3K3 w - - 0 1";
+        let tt = Arc::new(Mutex::new(TranspositionTable::new(1)));
+        let warm = run_search_hmc(fen, 0, 2, Arc::clone(&tt));
+        assert!(warm.score > 300, "Aufwaermsuche sieht den Mehrturm: {}", warm.score);
+        let late = run_search_hmc(fen, 98, 2, Arc::clone(&tt));
+        assert_eq!(late.score, 0, "Zaehler 98 + 2 Halbzuege = Remis");
+        let fresh = run_search_hmc(
+            fen,
+            98,
+            2,
+            Arc::new(Mutex::new(TranspositionTable::new(1))),
+        );
+        assert_eq!(late.score, fresh.score);
+    }
+
+    #[test]
+    fn tt_key_only_splits_near_the_fifty_move_boundary() {
+        assert_eq!(tt_key(42, 0), 42);
+        assert_eq!(tt_key(42, TT_HALFMOVE_SPLIT_FROM - 1), 42);
+        assert_ne!(tt_key(42, TT_HALFMOVE_SPLIT_FROM), 42);
+        assert_ne!(tt_key(42, 98), tt_key(42, 99));
     }
 
     fn run_search_scored(
