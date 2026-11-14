@@ -177,3 +177,49 @@ fn go_infinite_holds_early_result() {
     let bm = e.bestmove(2 * SEC).expect("bestmove nach stop");
     assert!(bm.starts_with("bestmove g6g7"), "{bm}");
 }
+
+/// Befund 10: Wechsel von SyzygyPath A auf einen anderen gueltigen Pfad B
+/// muss die Tabellen neu laden statt sie abzuschalten. Braucht echte
+/// Tabellen unter `$MARTUNI_TEST_SYZYGY` oder `~/syzygy/3-4-5`; fehlen sie,
+/// wird der Test uebersprungen.
+#[test]
+fn syzygy_path_switch_reloads_tables() {
+    let tables = std::env::var("MARTUNI_TEST_SYZYGY")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join("syzygy/3-4-5")))
+        .ok()
+        .filter(|p| p.is_dir());
+    let Some(tables) = tables else {
+        eprintln!("uebersprungen: keine Syzygy-Tabellen gefunden");
+        return;
+    };
+    let mut e = Engine::start();
+    // Pfad B: Symlink auf dieselben Tabellen — anderer Pfad, gueltiger Inhalt.
+    let alias = e.dir.join("tb-alias");
+    std::os::unix::fs::symlink(&tables, &alias).unwrap();
+
+    let loaded = "info string Syzygy: tablebases loaded";
+    e.send(&format!("setoption name SyzygyPath value {}", tables.display()));
+    assert!(e.wait_for(loaded, 20 * SEC).is_some(), "Pfad A laedt");
+    e.send(&format!("setoption name SyzygyPath value {}", alias.display()));
+    assert!(e.wait_for(loaded, 20 * SEC).is_some(), "Pfad B laedt nach A");
+    // Und die Tabellen werden danach wirklich benutzt.
+    e.send("position fen 8/8/8/8/8/2k5/8/KQ6 w - - 0 1");
+    e.send("go depth 1");
+    let lines = e.wait_for("bestmove", 5 * SEC).expect("bestmove");
+    assert!(lines.iter().any(|l| l.contains("syzygy root hit")), "{lines:?}");
+}
+
+/// Befund 10: nach einem Ladefehler loest dasselbe `setoption` einen neuen
+/// Ladeversuch aus (frueher: kein Pfadwechsel erkannt → nichts passierte).
+#[test]
+fn syzygy_load_failure_can_be_retried() {
+    let mut e = Engine::start();
+    let missing = e.dir.join("gibt-es-nicht");
+    let cmd = format!("setoption name SyzygyPath value {}", missing.display());
+    e.send(&cmd);
+    let failed = "info string Syzygy: no tablebases loaded";
+    assert!(e.wait_for(failed, 5 * SEC).is_some(), "erster Versuch meldet den Fehler");
+    e.send(&cmd);
+    assert!(e.wait_for(failed, 5 * SEC).is_some(), "zweiter Versuch wird ausgefuehrt");
+}

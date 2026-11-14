@@ -120,6 +120,12 @@ impl Syzygy {
             println!("info string Syzygy: deaktiviert — {}", e);
             return None;
         }
+        // Ohne eine einzige erkennbare Tabellendatei gilt der Pfad als leer.
+        // pyrrhic meldet auch fuer einen fehlenden/leeren Pfad eine
+        // Steinzahl (7) — frueher kam dann "tablebases loaded (up to 7 men)"
+        // fuer ein Verzeichnis, das es gar nicht gibt (Nebenbefund zum
+        // Code-Review 14.11.2026, #10).
+        let detected_max = detect_max_pieces(path)?;
         match TableBases::<ChessAdapter>::new(path) {
             Ok(tb) => {
                 let pyrrhic_max = tb.max_pieces();
@@ -127,10 +133,7 @@ impl Syzygy {
                     // Pfad existiert, aber keine ladbaren Tabellen gefunden.
                     None
                 } else {
-                    let detected_max = detect_max_pieces(path);
-                    let max_pieces = detected_max
-                        .map(|detected| pyrrhic_max.min(detected))
-                        .unwrap_or(pyrrhic_max);
+                    let max_pieces = pyrrhic_max.min(detected_max);
                     Some(Syzygy { tb, max_pieces })
                 }
             }
@@ -371,7 +374,7 @@ fn table_name_piece_count(stem: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chess::{Board, CastleRights, MoveGen};
+    use chess::{Board, CastleRights};
     use std::str::FromStr;
 
     /// Index→Square-Mapping muss zur a1=0-Konvention passen.

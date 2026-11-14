@@ -101,9 +101,48 @@ pub fn uci_loop() {
                             t.size_mb()
                         );
                     }
-                    if options.syzygy_path != old_syzygy_path {
-                        // Pfad geändert → Tablebases (neu) laden bzw. abschalten.
-                        syzygy = load_syzygy(&options.syzygy_path);
+                    // Tablebases (neu) laden, wenn sich der Pfad geaendert hat
+                    // — oder wenn SyzygyPath erneut gesetzt wird, waehrend
+                    // nichts geladen ist (zweiter Versuch nach einem
+                    // Ladefehler, z. B. Tabellen inzwischen nachkopiert).
+                    let retry_load = name.eq_ignore_ascii_case("SyzygyPath")
+                        && syzygy.is_none()
+                        && !options.syzygy_path.is_empty();
+                    if options.syzygy_path != old_syzygy_path || retry_load {
+                        // ERST das alte Handle freigeben, DANN neu laden:
+                        // pyrrhic-rs erlaubt nur eine Initialisierung zur
+                        // selben Zeit (`AlreadyInitialized`). Frueher lebte
+                        // das alte Handle noch, waehrend die rechte Seite von
+                        // `syzygy = load_syzygy(..)` schon lud — der Wechsel
+                        // von Pfad A auf Pfad B schaltete die Tabellen damit
+                        // still ab (Code-Review 14.11.2026, #10).
+                        //
+                        // `try_unwrap` gelingt nur, wenn kein Such-Thread mehr
+                        // einen Klon des Handles haelt. Laeuft noch eine
+                        // Suche, lehnen wir den Wechsel ab und stellen den
+                        // alten Optionswert wieder her — Option und geladener
+                        // Zustand bleiben so in jedem Fall konsistent.
+                        let released = match syzygy.take() {
+                            None => true,
+                            Some(old) => match Arc::try_unwrap(old) {
+                                Ok(handle) => {
+                                    drop(handle);
+                                    true
+                                }
+                                Err(in_use) => {
+                                    syzygy = Some(in_use);
+                                    false
+                                }
+                            },
+                        };
+                        if released {
+                            syzygy = load_syzygy(&options.syzygy_path);
+                        } else {
+                            options.syzygy_path = old_syzygy_path;
+                            println!(
+                                "info string Syzygy: SyzygyPath unchanged, search still running"
+                            );
+                        }
                     }
                 }
             }
