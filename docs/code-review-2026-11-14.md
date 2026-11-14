@@ -302,3 +302,108 @@ Tablebase-Dateien durchgeführt.
 alten Handles koordinieren und alle alten Handles freigeben. Den gesetzten
 Optionswert und den tatsächlichen Ladezustand konsistent halten; A→B und
 einen erneuten Ladeversuch nach einem Fehler testen.
+
+## Nachverfolgung (14.11.2026, Claude)
+
+Alle zehn Befunde wurden am Code nachgeprüft: **alle zehn sind stichhaltig**
+und behoben. Jeder Fix hat einen eigenen Commit und einen Regressionstest.
+Stand danach: 230 Engine-Tests, 8 UCI-Integrationstests
+(`tests/uci_protocol.rs`, neu — starten die Binary mit isolierter
+Konfiguration) und 5 Python-Tests (`tools/test_schleuse_tools.py`, neu)
+bestanden.
+
+| # | Befund | Urteil | Commit | Wirkt auf Spielstärke? |
+|---|---|---|---|---|
+| 1 | `isready` blockiert `stop`/`quit` | stichhaltig | `6fbe7ec` | nein |
+| 2 | Ponder-Ergebnis vor `ponderhit`/`stop` | stichhaltig | `dc1554f` | nein (nur Ponder-Protokoll) |
+| 3 | Schleusen-Import bestätigt vor dem Speichern | stichhaltig | `c4fa077` | nein (Werkzeug) |
+| 4 | Archivierung und Sync mit verschiedenen Locks | stichhaltig | `4d2c880` | nein (Werkzeug) |
+| 5 | 50-Züge-Prüfung verdeckt Matt | stichhaltig | `8c84e7d` | ja, sehr selten |
+| 6 | TT-Scores trotz anderem Halbzugzähler | stichhaltig | `6863a02` | ja, ab Zähler 80 |
+| 7 | Three-Check-FEN: Halbzugzähler immer 0 | stichhaltig | `30ac379` | nur Three-Check |
+| 8 | `go infinite` endet nach 1 s | stichhaltig | `556b17e` | nein |
+| 9 | Mindestbudget 50 ms über der Restzeit | stichhaltig | `4337d50` | ja, unter 100 ms Restzeit |
+| 10 | `SyzygyPath`-Wechsel schaltet Tabellen ab | stichhaltig | `84842cc` | nein |
+
+### Was jeweils geändert wurde
+
+1. **`isready`:** antwortet sofort, ohne `join()` auf den Such-Thread.
+   Test: `isready` und danach `stop` während `go depth 50`.
+2. **Ponder:** Der Such-Thread hält ein fertiges Ergebnis zurück, bis
+   `ponderhit` das Ponder-Flag löscht oder `stop`/`quit`/EOF das Stop-Flag
+   setzt. Das deckt Buchtreffer, Matt und Tiefenlimit gemeinsam ab, weil die
+   Sperre hinter `search()` sitzt. Zusatz: Kommt während einer wartenden
+   Ponder-Suche ein neues `go` (Protokollverstoß), wird sie abgebrochen,
+   statt den UCI-Thread im `join()` aufzuhängen. Tests für Tiefenlimit und
+   Matt; der Buchpfad läuft über dieselbe Sperre, hat aber keinen eigenen
+   Test (bräuchte ein synthetisches Buch).
+3. **Schleusen-Import:** je Zustandsdatei erst `save_state()`, dann die
+   zugehörigen Ergebnisse nach `done/` verschieben und die Outbox-Kopien
+   löschen. Bricht der Lauf dazwischen ab, liegt das Ergebnis noch in
+   `inbox/` und wird beim nächsten Tick erneut importiert; `merge_result`
+   dedupliziert. Tests für beide Abbruchstellen. **Nicht geändert:** Ein
+   `.failed.json` wird weiterhin vor `save_quarantine()` verschoben. Bei
+   einem Abbruch dort geht höchstens ein Fehlschlag-Zähler verloren, die
+   PGN wird neu angeboten.
+4. **Locks:** `archive_after_rollout.py` nimmt jetzt `schleuse_sync.pid`.
+   Zusätzlich legt `acquire_lock()` die Lock-Datei atomar an (`O_EXCL`);
+   vorher lagen Prüfen und Schreiben getrennt, zwei gleichzeitig startende
+   Prozesse konnten beide durchkommen. Tests: gleicher Lock-Pfad, lebender
+   Fremd-Lock wird abgelehnt, verwaister Lock wird ersetzt. Der Sync-Cron
+   läuft seit dem Commit mit dem neuen Code; ein Probelauf (`--dry-run`)
+   war unauffällig.
+5. **Matt vor Remis:** Bei Zähler ≥ 100 prüft `alpha_beta()` zuerst, ob die
+   Seite am Zug keine legalen Züge hat, und bewertet dann über
+   `terminal_score()` (Matt, Varianten-Ende; Patt bleibt 0). Die
+   Zuggenerierung fällt nur an diesen Knoten an. Test: Reproduktion aus dem
+   Befund (`Qg7#` bei Zähler 99).
+6. **TT und Halbzugzähler:** Ab Zähler 80 mischt `tt_key()` den Zähler in
+   den TT-Schlüssel; dieselbe Stellung mit Zähler 85 und 98 hat dann
+   getrennte Einträge. Darunter bleibt der Schlüssel der reine Hash, die
+   Suche dort ist unverändert (Stichprobe: drei Stellungen, Tiefe 9,
+   Knotenzahl identisch zur Basis). Die Wiederholungserkennung nutzt weiter
+   den reinen Hash, der Pondermove-Lookup den neuen Schlüssel. Test:
+   Reproduktion aus dem Befund (K+T gegen K, Zähler 0 dann 98, gleiche TT →
+   jetzt 0 wie mit frischer TT).
+   **Verworfene Alternativen:** (a) Zähler immer mischen — verliert im
+   Mittelspiel Zugumstellungen, bei denen ein Bauernzug an anderer Stelle
+   steht; (b) TT-Cutoffs bei hohem Zähler ganz abschalten — einfacher, kostet
+   aber gerade in langen Endspielen Suchtiefe. **Restrisiko:** Ein unter
+   Zähler 80 abgelegter Eintrag mit mehr als 20 Halbzügen Suchtiefe kann
+   ein 50-Züge-Blatt enthalten und bei leicht anderem Zähler wiederverwendet
+   werden. Die Schwelle 80 ist ein Schätzwert, nicht gemessen.
+7. **Three-Check-FEN:** Der Halbzugzähler ist jetzt das erste rein
+   numerische Feld ab Position fünf. Das passt für Standard-FENs, das
+   Lichess-Format (`3+3 99 1`) und das ältere Format (`99 1 +0+0`). Tests
+   für alle drei und für `Position<BoardThreeCheck>`.
+8. **`go infinite`:** wird geparst (`GoParams.infinite`), hat keine
+   Deadline, und das Ergebnis wird bis `stop` gehalten — auch ein sofort
+   fertiges (Matt, Buch). Tests für beides.
+9. **Zeitbudget:** Der Deckel „Restzeit minus 50 ms“ ist jetzt hart
+   (mindestens 1 ms) und wird nicht mehr auf 50 ms angehoben. Ab 100 ms
+   Restzeit ist das Budget unverändert. Bei 1 ms Restzeit ohne Buch kommt
+   `bestmove` jetzt nach etwa 1 ms (Tiefe 2 fertig) statt nach 75 ms.
+   `MoveOverhead` wird beim Deckel weiterhin nicht abgezogen; das wäre ein
+   eigener Schritt.
+10. **`SyzygyPath`:** Das alte Handle wird vor dem Neuladen freigegeben
+    (`Arc::try_unwrap`). Hält ein laufender Such-Thread noch einen Klon,
+    wird der Wechsel abgelehnt und der alte Optionswert wiederhergestellt.
+    Ein erneutes `setoption` nach einem Ladefehler löst einen neuen
+    Ladeversuch aus. Test mit den echten Tabellen aus `~/syzygy/3-4-5`
+    (A → Symlink B, danach `syzygy root hit`); ohne Tabellen wird er
+    übersprungen. Damit ist der Befund auch im Lauf bestätigt, nicht nur
+    statisch.
+    **Nebenbefund, mitbehoben:** Ein Pfad ohne Tabellendateien wurde als
+    „tablebases loaded (up to 7 men)“ gemeldet, weil pyrrhic dort 7
+    zurückgibt. `Syzygy::load` liefert jetzt `None`, wenn keine
+    Tabellendatei gefunden wird.
+
+Der gemeldete unbenutzte `MoveGen`-Import in `src/syzygy.rs` ist mit Commit
+`84842cc` entfernt.
+
+### Offen
+
+- Kein Rollout: Die Commits liegen lokal auf `master`, nicht gepusht, Horst
+  nicht informiert.
+- Wettkampf alte gegen neue Engine (15 Partien, 3+0, Standard) wegen der
+  Befunde 5, 6 und 9: Ergebnis siehe unten.
