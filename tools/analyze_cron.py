@@ -123,19 +123,35 @@ def _pid_alive(pid: int) -> bool:
 
 
 def acquire_lock() -> bool:
-    """PID in Lock-File schreiben. False, wenn eine andere Instanz noch läuft."""
-    if LOCK_PATH.exists():
+    """PID in Lock-File schreiben. False, wenn eine andere Instanz noch läuft.
+
+    Das Anlegen ist atomar (O_EXCL): prüfen und schreiben in einem Schritt.
+    Vorher lagen `exists()` und `write_text()` getrennt — zwei gleichzeitig
+    startende Prozesse konnten beide den Lock "bekommen".
+    """
+    for _ in range(2):
         try:
-            existing = int(LOCK_PATH.read_text().strip())
-        except (ValueError, OSError):
-            existing = None
-        if existing is not None and _pid_alive(existing):
-            logging.info("previous instance still alive (pid=%s) — exiting", existing)
-            return False
-        # Stale lock (Prozess weg, Datei blieb liegen) — überschreiben.
-        logging.info("stale lock from pid=%s, replacing", existing)
-    LOCK_PATH.write_text(str(os.getpid()))
-    return True
+            fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            try:
+                existing = int(LOCK_PATH.read_text().strip())
+            except (ValueError, OSError):
+                existing = None
+            if existing is not None and _pid_alive(existing):
+                logging.info("previous instance still alive (pid=%s) — exiting", existing)
+                return False
+            # Stale lock (Prozess weg, Datei blieb liegen) — entfernen und
+            # im zweiten Durchlauf neu (wieder atomar) anlegen.
+            logging.info("stale lock from pid=%s, replacing", existing)
+            try:
+                LOCK_PATH.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        with os.fdopen(fd, "w") as fh:
+            fh.write(str(os.getpid()))
+        return True
+    return False
 
 
 def release_lock() -> None:

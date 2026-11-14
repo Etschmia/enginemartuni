@@ -57,6 +57,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 ARCHIV_DIR = REPO_ROOT / "archiv"
 SYNC_SCRIPT = SCRIPT_DIR / "schleuse_sync.py"
+# Der Lock, den der Schleusen-Sync hält. Die Archivierung MUSS denselben
+# nehmen: mit dem Standard-Lock von analyze_cron (analyze_cron.pid) schloss
+# sie nur den längst abgeschalteten Analyse-Cron aus, nicht den Sync, der
+# alle 10 Minuten dieselben Analysedateien, PGNs und done/ anfasst
+# (Code-Review 14.11.2026, #4).
+SYNC_LOCK_PATH = SCRIPT_DIR / "schleuse_sync.pid"
 DEFAULT_SCHLEUSE = Path.home() / "grok_bot_schleuse"
 HDR = re.compile(r'^\[(\w+) "([^"]*)"\]', re.M)
 
@@ -194,6 +200,7 @@ def main() -> int:
         return 0
 
     # --- Scharf: Lock halten, verschieben, umstellen -------------------------
+    ac.LOCK_PATH = SYNC_LOCK_PATH
     if not ac.acquire_lock():
         sys.exit("Schleuse läuft gerade (Lock) — in einer Minute erneut versuchen.")
     try:

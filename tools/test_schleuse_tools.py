@@ -78,5 +78,39 @@ class ImportOrderTest(unittest.TestCase):
         self.assertEqual(state["analyzed_pgns"], ["a.pgn"])
 
 
+class SharedLockTest(unittest.TestCase):
+    """Befund 4: Archivierung und Sync schließen sich gegenseitig aus."""
+
+    def setUp(self) -> None:
+        self.saved = ac.LOCK_PATH
+
+    def tearDown(self) -> None:
+        ac.LOCK_PATH = self.saved
+
+    def test_archive_uses_the_sync_lock(self) -> None:
+        import archive_after_rollout as ar
+
+        self.assertEqual(ar.SYNC_LOCK_PATH, ss.LOCK_PATH)
+
+    def test_lock_held_by_live_process_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ac.LOCK_PATH = Path(tmp) / "schleuse_sync.pid"
+            # Der "andere" Prozess: PID 1 lebt immer.
+            ac.LOCK_PATH.write_text("1")
+            self.assertFalse(ac.acquire_lock())
+            self.assertEqual(ac.LOCK_PATH.read_text(), "1", "fremder Lock unangetastet")
+
+    def test_stale_lock_is_replaced_and_released(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ac.LOCK_PATH = Path(tmp) / "schleuse_sync.pid"
+            ac.LOCK_PATH.write_text("999999999")  # kein solcher Prozess
+            self.assertTrue(ac.acquire_lock())
+            self.assertEqual(ac.LOCK_PATH.read_text(), str(os.getpid()))
+            # Zweiter Versuch (derselbe lebende Prozess hält ihn) scheitert.
+            self.assertFalse(ac.acquire_lock())
+            ac.release_lock()
+            self.assertFalse(ac.LOCK_PATH.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -293,6 +293,7 @@ def main() -> int:
 
     # Eigener Lock (nicht der von analyze_cron), damit ein versehentlich
     # noch laufender alter Analyse-Tick uns nicht blockiert und umgekehrt.
+    # tools/archive_after_rollout.py nimmt denselben Lock (SYNC_LOCK_PATH).
     ac.LOCK_PATH = LOCK_PATH
     if not ac.acquire_lock():
         return 0
