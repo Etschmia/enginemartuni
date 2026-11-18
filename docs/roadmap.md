@@ -49,6 +49,9 @@ Gegner; Ursache der flacheren Suche auf Horst geklärt.**
   Buch-Lookback (Standardbuch seit 12.10.) ist durch den Umzug 13.10.–18.11.
   verfälscht; sauber wäre ein Vergleich ab 18.11. gegen 24.09.–12.10.,
   beide hier gerechnet, aber mit anderem Gegnerfeld.
+- **Archiviert 18.11.2026 13:40** (Cut 13:26): 3.520 Partien (12.10.–18.11.)
+  → `game_archiv/`, Analysedateien `analyse-12.10.2026*.json` → `archiv/`,
+  neue Dateien `analyse-18.11.2026.json` / `-varianten.json`.
 
 **14.11.2026 — Code-Review abgearbeitet: zehn Befunde, alle stichhaltig, alle behoben (lokal, nicht ausgerollt).**
 Details und Commits in [code-review-2026-11-14.md](code-review-2026-11-14.md),
