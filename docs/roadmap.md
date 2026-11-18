@@ -10,6 +10,46 @@ Einzeldokumenten:
 
 ## Aktueller Status
 
+**18.11.2026 — Lichess-Bot zurück auf martuni.de, nur noch menschliche
+Gegner; Ursache der flacheren Suche auf Horst geklärt.**
+
+- **Rollout Code-Review-Stand:** Horst hat `f7bd4e0` gebaut
+  (Build-mtime **18.11.2026 11:39:18**) und den Bot neu gestartet
+  (11:45:42). Das ist der Cut für Lookback und Archivierung.
+- **Rechenleistung Horst (Nachtrag zum 25.10.):** Gleicher Bench
+  (FEN aus dem Eintrag 25.10., `go movetime 5000`), Knotenzahlen auf beiden
+  Rechnern identisch (Tiefe 7: 3.972.339):
+
+  | | nps | Tiefe in 5 s |
+  |---|---|---|
+  | martuni.de, AMD EPYC Genoa, Load 0,3 | 2,32–2,50 Mio | 8 |
+  | Horst, Xeon Skylake 2,1 GHz, laufende Partie | 0,84–0,92 Mio | 7 |
+  | Horst, Partie + Fairy-Stockfish-Analyse | 0,85 Mio | 7 |
+
+  Faktor rund 2,8, passt zum fehlenden Halbzug. Die Analyse kostet kaum
+  etwas (sie läuft mit Nice 10 / CPUWeight 20), Steal-Zeit 0, kein Swap.
+  Auch mit freiem Kern bleibt es bei 0,85 Mio — **die CPU ist pro Kern
+  einfach langsamer**. Eine Leerlauf-Messung kam nicht zustande (in 90 min
+  kein Fenster ohne Partie oder Analyse).
+- **Tobias-Entscheid:** Der Bot zieht zurück nach martuni.de.
+  `lichess-bot-martuni.service` auf Horst um 13:24:39 gestoppt und
+  disabled, sein Upstream-Sync-Cron und `martuni-pgn-sync.timer` aus
+  (letzter Sync 13:25, alle Partien angekommen). Hier läuft
+  `lichess-bot.service` seit **13:25:59** wieder (Checkout `~/lichess-bot`
+  von Horst übernommen, Stop-Einstellungen SIGINT/KillMode=mixed/900 s),
+  Upstream-Sync-Cron Sa 06:27 wieder aktiv. Horsts Checkout bleibt als
+  Rückfall liegen.
+- **Neu: `accept_bot: false`** — nur noch Challenges von Menschen
+  (Bot-Challenges hatten überhandgenommen). concurrency bleibt 2,
+  ausgehende Challenge-Crons bleiben aus.
+- Die Blunder-Analyse (Schleusen-Worker) bleibt auf Horst; die PGNs landen
+  jetzt direkt in `~/martuni_games/game_records/`.
+- **Folgen für Auswertungen:** Ab 18.11. ist das Gegnerfeld ein anderes
+  (nur Menschen) — Vergleiche mit der Zeit davor nur mit Vorsicht. Der
+  Buch-Lookback (Standardbuch seit 12.10.) ist durch den Umzug 13.10.–18.11.
+  verfälscht; sauber wäre ein Vergleich ab 18.11. gegen 24.09.–12.10.,
+  beide hier gerechnet, aber mit anderem Gegnerfeld.
+
 **14.11.2026 — Code-Review abgearbeitet: zehn Befunde, alle stichhaltig, alle behoben (lokal, nicht ausgerollt).**
 Details und Commits in [code-review-2026-11-14.md](code-review-2026-11-14.md),
 Abschnitt „Nachverfolgung“.
@@ -28,7 +68,44 @@ Abschnitt „Nachverfolgung“.
   neu 6 : 9 (+2 =8 −5), Elo −70, 95-%-Bereich −211 bis +50 — kein belegter
   Unterschied. Die geänderten Stellen waren in keiner entschiedenen Partie
   aktiv (höchster Halbzugzähler dort 13, niedrigste Restzeit 13,9 s).
-- Offen: Rollout (push, Hash an Horst); bei Bedarf ein längerer A/B.
+- Rollout erledigt 18.11.2026 11:39:18 (Build auf Horst, siehe oben);
+  offen bleibt bei Bedarf ein längerer A/B.
+
+**25.10.2026 — Auswertung seit dem Standardbuch (12.10.) und dem Umzug zu
+Horst (13.10.): Martuni rechnet auf Horst gut einen Halbzug flacher.**
+1.121 Partien (526 Standard, 192 Chess960, Rest Varianten), Vergleich mit
+24.09. bis 12.10. (gleiche Engine, alte Bücher, Bot lief hier).
+
+| Standard | vorher | nachher |
+|---|---|---|
+| Partien / Score gegen Erwartung | 457 / +18 Elo (±29) | 526 / −16 Elo (±27) |
+| Blitz / Bullet / Rapid / Classical | +15 / +20 / +16 / +45 | −15 / −19 / −9 / −31 |
+| Blunder pro Partie (Stockfish d17) | 1,22 | 1,62 |
+| davon ≥ 300 cp | 0,42 | 0,61 |
+| davon Halbzug ≤ 20 | 0,11 | 0,12 |
+| Ø Buchausgang (Halbzug) | 17,1 | 14,3 |
+
+- **Suchtiefe:** Bei gleicher Bedenkzeit pro Zug (Halbzug 20–60, z. B.
+  180+2: 6,1 s vorher, 5,9 s nachher) erreicht Martuni im Schnitt
+  **1 bis 1,5 Halbzüge weniger Tiefe**, in allen Zeitkontrollen und auch
+  in Chess960 und den Varianten, die das Standardbuch gar nicht benutzen
+  (960 180+2: 9,2 → 7,9; Standard 180+1: 10,5 → 8,6; 1800+20: 13,7 →
+  12,0). Ob gerade eine zweite Partie lief, macht kaum einen Unterschied.
+  Das spricht für eine langsamere oder ausgelastete Maschine (auf Horst
+  läuft auch die Stockfish-Analyse der Schleuse mit 2 Threads), nicht für
+  einen Engine- oder Buchfehler. Grob 2- bis 3-mal weniger Knoten pro Zug.
+- **Buch:** Frühe Fehler sind nicht häufiger geworden (0,11 → 0,12 pro
+  Partie bis Halbzug 20). Mehr Fehler gibt es im Mittel- und Endspiel, das
+  passt zur geringeren Tiefe. Der Buch-Lookback ist deshalb mit dem Umzug
+  vermischt und erst nach Klärung der Rechenleistung belastbar. Das Buch
+  bleibt live.
+- Varianten: Das Gegnerfeld hat sich verschoben (nur noch eingehende
+  Bot-Challenges, erwarteter Score z. B. 3check 34 % → 56 %), daher kein
+  Vorher/Nachher-Schluss. Auffällig bleibt Crazyhouse: 74 Partien,
+  Score 8 %, −65 Elo gegen Erwartung, Ø Tiefe unter 2.
+- **Vorschlag:** zuerst die Rechenleistung auf Horst klären (gleicher
+  Bench hier und dort, Schleusen-Analyse während laufender Partien
+  drosseln oder pausieren), danach den Buch-Lookback wiederholen.
 
 **13.10.2026 — Lichess-Bot zieht zu Horst um; dieser Server macht nur
 noch Engine-Entwicklung.** Tobias-Entscheid: Martuni spielt künftig auf
